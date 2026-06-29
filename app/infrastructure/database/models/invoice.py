@@ -17,7 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import InvoiceLineType, InvoiceStatus
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, UUIDPrimaryKeyMixin
+from app.shared.mixins import FullMixin, UUIDPrimaryKeyMixin, TimestampMixin
 
 
 class Invoice(FullMixin, Base):
@@ -93,3 +93,18 @@ class InvoiceLineItem(UUIDPrimaryKeyMixin, Base):
 
     invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="line_items")
     hotel: Mapped["Hotel"] = relationship("Hotel")
+
+
+class InvoiceItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "invoice_items"
+
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False
+    )
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    quantity: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=1)
+    unit_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    total_price: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    invoice: Mapped["Invoice"] = relationship("Invoice")

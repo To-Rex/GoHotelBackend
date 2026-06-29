@@ -14,7 +14,7 @@ from app.infrastructure.database.models.service import Service, HotelService, Re
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.ledger import Ledger
 from app.infrastructure.database.models.journal_entry import JournalEntry, JournalEntryLine
-from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem
+from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem, InvoiceItem
 from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.amenity import Amenity, HotelAmenity, RoomAmenity
 from app.infrastructure.database.models.audit_log import AuditLog
@@ -28,7 +28,7 @@ __all__ = [
     "User", "UserSession", "Permission", "UserPermission", "Guest",
     "Reservation", "Service", "HotelService", "ReservationService",
     "HousekeepingTask", "Ledger", "JournalEntry", "JournalEntryLine",
-    "Invoice", "InvoiceLineItem", "Payment", "AuditLog",
+    "Invoice", "InvoiceLineItem", "InvoiceItem", "Payment", "AuditLog",
     "FileAttachment", "Notification", "Report",
     "Amenity", "HotelAmenity", "RoomAmenity",
 ]
