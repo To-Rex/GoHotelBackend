@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
+from typing import Sequence
+
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +12,17 @@ from app.infrastructure.database.repositories.base import TenantBaseRepository
 
 class GuestRepository(TenantBaseRepository[Guest]):
     model = Guest
+
+    async def get_all(
+        self, hotel_id: UUID, skip: int = 0, limit: int = 100, **filters
+    ) -> Sequence[Guest]:
+        stmt = select(Guest).where(Guest.hotel_id == hotel_id)
+        for key, value in filters.items():
+            if value is not None and hasattr(Guest, key):
+                stmt = stmt.where(getattr(Guest, key) == value)
+        stmt = stmt.order_by(Guest.created_at.desc()).offset(skip).limit(limit)
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
 
     async def search(
         self, hotel_id: UUID | None, query: str, skip: int = 0, limit: int = 100
@@ -26,7 +39,7 @@ class GuestRepository(TenantBaseRepository[Guest]):
         )
         if hotel_id is not None:
             stmt = stmt.where(Guest.hotel_id == hotel_id)
-        stmt = stmt.offset(skip).limit(limit)
+        stmt = stmt.order_by(Guest.created_at.desc()).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
