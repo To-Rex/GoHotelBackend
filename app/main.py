@@ -1,6 +1,7 @@
 """
 GoHotel ERP Backend — FastAPI Application
 """
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -10,14 +11,21 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.database import _get_engine, dispose_engine
 from app.core.exceptions import AppException
+from app.infrastructure.database.models.base import Base
+from app.infrastructure.database.models import *  # noqa
 from app.presentation.api.v1.router import api_router
+
+logger = logging.getLogger("gohotel")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     engine = _get_engine()
     async with engine.begin() as conn:
-        pass
+        try:
+            await conn.run_sync(Base.metadata.create_all)
+        except Exception as e:
+            logger.warning("Auto-create tables skipped: %s. Run alembic upgrade head.", e)
     yield
     await dispose_engine()
 
