@@ -18,12 +18,13 @@ from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem
 from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.amenity import Amenity, HotelAmenity, RoomAmenity
 from app.infrastructure.database.models.audit_log import AuditLog
+from app.infrastructure.database.models.building import Building
 from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.infrastructure.database.models.notification import Notification
 from app.infrastructure.database.models.report import Report
 
 __all__ = [
-    "Base", "Hotel", "Branch", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
+    "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
     "User", "UserSession", "Permission", "UserPermission", "Guest",
     "Reservation", "Service", "HotelService", "ReservationService",
     "HousekeepingTask", "Ledger", "JournalEntry", "JournalEntryLine",

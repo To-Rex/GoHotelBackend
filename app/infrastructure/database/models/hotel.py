@@ -87,3 +87,6 @@ class Hotel(FullMixin, Base):
         secondary="hotel_amenities",
         back_populates="hotels",
     )
+    buildings: Mapped[list["Building"]] = relationship(
+        "Building", back_populates="hotel"
+    )
