@@ -47,7 +47,7 @@ class RateLimitSettings(BaseSettings):
 
 
 class CORSSettings(BaseSettings):
-    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+    CORS_ORIGINS: list[str] = ["*"]
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
