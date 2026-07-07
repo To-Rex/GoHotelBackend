@@ -1,6 +1,8 @@
 """
 GoHotel ERP Backend — FastAPI Application
 """
+import logging
+import traceback
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -11,6 +13,9 @@ from app.core.config import settings
 from app.core.database import _get_engine, dispose_engine
 from app.core.exceptions import AppException
 from app.presentation.api.v1.router import api_router
+
+logging.basicConfig(level=logging.DEBUG if settings.APP_DEBUG else logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -44,6 +49,25 @@ async def app_exception_handler(request: Request, exc: AppException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail, "error_code": exc.error_code},
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled exception on %s %s: %s\n%s",
+        request.method,
+        request.url.path,
+        exc,
+        traceback.format_exc(),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "error_code": "INTERNAL_ERROR",
+            "message": str(exc) if settings.APP_DEBUG else "An unexpected error occurred",
+        },
     )
 
 

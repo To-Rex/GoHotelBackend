@@ -1,6 +1,7 @@
 from uuid import UUID
+import logging
 
-from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, Path
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -10,6 +11,8 @@ from app.application.dto.mobile import ProblemCreateRequest, ProblemResponse
 from app.infrastructure.storage.minio import upload_file
 from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.presentation.middleware.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Mobile Problems"])
 
@@ -41,42 +44,61 @@ async def create_problem(
     if not h_id:
         raise ForbiddenException("Hotel context required")
 
-    tid = UUID(task_id) if task_id else None
+    try:
+        tid = UUID(task_id) if task_id else None
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Invalid task_id format")
     service = ProblemsService(session)
-    problem = await service.create_problem(
-        hotel_id=h_id,
-        reported_by=current_user["id"],
-        category=category,
-        description=description,
-        task_id=tid,
-        room_number=room_number,
-    )
+    try:
+        problem = await service.create_problem(
+            hotel_id=h_id,
+            reported_by=current_user["id"],
+            category=category,
+            description=description,
+            task_id=tid,
+            room_number=room_number,
+        )
+    except Exception as e:
+        logger.error("Failed to create problem record: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to create problem: {e}")
 
     for photo in photos:
         if photo.filename:
-            content = await photo.read()
-            content_type = photo.content_type or "application/octet-stream"
-            bucket = "hotel-documents"
-            object_path = f"{h_id}/problem/{problem.id}/{photo.filename}"
+            try:
+                content = await photo.read()
+                content_type = photo.content_type or "application/octet-stream"
+                bucket = "hotel-documents"
+                object_path = f"{h_id}/problem/{problem.id}/{photo.filename}"
 
-            await upload_file(bucket, object_path, content, content_type)
+                await upload_file(bucket, object_path, content, content_type)
 
-            attachment = FileAttachment(
-                hotel_id=h_id,
-                entity_type="problem",
-                entity_id=problem.id,
-                file_name=photo.filename,
-                original_name=photo.filename,
-                mime_type=content_type,
-                file_size=len(content),
-                minio_bucket=bucket,
-                minio_path=object_path,
-                category="problem_photo",
-                uploaded_by=current_user["id"],
-            )
-            session.add(attachment)
+                attachment = FileAttachment(
+                    hotel_id=h_id,
+                    entity_type="problem",
+                    entity_id=problem.id,
+                    file_name=photo.filename,
+                    original_name=photo.filename,
+                    mime_type=content_type,
+                    file_size=len(content),
+                    minio_bucket=bucket,
+                    minio_path=object_path,
+                    category="problem_photo",
+                    uploaded_by=current_user["id"],
+                )
+                session.add(attachment)
+            except Exception as e:
+                logger.error("Failed to upload photo '%s': %s", photo.filename, e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to upload photo: {e}",
+                )
 
-    await session.flush()
+    try:
+        await session.flush()
+    except Exception as e:
+        logger.error("Failed to flush problem attachments: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to save attachments: {e}")
 
     return {
         "success": True,

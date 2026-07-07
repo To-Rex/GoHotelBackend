@@ -1,5 +1,6 @@
 import asyncio
 import io
+import logging
 from datetime import timedelta
 from typing import BinaryIO
 
@@ -7,6 +8,8 @@ from minio import Minio
 from minio.error import S3Error
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 _client: Minio | None = None
 
@@ -20,23 +23,31 @@ def get_minio_client() -> Minio:
             secret_key=settings.MINIO_SECRET_KEY,
             secure=settings.MINIO_SECURE,
         )
-        for bucket in [settings.MINIO_BUCKET_DOCUMENTS, settings.MINIO_BUCKET_GUESTS]:
-            if not _client.bucket_exists(bucket):
-                _client.make_bucket(bucket)
+        try:
+            for bucket in [settings.MINIO_BUCKET_DOCUMENTS, settings.MINIO_BUCKET_GUESTS]:
+                if not _client.bucket_exists(bucket):
+                    _client.make_bucket(bucket)
+        except S3Error as e:
+            logger.error("MinIO bucket check failed: %s", e)
+            raise
     return _client
 
 
 async def upload_file(bucket: str, object_path: str, data: bytes, content_type: str) -> str:
     client = get_minio_client()
     file_stream = io.BytesIO(data)
-    await asyncio.to_thread(
-        client.put_object,
-        bucket,
-        object_path,
-        file_stream,
-        len(data),
-        content_type=content_type,
-    )
+    try:
+        await asyncio.to_thread(
+            client.put_object,
+            bucket,
+            object_path,
+            file_stream,
+            len(data),
+            content_type=content_type,
+        )
+    except S3Error as e:
+        logger.error("MinIO upload failed for %s/%s: %s", bucket, object_path, e)
+        raise
     return object_path
 
 

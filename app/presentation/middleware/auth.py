@@ -32,11 +32,17 @@ async def get_current_user(
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
+    def _safe_uuid(value):
+        try:
+            return UUID(value) if value else None
+        except (ValueError, TypeError, AttributeError):
+            return None
+
     return {
-        "id": UUID(user_id),
+        "id": _safe_uuid(user_id),
         "user_type": payload.get("user_type", ""),
-        "hotel_id": UUID(payload["hotel_id"]) if payload.get("hotel_id") else None,
-        "branch_id": UUID(payload["branch_id"]) if payload.get("branch_id") else None,
+        "hotel_id": _safe_uuid(payload.get("hotel_id")),
+        "branch_id": _safe_uuid(payload.get("branch_id")),
         "permissions": payload.get("permissions", []),
         "jti": payload.get("jti", ""),
     }
