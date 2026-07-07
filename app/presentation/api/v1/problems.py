@@ -47,7 +47,6 @@ async def create_problem(
     try:
         tid = UUID(task_id) if task_id else None
     except ValueError:
-        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="Invalid task_id format")
     service = ProblemsService(session)
     try:
