@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class TaskCreateRequest(BaseModel):
     branch_id: UUID
     room_id: UUID
-    task_type: str = Field(..., pattern=r"^(CLEANING|MAINTENANCE|INSPECTION|TURN_DOWN)$")
+    task_type: str = Field(..., pattern=r"^(CLEANING|DEEP_CLEANING|MAINTENANCE|INSPECTION|TURN_DOWN)$")
     priority: str = Field(default="MEDIUM", pattern=r"^(LOW|MEDIUM|HIGH|URGENT)$")
     assigned_to: UUID | None = None
     notes: str | None = None

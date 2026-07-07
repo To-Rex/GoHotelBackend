@@ -57,9 +57,20 @@ class PaymentStatus(str, Enum):
 
 class TaskType(str, Enum):
     CLEANING = "CLEANING"
+    DEEP_CLEANING = "DEEP_CLEANING"
     MAINTENANCE = "MAINTENANCE"
     INSPECTION = "INSPECTION"
     TURN_DOWN = "TURN_DOWN"
+
+
+class ProblemCategory(str, Enum):
+    BROKEN_ITEM = "Siniq buyum"
+    TECHNICAL_FAULT = "Texnik nosozlik"
+    WATER_LEAK = "Suv sizishi"
+    WEAR_AND_TEAR = "Chiroy kuygan"
+    ELECTRICAL = "Elektr nosozligi"
+    MECHANICAL = "Mexanizm buzilgan"
+    OTHER = "Boshqa"
 
 
 class TaskStatus(str, Enum):

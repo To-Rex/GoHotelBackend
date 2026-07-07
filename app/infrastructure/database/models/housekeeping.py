@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
 )
@@ -40,6 +41,7 @@ class HousekeepingTask(FullMixin, Base):
     assigned_to: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     scheduled_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(
@@ -64,4 +66,7 @@ class HousekeepingTask(FullMixin, Base):
         "User",
         back_populates="created_housekeeping_tasks",
         foreign_keys=[created_by],
+    )
+    checklist_items: Mapped[list["ChecklistItem"]] = relationship(
+        "ChecklistItem", back_populates="task", cascade="all, delete-orphan"
     )

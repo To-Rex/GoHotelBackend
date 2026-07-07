@@ -19,6 +19,8 @@ from app.presentation.api.v1 import (
     files,
     notifications,
     amenities,
+    tasks,
+    problems,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -42,3 +44,5 @@ api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["Audit 
 api_router.include_router(files.router, prefix="/files", tags=["Files"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])
 api_router.include_router(amenities.router, prefix="/amenities", tags=["Amenities"])
+api_router.include_router(tasks.router, prefix="/tasks", tags=["Mobile Tasks"])
+api_router.include_router(problems.router, prefix="/problems", tags=["Mobile Problems"])

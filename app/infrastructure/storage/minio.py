@@ -1,4 +1,7 @@
+import asyncio
+import io
 from datetime import timedelta
+from typing import BinaryIO
 
 from minio import Minio
 from minio.error import S3Error
@@ -25,7 +28,15 @@ def get_minio_client() -> Minio:
 
 async def upload_file(bucket: str, object_path: str, data: bytes, content_type: str) -> str:
     client = get_minio_client()
-    client.put_object(bucket, object_path, data, len(data), content_type=content_type)
+    file_stream = io.BytesIO(data)
+    await asyncio.to_thread(
+        client.put_object,
+        bucket,
+        object_path,
+        file_stream,
+        len(data),
+        content_type=content_type,
+    )
     return object_path
 
 
@@ -37,7 +48,17 @@ def get_presigned_url(bucket: str, object_path: str, expires: int = 3600) -> str
 async def delete_file(bucket: str, object_path: str) -> bool:
     client = get_minio_client()
     try:
-        client.remove_object(bucket, object_path)
+        await asyncio.to_thread(client.remove_object, bucket, object_path)
         return True
     except S3Error:
         return False
+
+
+async def download_file(bucket: str, object_path: str) -> bytes:
+    client = get_minio_client()
+    response = await asyncio.to_thread(client.get_object, bucket, object_path)
+    try:
+        return response.read()
+    finally:
+        response.close()
+        response.release_conn()

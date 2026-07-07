@@ -105,7 +105,7 @@ class HousekeepingService:
             task.notes = (task.notes or "") + f"\n[{status}] {notes}"
             await self.session.flush()
 
-        if status == "COMPLETED" and task.task_type == "CLEANING":
+        if status == "COMPLETED" and task.task_type in ("CLEANING", "DEEP_CLEANING"):
             room = await self.room_repo.get_by_id(task.room_id, hotel_id)
             if room and room.current_status == "CLEANING":
                 room.current_status = "AVAILABLE"

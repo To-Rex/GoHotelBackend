@@ -1,15 +1,17 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
 from app.application.services.notification_service import NotificationService
 from app.application.dto.common import MessageResponse
+from app.infrastructure.database.models.notification import Notification
 from app.presentation.middleware.auth import get_current_user, require_permission
 
-router = APIRouter()
+router = APIRouter(tags=["Notifications"])
 
 
 def _get_hotel_id(current_user: dict) -> UUID | None:
@@ -19,6 +21,18 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
     return hotel_id
+
+
+def _map_notification_type(n: Notification) -> str:
+    if n.entity_type == "task":
+        return "newTask"
+    if n.entity_type == "problem":
+        return "problemAccepted"
+    if n.entity_type == "urgent":
+        return "critical"
+    if n.entity_type == "inventory":
+        return "inventory"
+    return "system"
 
 
 @router.get("/")
@@ -36,12 +50,13 @@ async def get_notifications(
     return [
         {
             "id": str(n.id),
+            "type": _map_notification_type(n),
             "title": n.title,
-            "body": n.body,
-            "entity_type": n.entity_type,
-            "entity_id": str(n.entity_id) if n.entity_id else None,
+            "message": n.body or "",
+            "room_number": None,
+            "timestamp": n.created_at.isoformat() if n.created_at else None,
             "is_read": n.is_read,
-            "created_at": n.created_at.isoformat() if n.created_at else None,
+            "has_actions": n.entity_type in ("task", "problem"),
         }
         for n in notifications
     ]
@@ -64,18 +79,19 @@ async def get_broadcasts(
     return [
         {
             "id": str(n.id),
+            "type": _map_notification_type(n),
             "title": n.title,
-            "body": n.body,
-            "entity_type": n.entity_type,
-            "entity_id": str(n.entity_id) if n.entity_id else None,
+            "message": n.body or "",
+            "room_number": None,
+            "timestamp": n.created_at.isoformat() if n.created_at else None,
             "is_read": n.is_read,
-            "created_at": n.created_at.isoformat() if n.created_at else None,
+            "has_actions": n.entity_type in ("task", "problem"),
         }
         for n in notifications
     ]
 
 
-@router.patch("/{notification_id}/read", response_model=MessageResponse)
+@router.put("/{notification_id}/read", response_model=MessageResponse)
 async def mark_read(
     notification_id: UUID = Path(),
     session: AsyncSession = Depends(get_db),
@@ -84,3 +100,18 @@ async def mark_read(
     service = NotificationService(session)
     await service.mark_read(notification_id)
     return {"message": "Notification marked as read"}
+
+
+@router.put("/read-all", response_model=MessageResponse)
+async def mark_all_read(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    stmt = (
+        sa_update(Notification)
+        .where(Notification.user_id == current_user["id"], Notification.is_read == False)
+        .values(is_read=True)
+    )
+    await session.execute(stmt)
+    await session.flush()
+    return {"message": "All notifications marked as read"}
