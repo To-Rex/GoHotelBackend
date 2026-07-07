@@ -11,14 +11,11 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    select,
-    func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship, column_property
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import TaskPriority, TaskStatus, TaskType
 from app.infrastructure.database.models.base import Base
-from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.shared.mixins import FullMixin
 
 
@@ -72,15 +69,4 @@ class HousekeepingTask(FullMixin, Base):
     )
     checklist_items: Mapped[list["ChecklistItem"]] = relationship(
         "ChecklistItem", back_populates="task", cascade="all, delete-orphan"
-    )
-
-    photo_count = column_property(
-        select(func.count(FileAttachment.id))
-        .where(
-            FileAttachment.entity_id == id,
-            FileAttachment.entity_type == "task_report",
-            FileAttachment.is_deleted == False,
-        )
-        .correlate_except(FileAttachment)
-        .scalar_subquery()
     )

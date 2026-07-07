@@ -2,11 +2,13 @@ from uuid import UUID
 from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy import select as sa_select, func
 
 from app.core.exceptions import NotFoundException, ValidationException
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.room_status_history import RoomStatusHistory
+from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.infrastructure.database.repositories.housekeeping_repo import HousekeepingRepository
 from app.infrastructure.database.repositories.room_repo import RoomRepository
 
@@ -16,6 +18,24 @@ class HousekeepingService:
         self.session = session
         self.repo = HousekeepingRepository(session)
         self.room_repo = RoomRepository(session)
+
+    async def _enrich_photo_counts(self, tasks: list[HousekeepingTask]) -> None:
+        if not tasks:
+            return
+        task_ids = [t.id for t in tasks]
+        stmt = (
+            sa_select(FileAttachment.entity_id, func.count(FileAttachment.id).label("cnt"))
+            .where(
+                FileAttachment.entity_id.in_(task_ids),
+                FileAttachment.entity_type == "task_report",
+                FileAttachment.is_deleted == False,
+            )
+            .group_by(FileAttachment.entity_id)
+        )
+        result = await self.session.execute(stmt)
+        counts = {row[0]: row[1] for row in result}
+        for task in tasks:
+            task.photo_count = counts.get(task.id, 0)
 
     async def create_task(self, hotel_id: UUID, data: dict, created_by: UUID) -> HousekeepingTask:
         room = await self.room_repo.get_by_id(data["room_id"], hotel_id)
@@ -46,7 +66,6 @@ class HousekeepingService:
         branch_id: UUID | None = None,
         assigned_to: UUID | None = None,
     ) -> list[HousekeepingTask]:
-        from sqlalchemy import select as sa_select
         stmt = sa_select(HousekeepingTask).options(
             selectinload(HousekeepingTask.room),
             selectinload(HousekeepingTask.assigned_user),
@@ -64,7 +83,9 @@ class HousekeepingService:
             stmt = stmt.where(HousekeepingTask.assigned_to == assigned_to)
         stmt = stmt.order_by(HousekeepingTask.created_at.desc()).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        tasks = list(result.scalars().all())
+        await self._enrich_photo_counts(tasks)
+        return tasks
 
     async def get_my_tasks(
         self, hotel_id: UUID | None, user_id: UUID, skip: int = 0, limit: int = 50
@@ -77,7 +98,6 @@ class HousekeepingService:
         return await self.repo.get_open_tasks(hotel_id, branch_id, skip, limit)
 
     async def get_task(self, task_id: UUID, hotel_id: UUID | None) -> HousekeepingTask:
-        from sqlalchemy import select as sa_select
         if hotel_id is None:
             stmt = sa_select(HousekeepingTask).options(
                 selectinload(HousekeepingTask.room),
@@ -96,6 +116,7 @@ class HousekeepingService:
             task = result.scalar_one_or_none()
         if not task:
             raise NotFoundException("Task not found", "TASK_NOT_FOUND")
+        await self._enrich_photo_counts([task])
         return task
 
     async def update_task(self, task_id: UUID, hotel_id: UUID, data: dict) -> HousekeepingTask:
