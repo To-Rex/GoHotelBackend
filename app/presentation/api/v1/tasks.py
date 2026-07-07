@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, UploadFile, File, Form
+from fastapi.responses import Response
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +14,8 @@ from app.application.dto.mobile import (
     ProgressUpdateRequest,
     ReportSubmitResponse,
 )
-from app.infrastructure.storage.minio import upload_file, get_presigned_url
+from app.infrastructure.storage.minio import upload_file, get_presigned_url, download_file
+from app.core.exceptions import NotFoundException
 from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.presentation.middleware.auth import get_current_user
 
@@ -194,3 +196,31 @@ async def get_task_photos(
         }
         for a in attachments
     ]
+
+
+@router.get("/{task_id}/photos/{photo_id}/view")
+async def view_task_photo(
+    task_id: UUID = Path(),
+    photo_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _resolve_hotel_id(current_user, hotel_id)
+
+    stmt = sa_select(FileAttachment).where(
+        FileAttachment.id == photo_id,
+        FileAttachment.entity_type == "task_report",
+        FileAttachment.entity_id == task_id,
+        FileAttachment.is_deleted == False,
+    )
+    if h_id:
+        stmt = stmt.where(FileAttachment.hotel_id == h_id)
+
+    result = await session.execute(stmt)
+    attachment = result.scalar_one_or_none()
+    if not attachment:
+        raise NotFoundException("Photo not found", "PHOTO_NOT_FOUND")
+
+    content = await download_file(attachment.minio_bucket, attachment.minio_path)
+    return Response(content=content, media_type=attachment.mime_type)
