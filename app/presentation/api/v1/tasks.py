@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, UploadFile, File, Form
+from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -12,7 +13,7 @@ from app.application.dto.mobile import (
     ProgressUpdateRequest,
     ReportSubmitResponse,
 )
-from app.infrastructure.storage.minio import upload_file
+from app.infrastructure.storage.minio import upload_file, get_presigned_url
 from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.presentation.middleware.auth import get_current_user
 
@@ -155,3 +156,41 @@ async def submit_report(
         "message": "Foto hisobot qabul qilindi",
         "task": task,
     }
+
+
+@router.get("/{task_id}/photos")
+async def get_task_photos(
+    task_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _resolve_hotel_id(current_user, hotel_id)
+
+    stmt = (
+        sa_select(FileAttachment)
+        .where(
+            FileAttachment.entity_type == "task_report",
+            FileAttachment.entity_id == task_id,
+            FileAttachment.is_deleted == False,
+        )
+        .order_by(FileAttachment.created_at.desc())
+    )
+    if h_id:
+        stmt = stmt.where(FileAttachment.hotel_id == h_id)
+
+    result = await session.execute(stmt)
+    attachments = result.scalars().all()
+
+    return [
+        {
+            "id": str(a.id),
+            "file_name": a.file_name,
+            "mime_type": a.mime_type,
+            "file_size": a.file_size,
+            "uploaded_by": str(a.uploaded_by),
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "download_url": get_presigned_url(a.minio_bucket, a.minio_path),
+        }
+        for a in attachments
+    ]
