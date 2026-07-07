@@ -4,6 +4,28 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+class RoomBrief(BaseModel):
+    id: UUID
+    room_number: str
+
+    model_config = {"from_attributes": True}
+
+
+class UserBrief(BaseModel):
+    id: UUID
+    first_name: str
+    last_name: str
+
+    model_config = {"from_attributes": True}
+
+
+class BranchBrief(BaseModel):
+    id: UUID
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
 class TaskCreateRequest(BaseModel):
     branch_id: UUID
     room_id: UUID
@@ -46,5 +68,9 @@ class TaskResponse(BaseModel):
     completed_at: datetime | None
     created_by: UUID
     created_at: datetime
+    photo_count: int = 0
+    room: RoomBrief | None = None
+    assigned_user: UserBrief | None = None
+    branch: BranchBrief | None = None
 
     model_config = {"from_attributes": True}

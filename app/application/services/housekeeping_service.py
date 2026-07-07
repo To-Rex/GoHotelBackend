@@ -1,6 +1,7 @@
 from uuid import UUID
 from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundException, ValidationException
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
@@ -32,7 +33,8 @@ class HousekeepingService:
             scheduled_date=data.get("scheduled_date"),
             created_by=created_by,
         )
-        return await self.repo.create(task)
+        task = await self.repo.create(task)
+        return await self.get_task(task.id, hotel_id)
 
     async def get_tasks(
         self,
@@ -45,7 +47,11 @@ class HousekeepingService:
         assigned_to: UUID | None = None,
     ) -> list[HousekeepingTask]:
         from sqlalchemy import select as sa_select
-        stmt = sa_select(HousekeepingTask)
+        stmt = sa_select(HousekeepingTask).options(
+            selectinload(HousekeepingTask.room),
+            selectinload(HousekeepingTask.assigned_user),
+            selectinload(HousekeepingTask.branch),
+        )
         if hotel_id is not None:
             stmt = stmt.where(HousekeepingTask.hotel_id == hotel_id)
         if status:
@@ -71,10 +77,23 @@ class HousekeepingService:
         return await self.repo.get_open_tasks(hotel_id, branch_id, skip, limit)
 
     async def get_task(self, task_id: UUID, hotel_id: UUID | None) -> HousekeepingTask:
+        from sqlalchemy import select as sa_select
         if hotel_id is None:
-            task = await self.repo.get_by_id_unscoped(task_id)
+            stmt = sa_select(HousekeepingTask).options(
+                selectinload(HousekeepingTask.room),
+                selectinload(HousekeepingTask.assigned_user),
+                selectinload(HousekeepingTask.branch),
+            ).where(HousekeepingTask.id == task_id)
+            result = await self.session.execute(stmt)
+            task = result.scalar_one_or_none()
         else:
-            task = await self.repo.get_by_id(task_id, hotel_id)
+            stmt = sa_select(HousekeepingTask).options(
+                selectinload(HousekeepingTask.room),
+                selectinload(HousekeepingTask.assigned_user),
+                selectinload(HousekeepingTask.branch),
+            ).where(HousekeepingTask.id == task_id, HousekeepingTask.hotel_id == hotel_id)
+            result = await self.session.execute(stmt)
+            task = result.scalar_one_or_none()
         if not task:
             raise NotFoundException("Task not found", "TASK_NOT_FOUND")
         return task
