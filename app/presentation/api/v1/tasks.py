@@ -202,20 +202,15 @@ async def get_task_photos(
 async def view_task_photo(
     task_id: UUID = Path(),
     photo_id: UUID = Path(),
-    hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    h_id = _resolve_hotel_id(current_user, hotel_id)
-
     stmt = sa_select(FileAttachment).where(
         FileAttachment.id == photo_id,
         FileAttachment.entity_type == "task_report",
         FileAttachment.entity_id == task_id,
         FileAttachment.is_deleted == False,
     )
-    if h_id:
-        stmt = stmt.where(FileAttachment.hotel_id == h_id)
 
     result = await session.execute(stmt)
     attachment = result.scalar_one_or_none()
