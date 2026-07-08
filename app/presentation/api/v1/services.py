@@ -48,7 +48,7 @@ async def list_services(
 async def create_service(
     data: dict,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("services.create")),
+    current_user: dict = Depends(require_permission("service.create")),
 ):
     if current_user.get("user_type") != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can create global services")
@@ -75,7 +75,7 @@ async def update_service(
     service_id: UUID = Path(),
     data: dict = ...,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("services.update")),
+    current_user: dict = Depends(require_permission("service.update")),
 ):
     if current_user.get("user_type") != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can update global services")

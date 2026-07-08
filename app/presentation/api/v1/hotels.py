@@ -50,7 +50,7 @@ async def _ensure_hotel_access(current_user: dict, target_hotel_id: UUID, sessio
 async def create_hotel(
     data: HotelCreateRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotels.create")),
+    current_user: dict = Depends(require_permission("hotel.create")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can create hotels")
@@ -99,7 +99,7 @@ async def update_hotel(
     hotel_id: UUID = Path(),
     data: HotelUpdateRequest = ...,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotels.update")),
+    current_user: dict = Depends(require_permission("hotel.update")),
 ):
     await _ensure_hotel_access(current_user, hotel_id, session)
     service = HotelService(session)
@@ -111,7 +111,7 @@ async def update_hotel_status(
     hotel_id: UUID = Path(),
     data: HotelStatusUpdate = ...,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotels.update")),
+    current_user: dict = Depends(require_permission("hotel.update")),
 ):
     await _ensure_hotel_access(current_user, hotel_id, session)
     service = HotelService(session)
@@ -134,7 +134,7 @@ async def add_hotel_amenity(
     hotel_id: UUID = Path(),
     data: HotelAmenityRequest = ...,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotels.update")),
+    current_user: dict = Depends(require_permission("hotel.update")),
 ):
     await _ensure_hotel_access(current_user, hotel_id, session)
     service = AmenityService(session)
@@ -147,7 +147,7 @@ async def remove_hotel_amenity(
     hotel_id: UUID = Path(),
     amenity_id: UUID = Path(),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotels.update")),
+    current_user: dict = Depends(require_permission("hotel.update")),
 ):
     await _ensure_hotel_access(current_user, hotel_id, session)
     service = AmenityService(session)
@@ -171,7 +171,7 @@ async def add_hotel_room_type(
     hotel_id: UUID = Path(),
     data: HotelRoomTypeRequest = ...,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotels.update")),
+    current_user: dict = Depends(require_permission("hotel.update")),
 ):
     await _ensure_hotel_access(current_user, hotel_id, session)
     service = RoomService(session)
@@ -184,7 +184,7 @@ async def remove_hotel_room_type(
     hotel_id: UUID = Path(),
     room_type_id: UUID = Path(),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotels.update")),
+    current_user: dict = Depends(require_permission("hotel.update")),
 ):
     await _ensure_hotel_access(current_user, hotel_id, session)
     service = RoomService(session)
@@ -196,7 +196,7 @@ async def remove_hotel_room_type(
 async def delete_hotel(
     hotel_id: UUID = Path(),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotels.delete")),
+    current_user: dict = Depends(require_permission("hotel.delete")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can delete hotels")

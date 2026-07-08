@@ -67,7 +67,7 @@ async def create_reservation(
     data: ReservationCreateRequest,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservations.create")),
+    current_user: dict = Depends(require_permission("reservation.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -151,7 +151,7 @@ async def update_reservation(
     data: ReservationUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservations.update")),
+    current_user: dict = Depends(require_permission("reservation.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -176,7 +176,7 @@ async def check_in(
     reservation_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservations.update")),
+    current_user: dict = Depends(require_permission("reservation.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -199,7 +199,7 @@ async def check_out(
     reservation_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservations.update")),
+    current_user: dict = Depends(require_permission("reservation.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -223,7 +223,7 @@ async def cancel_reservation(
     data: ReservationCancelRequest | None = None,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservations.cancel")),
+    current_user: dict = Depends(require_permission("reservation.cancel")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -247,7 +247,7 @@ async def mark_no_show(
     reservation_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservations.update")),
+    current_user: dict = Depends(require_permission("reservation.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -286,7 +286,7 @@ async def add_service(
     data: ReservationServiceAddRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservations.update")),
+    current_user: dict = Depends(require_permission("reservation.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -310,7 +310,7 @@ async def remove_service(
     service_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservations.update")),
+    current_user: dict = Depends(require_permission("reservation.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

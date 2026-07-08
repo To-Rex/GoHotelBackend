@@ -63,7 +63,7 @@ async def create_task(
     data: TaskCreateRequest,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("housekeeping.create")),
+    current_user: dict = Depends(require_permission("housekeeping.task.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -131,7 +131,7 @@ async def update_task(
     data: TaskUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("housekeeping.update")),
+    current_user: dict = Depends(require_permission("housekeeping.task.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -155,7 +155,7 @@ async def update_task_status(
     data: TaskStatusUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("housekeeping.update")),
+    current_user: dict = Depends(require_permission("housekeeping.task.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -181,7 +181,7 @@ async def assign_task(
     data: TaskAssignRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("housekeeping.assign")),
+    current_user: dict = Depends(require_permission("housekeeping.task.assign")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

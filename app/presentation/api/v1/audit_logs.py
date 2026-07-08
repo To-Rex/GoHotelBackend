@@ -33,7 +33,7 @@ async def query_audit_logs(
     page_size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("audit_logs.view")),
+    current_user: dict = Depends(require_permission("audit_log.view")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         h_id = hotel_id or current_user.get("hotel_id")

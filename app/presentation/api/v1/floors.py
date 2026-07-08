@@ -46,7 +46,7 @@ async def create_floor(
     data: FloorCreateRequest,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("floors.create")),
+    current_user: dict = Depends(require_permission("floor.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id and data.hotel_id:
@@ -72,7 +72,7 @@ async def update_floor(
     data: FloorUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("floors.update")),
+    current_user: dict = Depends(require_permission("floor.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -98,7 +98,7 @@ async def delete_floor(
     floor_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("floors.delete")),
+    current_user: dict = Depends(require_permission("floor.delete")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

@@ -53,7 +53,7 @@ async def generate_report(
     data: dict,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reports.generate")),
+    current_user: dict = Depends(require_permission("report.generate")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

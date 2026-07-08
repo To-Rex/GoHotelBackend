@@ -27,7 +27,7 @@ async def list_room_types(
 async def create_room_type(
     data: RoomTypeCreateRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("room_types.create")),
+    current_user: dict = Depends(require_permission("room_type.create")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can manage room types")
@@ -50,7 +50,7 @@ async def update_room_type(
     type_id: UUID = Path(),
     data: RoomTypeUpdateRequest = ...,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("room_types.update")),
+    current_user: dict = Depends(require_permission("room_type.update")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can manage room types")
@@ -62,7 +62,7 @@ async def update_room_type(
 async def delete_room_type(
     type_id: UUID = Path(),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("room_types.delete")),
+    current_user: dict = Depends(require_permission("room_type.delete")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can manage room types")
@@ -76,7 +76,7 @@ async def update_room_type_status(
     type_id: UUID = Path(),
     is_active: bool = Query(),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("room_types.update")),
+    current_user: dict = Depends(require_permission("room_type.update")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can manage room types")

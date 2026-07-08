@@ -51,7 +51,7 @@ async def register_guest(
     data: GuestCreateRequest,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("guests.create")),
+    current_user: dict = Depends(require_permission("guest.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -86,7 +86,7 @@ async def update_guest(
     data: GuestUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("guests.update")),
+    current_user: dict = Depends(require_permission("guest.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -124,7 +124,7 @@ async def delete_guest(
     guest_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("guests.delete")),
+    current_user: dict = Depends(require_permission("guest.delete")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

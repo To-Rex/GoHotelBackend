@@ -45,7 +45,7 @@ async def create_branch(
     data: BranchCreateRequest,
     hotel_id: UUID | None = None,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("branches.create")),
+    current_user: dict = Depends(require_permission("branch.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id and not data.model_dump().get("hotel_id"):
@@ -80,7 +80,7 @@ async def update_branch(
     data: BranchUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("branches.update")),
+    current_user: dict = Depends(require_permission("branch.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         h_id = hotel_id or current_user.get("hotel_id")

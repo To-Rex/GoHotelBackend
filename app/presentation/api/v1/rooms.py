@@ -69,7 +69,7 @@ async def create_room(
     data: RoomCreateRequest,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("rooms.create")),
+    current_user: dict = Depends(require_permission("room.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -127,7 +127,7 @@ async def update_room(
     data: RoomUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("rooms.update")),
+    current_user: dict = Depends(require_permission("room.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -151,7 +151,7 @@ async def update_room_status(
     data: RoomStatusUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("rooms.update")),
+    current_user: dict = Depends(require_permission("room.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -192,7 +192,7 @@ async def delete_room(
     room_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("rooms.delete")),
+    current_user: dict = Depends(require_permission("room.delete")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -217,7 +217,7 @@ async def add_room_amenity(
     data: RoomAmenityRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("rooms.update")),
+    current_user: dict = Depends(require_permission("room.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -238,7 +238,7 @@ async def remove_room_amenity(
     amenity_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("rooms.update")),
+    current_user: dict = Depends(require_permission("room.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

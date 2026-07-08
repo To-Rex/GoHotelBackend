@@ -46,7 +46,7 @@ async def list_employees(
 async def create_employee(
     data: EmployeeCreateRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("employees.create")),
+    current_user: dict = Depends(require_permission("employee.create")),
 ):
     h_id = _get_hotel_id(current_user)
     if h_id and data.hotel_id != h_id:
@@ -80,7 +80,7 @@ async def update_employee(
     data: EmployeeUpdateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("employees.update")),
+    current_user: dict = Depends(require_permission("employee.update")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -103,7 +103,7 @@ async def delete_employee(
     employee_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("employees.delete")),
+    current_user: dict = Depends(require_permission("employee.delete")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

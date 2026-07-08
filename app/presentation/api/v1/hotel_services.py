@@ -65,7 +65,7 @@ async def enable_service(
     data: dict,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotel_services.manage")),
+    current_user: dict = Depends(require_permission("hotel_service.manage")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -104,7 +104,7 @@ async def update_hotel_service(
     data: dict = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotel_services.manage")),
+    current_user: dict = Depends(require_permission("hotel_service.manage")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -139,7 +139,7 @@ async def disable_service(
     hotel_service_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("hotel_services.manage")),
+    current_user: dict = Depends(require_permission("hotel_service.manage")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

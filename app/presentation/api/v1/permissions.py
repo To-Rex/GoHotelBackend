@@ -46,7 +46,7 @@ async def permissions_by_module(
 async def get_employee_permissions(
     employee_id: UUID = Path(),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("permissions.view")),
+    current_user: dict = Depends(require_permission("permission.view")),
 ):
     service = UserService(session)
     permissions = await service.get_user_permissions(employee_id)
@@ -59,7 +59,7 @@ async def assign_permissions(
     data: PermissionAssignRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("permissions.assign")),
+    current_user: dict = Depends(require_permission("permission.assign")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -84,7 +84,7 @@ async def grant_permission(
     perm_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("permissions.assign")),
+    current_user: dict = Depends(require_permission("permission.assign")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -109,7 +109,7 @@ async def revoke_permission(
     perm_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("permissions.assign")),
+    current_user: dict = Depends(require_permission("permission.assign")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

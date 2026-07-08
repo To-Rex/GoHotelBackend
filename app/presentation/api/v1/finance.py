@@ -53,7 +53,7 @@ async def create_invoice(
     data: dict,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("finance.invoices.create")),
+    current_user: dict = Depends(require_permission("finance.invoice.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -154,7 +154,7 @@ async def record_payment(
     data: PaymentCreateRequest = ...,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("finance.payments.create")),
+    current_user: dict = Depends(require_permission("finance.payment.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -225,7 +225,7 @@ async def create_journal_entry(
     data: dict,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("finance.journal_entries.create")),
+    current_user: dict = Depends(require_permission("finance.journal.create")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:

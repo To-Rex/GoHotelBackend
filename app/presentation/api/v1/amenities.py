@@ -30,7 +30,7 @@ async def list_amenities(
 async def create_amenity(
     data: AmenityCreateRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("services.manage")),
+    current_user: dict = Depends(require_permission("service.manage")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can manage amenities")
@@ -43,7 +43,7 @@ async def update_amenity(
     amenity_id: UUID = Path(),
     data: AmenityUpdateRequest = ...,
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("services.manage")),
+    current_user: dict = Depends(require_permission("service.manage")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can manage amenities")
@@ -55,7 +55,7 @@ async def update_amenity(
 async def delete_amenity(
     amenity_id: UUID = Path(),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("services.manage")),
+    current_user: dict = Depends(require_permission("service.manage")),
 ):
     if current_user["user_type"] != "SUPER_ADMIN":
         raise ForbiddenException("Only SUPER_ADMIN can manage amenities")

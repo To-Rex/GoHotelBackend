@@ -31,7 +31,7 @@ async def upload_file_endpoint(
     category: str | None = Form(default=None),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("files.upload")),
+    current_user: dict = Depends(require_permission("file.upload")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -144,7 +144,7 @@ async def delete_file_endpoint(
     file_id: UUID = Path(),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("files.delete")),
+    current_user: dict = Depends(require_permission("file.delete")),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         h_id = hotel_id or current_user.get("hotel_id")
