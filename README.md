@@ -70,6 +70,10 @@ async def main():
 asyncio.run(main())
 "
 
+
+
+
+
 # 8. Serverni ishga tushirish
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -81,6 +85,7 @@ Swagger UI: `http://localhost:8000/docs`
 ```bash
 source .venv/bin/activate && python tests/run_all_tests.py
 ```
+
 
 Barcha modullar bo'yicha **86 ta endpoint** avtomatik testdan o'tkaziladi: Auth, Hotels, Branches, Floors, RoomTypes, Rooms, Guests, Reservations, Employees, Permissions, Services, Housekeeping, Finance, Reports, AuditLogs, Notifications, Files.
 
