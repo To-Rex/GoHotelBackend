@@ -48,6 +48,9 @@ class RateLimitSettings(BaseSettings):
 
 class CORSSettings(BaseSettings):
     CORS_ORIGINS: list[str] = ["*"]
+    # Dokploy (sslip.io) subdomenlaridagi frontendlarga env ro'yxatidan qat'i nazar
+    # ruxsat beriladi — yangi frontend deploy bo'lganda CORS sinmasligi uchun.
+    CORS_ORIGIN_REGEX: str = r"https://.*\.sslip\.io"
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
