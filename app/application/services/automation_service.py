@@ -165,8 +165,20 @@ class AutomationService:
                 create_cleaning_task=False,
                 allowed_statuses=("CONFIRMED",),
             )
-            # Bron uchun band qilingan xona hali RESERVED bo'lsa — bo'shatamiz
-            if room.current_status == "RESERVED":
+            # Bron uchun band qilingan xona hali RESERVED bo'lsa — bo'shatamiz.
+            # Lekin o'sha xonada boshqa faol bron bo'lsa tegmaymiz (aks holda
+            # kelajakdagi bronning band holati noto'g'ri tozalanib ketadi).
+            other_active = await self.session.execute(
+                select(Reservation.id)
+                .where(
+                    Reservation.room_id == room.id,
+                    Reservation.id != reservation.id,
+                    Reservation.status.in_(["CONFIRMED", "CHECKED_IN"]),
+                    Reservation.is_deleted.is_(False),
+                )
+                .limit(1)
+            )
+            if room.current_status == "RESERVED" and other_active.first() is None:
                 room.current_status = "AVAILABLE"
                 await self.room_repo.update(room, current_status="AVAILABLE")
                 self.session.add(
