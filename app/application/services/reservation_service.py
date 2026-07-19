@@ -511,9 +511,62 @@ class ReservationService:
 
         return reservation
 
+    async def _ensure_cleaning_task(
+        self,
+        reservation: Reservation,
+        hotel_id: UUID,
+        room: Room,
+        created_by: UUID,
+        assigned_to: UUID | None = None,
+    ) -> HousekeepingTask | None:
+        """Bron uchun tozalash tunini yaratadi (agar hali mavjud bo'lmasa).
+
+        Idempotent: shu bronga bog'langan bekor qilinmagan CLEANING tun bo'lsa,
+        yangisi yaratilmaydi (avtomatik va qo'lda chiqish yo'llari dublikat
+        yaratmasligi uchun).
+        """
+        existing = await self.session.execute(
+            select(HousekeepingTask).where(
+                HousekeepingTask.reservation_id == reservation.id,
+                HousekeepingTask.task_type == "CLEANING",
+                HousekeepingTask.status != "CANCELLED",
+            )
+        )
+        if existing.scalars().first():
+            return None
+
+        task = HousekeepingTask(
+            hotel_id=hotel_id,
+            branch_id=reservation.branch_id,
+            room_id=room.id,
+            reservation_id=reservation.id,
+            task_type="CLEANING",
+            status="OPEN",
+            priority="HIGH",
+            assigned_to=assigned_to,
+            notes=f"Auto-created cleaning for reservation {reservation.reservation_number}",
+            scheduled_date=date.today(),
+            created_by=created_by,
+        )
+        self.session.add(task)
+        await self.session.flush()
+        return task
+
     async def check_out(
-        self, reservation_id: UUID, hotel_id: UUID, user_id: UUID
+        self,
+        reservation_id: UUID,
+        hotel_id: UUID,
+        user_id: UUID,
+        transition_room: bool = True,
+        create_cleaning_task: bool = True,
     ) -> dict:
+        """Bronni CHECKED_OUT holatiga o'tkazadi (hisob-faktura bilan).
+
+        transition_room / create_cleaning_task standart holda True — qo'lda
+        chiqish endpointi uchun avvalgi xatti-harakat aynan saqlanadi. Avtomatik
+        oqim bularni False qilib chaqiradi (xona holati va tozalash tuni allaqachon
+        bosqichli ravishda boshqarilgan bo'ladi).
+        """
         reservation = await self.repo.get_by_id(reservation_id, hotel_id)
         if not reservation:
             raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
@@ -645,30 +698,25 @@ class ReservationService:
         reservation.status = "CHECKED_OUT"
         await self.repo.update(reservation, status="CHECKED_OUT")
 
-        room.current_status = "CLEANING"
-        await self.room_repo.update(room, current_status="CLEANING")
+        # Xonani CLEANING ga o'tkazish — qo'lda chiqishda True (avvalgidek).
+        # Avtomatik oqimda xona holati bosqichma-bosqich alohida boshqariladi.
+        if transition_room:
+            room.current_status = "CLEANING"
+            await self.room_repo.update(room, current_status="CLEANING")
 
-        task = HousekeepingTask(
-            hotel_id=hotel_id,
-            branch_id=reservation.branch_id,
-            room_id=room.id,
-            task_type="CLEANING",
-            status="OPEN",
-            priority="HIGH",
-            notes=f"Auto-created after check-out for reservation {reservation.reservation_number}",
-            scheduled_date=date.today(),
-            created_by=user_id,
-        )
-        self.session.add(task)
+            history = RoomStatusHistory(
+                hotel_id=hotel_id,
+                room_id=room.id,
+                status="CLEANING",
+                changed_by=user_id,
+                notes=f"Check-out for reservation {reservation.reservation_number}",
+            )
+            self.session.add(history)
 
-        history = RoomStatusHistory(
-            hotel_id=hotel_id,
-            room_id=room.id,
-            status="CLEANING",
-            changed_by=user_id,
-            notes=f"Check-out for reservation {reservation.reservation_number}",
-        )
-        self.session.add(history)
+        # Tozalash tuni — mavjud bo'lmasa yaratiladi (idempotent).
+        if create_cleaning_task:
+            await self._ensure_cleaning_task(reservation, hotel_id, room, user_id)
+
         await self.session.flush()
 
         return {

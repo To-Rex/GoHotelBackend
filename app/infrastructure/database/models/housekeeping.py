@@ -31,6 +31,11 @@ class HousekeepingTask(FullMixin, Base):
     room_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("rooms.id", ondelete="RESTRICT"), nullable=False
     )
+    # Avtomatik tozalash tuni qaysi bronga tegishli ekanini bog'laydi (ixtiyoriy).
+    # Bron o'chsa NULL bo'ladi; dedublikatsiya va avtomatik chiqish uchun ishlatiladi.
+    reservation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("reservations.id", ondelete="SET NULL"), nullable=True
+    )
     task_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=TaskStatus.OPEN.value

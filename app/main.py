@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.database import _get_engine, dispose_engine
 from app.core.exceptions import AppException
+from app.core.scheduler import start_scheduler, stop_scheduler
 from app.presentation.api.v1.router import api_router
 
 logging.basicConfig(level=logging.DEBUG if settings.APP_DEBUG else logging.INFO)
@@ -23,7 +24,10 @@ async def lifespan(app: FastAPI):
     engine = _get_engine()
     async with engine.begin() as conn:
         pass
+    # Bron chiqishini avtomatlashtiruvchi fon vazifasini ishga tushiramiz
+    start_scheduler()
     yield
+    await stop_scheduler()
     await dispose_engine()
 
 

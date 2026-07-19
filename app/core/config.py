@@ -67,6 +67,33 @@ class LogSettings(BaseSettings):
     LOG_FORMAT: str = "json"
 
 
+class AutomationSettings(BaseSettings):
+    """Bron chiqishini avtomatlashtirish (fon vazifasi) sozlamalari.
+
+    Oqim: chiqish vaqtidan LEAD daqiqa oldin farroshga tozalash tuni yaratiladi;
+    chiqish vaqti kelganda xona "CLEANING" bo'ladi; tozalash tugagach (yoki
+    GRACE daqiqadan keyin, farrosh bajarmasa ham) bron avtomatik "CHECKED_OUT".
+    """
+
+    # Fon rejalashtiruvchisini yoqish/o'chirish
+    AUTO_CHECKOUT_ENABLED: bool = True
+    # Har necha soniyada bir marta tekshiriladi
+    AUTO_CHECKOUT_INTERVAL_SECONDS: int = 60
+    # Chiqish vaqtidan necha daqiqa oldin tozalash tuni yaratiladi (farroshga yuboriladi)
+    HOUSEKEEPING_LEAD_MINUTES: int = 5
+    # Tozalash bajarilmasa, chiqish vaqtidan necha daqiqa keyin majburan CHECKED_OUT qilinadi
+    AUTO_CHECKOUT_GRACE_MINUTES: int = 60
+    # Kunlik (soatsiz) bronlar uchun standart chiqish soati (mahalliy vaqt, 0-23)
+    DEFAULT_CHECKOUT_HOUR: int = 12
+    # Mahalliy vaqt UTC dan necha daqiqa oldinda (O'zbekiston = +300). Bron
+    # datetime'lari mahalliy "devor soati" sifatida saqlanadi; solishtirish shu
+    # ofset bilan mahalliy hozirgi vaqtga keltiriladi.
+    APP_TZ_OFFSET_MINUTES: int = 300
+    # Chiqish sanasi shu soatdan ko'proq o'tgan eski bronlarga tegilmaydi
+    # (ilk ishga tushganda eski ma'lumotlarni ommaviy o'zgartirmaslik uchun)
+    AUTO_CHECKOUT_MAX_LOOKBACK_HOURS: int = 48
+
+
 class Settings(
     AppSettings,
     DatabaseSettings,
@@ -75,6 +102,7 @@ class Settings(
     RateLimitSettings,
     CORSSettings,
     LogSettings,
+    AutomationSettings,
 ):
     model_config = SettingsConfigDict(
         env_file=".env",
