@@ -559,6 +559,7 @@ class ReservationService:
         user_id: UUID,
         transition_room: bool = True,
         create_cleaning_task: bool = True,
+        allowed_statuses: tuple[str, ...] = ("CHECKED_IN",),
     ) -> dict:
         """Bronni CHECKED_OUT holatiga o'tkazadi (hisob-faktura bilan).
 
@@ -566,12 +567,17 @@ class ReservationService:
         chiqish endpointi uchun avvalgi xatti-harakat aynan saqlanadi. Avtomatik
         oqim bularni False qilib chaqiradi (xona holati va tozalash tuni allaqachon
         bosqichli ravishda boshqarilgan bo'ladi).
+
+        allowed_statuses standart holda faqat ("CHECKED_IN",) — qo'lda chiqishda
+        avvalgi qat'iy tekshiruv saqlanadi. Avtomatik oqim vaqti o'tgan, lekin
+        hech qachon kirish qilinmagan CONFIRMED bronlarni yopish uchun buni
+        kengaytirib chaqiradi.
         """
         reservation = await self.repo.get_by_id(reservation_id, hotel_id)
         if not reservation:
             raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
 
-        if reservation.status != "CHECKED_IN":
+        if reservation.status not in allowed_statuses:
             raise ValidationException(
                 f"Cannot check out reservation with status: {reservation.status}",
                 "INVALID_STATUS",

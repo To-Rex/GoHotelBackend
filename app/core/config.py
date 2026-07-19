@@ -89,9 +89,6 @@ class AutomationSettings(BaseSettings):
     # datetime'lari mahalliy "devor soati" sifatida saqlanadi; solishtirish shu
     # ofset bilan mahalliy hozirgi vaqtga keltiriladi.
     APP_TZ_OFFSET_MINUTES: int = 300
-    # Chiqish sanasi shu soatdan ko'proq o'tgan eski bronlarga tegilmaydi
-    # (ilk ishga tushganda eski ma'lumotlarni ommaviy o'zgartirmaslik uchun)
-    AUTO_CHECKOUT_MAX_LOOKBACK_HOURS: int = 48
 
 
 class Settings(

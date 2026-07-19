@@ -109,17 +109,16 @@ class AutomationService:
     async def run_tick(self) -> None:
         now = self._now_local()
         today = now.date()
-        lookback_days = settings.AUTO_CHECKOUT_MAX_LOOKBACK_HOURS // 24 + 2
 
-        # Avval faqat ID'larni olamiz. Har bir bronni o'z try bloki ichida
-        # QAYTA yuklaymiz — chunki bir bronning xatosida session.rollback()
-        # oldindan yuklangan barcha ORM obyektlarni "expire" qiladi va ularga
-        # keyingi murojaat async kontekstda MissingGreenlet xatosini beradi.
+        # Yakunlanmagan bronlar: CHECKED_IN (bosqichli oqim) va CONFIRMED
+        # (kirish qilinmagan, vaqti o'tgan bronlarni yopish uchun).
+        # Pastki sana chegarasi YO'Q — eski bronlar ham yopiladi. Ro'yxat o'z-o'zidan
+        # qisqaradi: yopilgan bron boshqa tanlanmaydi. Yuqori chegara — kelajakdagi
+        # bronlarni bekorga o'qimaslik uchun.
         id_rows = await self.session.execute(
             select(Reservation.id).where(
-                Reservation.status == "CHECKED_IN",
+                Reservation.status.in_(["CHECKED_IN", "CONFIRMED"]),
                 Reservation.is_deleted.is_(False),
-                Reservation.check_out_date >= today - timedelta(days=lookback_days),
                 Reservation.check_out_date <= today + timedelta(days=1),
             )
         )
@@ -132,7 +131,7 @@ class AutomationService:
                 if (
                     reservation is None
                     or reservation.is_deleted
-                    or reservation.status != "CHECKED_IN"
+                    or reservation.status not in ("CHECKED_IN", "CONFIRMED")
                 ):
                     continue
                 await self._process(reservation, now)
@@ -150,6 +149,40 @@ class AutomationService:
 
         room = await self.room_repo.get_by_id(reservation.room_id, hotel_id)
         if not room:
+            return
+
+        # --- Kirish qilinmagan (CONFIRMED) bronlar ---
+        # Mehmon kirmagan, demak tozalash kerak emas. Vaqti o'tgan bo'lsa bron
+        # yopiladi va band turgan xona bo'shatiladi.
+        if reservation.status == "CONFIRMED":
+            if now < moment:
+                return
+            await self.res_service.check_out(
+                reservation.id,
+                hotel_id,
+                actor,
+                transition_room=False,
+                create_cleaning_task=False,
+                allowed_statuses=("CONFIRMED",),
+            )
+            # Bron uchun band qilingan xona hali RESERVED bo'lsa — bo'shatamiz
+            if room.current_status == "RESERVED":
+                room.current_status = "AVAILABLE"
+                await self.room_repo.update(room, current_status="AVAILABLE")
+                self.session.add(
+                    RoomStatusHistory(
+                        hotel_id=hotel_id,
+                        room_id=room.id,
+                        status="AVAILABLE",
+                        changed_by=actor,
+                        notes=f"Auto check-out (kirilmagan bron) {reservation.reservation_number}",
+                    )
+                )
+                await self.session.flush()
+            logger.info(
+                "Reservation %s auto CHECKED_OUT (was CONFIRMED, never checked in)",
+                reservation.id,
+            )
             return
 
         # --- 1-bosqich: chiqishdan LEAD daqiqa oldin tozalash tuni yaratiladi ---
