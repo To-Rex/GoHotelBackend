@@ -498,7 +498,12 @@ class ReservationService:
                 "ROOM_NOT_READY",
             )
 
-        today = date.today()
+        # Mahalliy sana bo'yicha tekshiramiz — server UTC da ishlaydi va tungi
+        # 00:00-05:00 (mahalliy) oralig'ida date.today() hali "kecha"da bo'lib,
+        # bugungi mehmonni check-in qilishga to'sqinlik qilardi.
+        today = (
+            datetime.now(timezone.utc) + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
+        ).date()
         if reservation.check_in_date > today:
             raise ValidationException(
                 f"Check-in date is {reservation.check_in_date}, not yet arrived",
