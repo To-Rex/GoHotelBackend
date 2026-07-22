@@ -189,6 +189,18 @@ class ReservationService:
         check_in_dt = data.get("check_in_datetime")
         check_out_dt = data.get("check_out_datetime")
 
+        # O'tgan sanaga bron qilib bo'lmaydi (bugun mumkin). Sana mahalliy
+        # vaqt bo'yicha aniqlanadi — server UTC da ishlaydi, tungi soatlarda
+        # date.today() mahalliy kundan bir kun orqada bo'lib qolmasligi uchun.
+        local_today = (
+            datetime.now(timezone.utc) + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
+        ).date()
+        if check_in < local_today:
+            raise ValidationException(
+                "Cannot create a reservation for a past date",
+                "PAST_DATE",
+            )
+
         if booking_type == "HOURLY":
             if not check_in_dt or not check_out_dt:
                 raise ValidationException(

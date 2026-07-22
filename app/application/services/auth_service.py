@@ -144,10 +144,23 @@ class AuthService:
         if user.user_type == "EMPLOYEE":
             permissions = [p["code"] for p in await self.user_repo.get_user_permissions(user.id)]
 
+        # Foydalanuvchi mehmonxonasining nomi (frontend tab sarlavhasi uchun).
+        # SUPER_ADMIN da hotel_id bo'lmasligi mumkin — None qoladi.
+        hotel_name: str | None = None
+        if user.hotel_id:
+            from sqlalchemy import select
+            from app.infrastructure.database.models.hotel import Hotel
+
+            result = await self.session.execute(
+                select(Hotel.name).where(Hotel.id == user.hotel_id)
+            )
+            hotel_name = result.scalar_one_or_none()
+
         return {
             "id": str(user.id),
             "user_type": user.user_type,
             "hotel_id": str(user.hotel_id) if user.hotel_id else None,
+            "hotel_name": hotel_name,
             "branch_id": str(user.branch_id) if user.branch_id else None,
             "username": user.username,
             "first_name": user.first_name,

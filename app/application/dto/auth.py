@@ -24,6 +24,8 @@ class UserProfileResponse(BaseModel):
     id: UUID
     user_type: str
     hotel_id: UUID | None
+    # Mehmonxona nomi — frontend brauzer tab sarlavhasida ko'rsatiladi
+    hotel_name: str | None = None
     branch_id: UUID | None
     username: str
     first_name: str
