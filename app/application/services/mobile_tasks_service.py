@@ -2,7 +2,7 @@ from uuid import UUID
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.exceptions import NotFoundException, ValidationException
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
@@ -90,8 +90,9 @@ class MobileTasksService:
         from datetime import datetime, timezone
         task.status = "IN_PROGRESS"
         task.started_at = datetime.now(timezone.utc)
+        # refresh() ishlatilmaydi: u selectinload bilan yuklangan munosabatlarni
+        # expire qilib, _enrich_task dagi task.room murojaatida MissingGreenlet beradi
         await self.session.flush()
-        await self.session.refresh(task)
         return await self._enrich_task(task, hotel_id)
 
     async def update_progress(self, task_id: UUID, hotel_id: UUID, progress: int) -> dict:
@@ -105,7 +106,6 @@ class MobileTasksService:
             if room and room.current_status == "CLEANING":
                 room.current_status = "AVAILABLE"
         await self.session.flush()
-        await self.session.refresh(task)
         return await self._enrich_task(task, hotel_id)
 
     async def toggle_checklist_item(self, task_id: UUID, item_id: UUID) -> dict:
@@ -135,7 +135,6 @@ class MobileTasksService:
                 room.current_status = "AVAILABLE"
 
         await self.session.flush()
-        await self.session.refresh(task)
         return await self._enrich_task(task, None)
 
     async def _get_task(self, task_id: UUID, hotel_id: UUID | None) -> HousekeepingTask:
@@ -193,8 +192,11 @@ class MobileTasksService:
         }
 
     async def _get_last_guest(self, room_id: UUID, hotel_id: UUID) -> tuple[str, str] | None:
+        # guest munosabati eager yuklanadi — aks holda pastdagi reservation.guest
+        # murojaati async sessiyada lazy-load qilib MissingGreenlet (500) beradi
         stmt = (
             select(Reservation)
+            .options(joinedload(Reservation.guest))
             .join(Guest, Reservation.guest_id == Guest.id)
             .where(
                 Reservation.room_id == room_id,
