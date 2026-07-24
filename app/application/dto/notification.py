@@ -27,3 +27,18 @@ class NotificationSendResponse(BaseModel):
     notification_id: UUID
     # Nechta qurilmaga (FCM token) push muvaffaqiyatli yuborildi
     push_sent: int = 0
+
+
+class TestPushRequest(BaseModel):
+    """Sinov uchun: FCM tokenga to'g'ridan-to'g'ri push yuborish (avtorizatsiyasiz)."""
+
+    fcm_token: str = Field(..., min_length=10, max_length=4096)
+    title: str = Field(default="Test", min_length=1, max_length=255)
+    body: str | None = Field(default="Bu sinov xabari", max_length=2000)
+    data: dict[str, str] | None = None
+
+
+class TestPushResponse(BaseModel):
+    success: bool
+    # 1 = yuborildi, 0 = yuborilmadi (token yaroqsiz yoki Firebase o'chiq)
+    push_sent: int = 0

@@ -211,21 +211,26 @@ class AutomationService:
                     reservation.id,
                     cleaner_id,
                 )
-                # Farroshga avtomatik biriktirilgan tozalash vazifasi haqida xabar
+                # Mijoz chiqishdan ~LEAD daqiqa oldin — farroshга checkout
+                # ogohlantirishi + biriktirilgan tozalash vazifasi haqida push.
                 if task is not None and cleaner_id is not None:
                     try:
+                        lead_min = settings.HOUSEKEEPING_LEAD_MINUTES
                         await NotificationService(self.session).notify(
                             hotel_id=hotel_id,
                             user_id=cleaner_id,
-                            title="Yangi vazifa biriktirildi",
-                            body=f"Tozalash — {room.room_number}-xona",
+                            title="Mijoz tez orada chiqadi",
+                            body=(
+                                f"{room.room_number}-xona — mijoz ~{lead_min} daqiqada "
+                                f"chiqadi, tozalashga tayyorlaning"
+                            ),
                             entity_type="task",
                             entity_id=task.id,
                             send_push=True,
                         )
                     except Exception:
                         logger.exception(
-                            "Auto-cleaning notification yuborilmadi (res=%s)",
+                            "Checkout ogohlantirish notification yuborilmadi (res=%s)",
                             reservation.id,
                         )
 

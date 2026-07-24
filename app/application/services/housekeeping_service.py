@@ -33,9 +33,12 @@ class HousekeepingService:
         self.room_repo = RoomRepository(session)
 
     async def _notify_assignment(
-        self, task: HousekeepingTask, assignee_id: UUID | None
+        self,
+        task: HousekeepingTask,
+        assignee_id: UUID | None,
+        title: str = "Yangi vazifa biriktirildi",
     ) -> None:
-        """Vazifa biriktirilgan farroshga notification + push yuboradi.
+        """Vazifa biriktirilgan/o'zgartirilgan farroshga notification + push yuboradi.
 
         Xato bo'lsa jimgina o'tadi — asosiy vazifa operatsiyasini hech qachon
         buzmaydi.
@@ -52,7 +55,7 @@ class HousekeepingService:
             await NotificationService(self.session).notify(
                 hotel_id=task.hotel_id,
                 user_id=assignee_id,
-                title="Yangi vazifa biriktirildi",
+                title=title,
                 body=body,
                 entity_type="task",
                 entity_id=task.id,
@@ -174,10 +177,19 @@ class HousekeepingService:
         updatable = ["task_type", "priority", "assigned_to", "notes", "scheduled_date"]
         update_data = {k: v for k, v in data.items() if k in updatable and v is not None}
         updated = await self.repo.update(task, **update_data)
-        # Biriktirilgan farrosh o'zgargan bo'lsagina yangi farroshga xabar beramiz
+
         new_assignee = update_data.get("assigned_to")
         if new_assignee is not None and new_assignee != previous_assignee:
+            # Boshqa farroshga biriktirildi — yangi farroshga xabar beramiz
             await self._notify_assignment(updated, new_assignee)
+        else:
+            # Assignee o'zgarmadi, lekin task tahrirlandi (prioritet/izoh/vaqt/tur) —
+            # joriy biriktirilgan farroshga "yangilandi" xabari yuboramiz.
+            changed_fields = [k for k in update_data if k != "assigned_to"]
+            if updated.assigned_to is not None and changed_fields:
+                await self._notify_assignment(
+                    updated, updated.assigned_to, title="Vazifa yangilandi"
+                )
         return updated
 
     async def update_task_status(

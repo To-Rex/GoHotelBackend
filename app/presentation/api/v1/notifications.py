@@ -12,9 +12,12 @@ from app.application.dto.notification import (
     NotificationSendRequest,
     NotificationBroadcastRequest,
     NotificationSendResponse,
+    TestPushRequest,
+    TestPushResponse,
 )
 from app.infrastructure.database.models.notification import Notification
 from app.infrastructure.database.models.user import User
+from app.infrastructure.push import firebase
 from app.presentation.middleware.auth import get_current_user, require_permission
 
 router = APIRouter(tags=["Notifications"])
@@ -39,6 +42,19 @@ def _map_notification_type(n: Notification) -> str:
     if n.entity_type == "inventory":
         return "inventory"
     return "system"
+
+
+@router.post("/test-push", response_model=TestPushResponse)
+async def test_push(data: TestPushRequest):
+    """SINOV endpointi — FCM tokenga to'g'ridan-to'g'ri push yuboradi.
+
+    Avtorizatsiya (bearer token) TALAB QILINMAYDI va DB'ga hech narsa yozilmaydi.
+    Faqat push mexanizmini tekshirish uchun.
+    """
+    sent = await firebase.send_push(
+        data.fcm_token, data.title, data.body, data=data.data
+    )
+    return {"success": sent > 0, "push_sent": sent}
 
 
 def _require_sender(current_user: dict) -> None:
