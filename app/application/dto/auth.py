@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=100)
     password: str = Field(..., min_length=6)
+    # Firebase Cloud Messaging device token (ixtiyoriy). Push notification uchun saqlanadi.
+    fcm_token: str | None = Field(default=None, max_length=4096)
 
 
 class TokenResponse(BaseModel):

@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import UserStatus, UserType
@@ -36,6 +36,9 @@ class User(FullMixin, SoftDeleteMixin, Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Firebase Cloud Messaging device token — push notification yuborish uchun.
+    # Login vaqtida (agar so'rovda kelsa) yangilanadi.
+    fcm_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     hotel: Mapped[Optional["Hotel"]] = relationship("Hotel", back_populates="users")
     branch: Mapped[Optional["Branch"]] = relationship("Branch", back_populates="users")

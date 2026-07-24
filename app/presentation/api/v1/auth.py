@@ -22,6 +22,7 @@ async def login(
         password=data.password,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
+        fcm_token=data.fcm_token,
     )
     return result
 

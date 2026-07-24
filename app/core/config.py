@@ -67,6 +67,18 @@ class LogSettings(BaseSettings):
     LOG_FORMAT: str = "json"
 
 
+class FirebaseSettings(BaseSettings):
+    """Firebase Cloud Messaging (push notification) sozlamalari.
+
+    FIREBASE_ENABLED=false yoki kalit fayli topilmasa — push jimgina o'chadi
+    va boshqa hech bir funksionallikka ta'sir qilmaydi.
+    """
+
+    FIREBASE_ENABLED: bool = True
+    # Service-account JSON kalitiga yo'l (loyiha ildizidan nisbiy yoki absolyut).
+    FIREBASE_CREDENTIALS_FILE: str = "secrets/gohotel-firebase-service-account.json"
+
+
 class AutomationSettings(BaseSettings):
     """Bron chiqishini avtomatlashtirish (fon vazifasi) sozlamalari.
 
@@ -99,6 +111,7 @@ class Settings(
     RateLimitSettings,
     CORSSettings,
     LogSettings,
+    FirebaseSettings,
     AutomationSettings,
 ):
     model_config = SettingsConfigDict(

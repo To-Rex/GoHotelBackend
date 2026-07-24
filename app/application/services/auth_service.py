@@ -28,6 +28,7 @@ class AuthService:
         password: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        fcm_token: str | None = None,
     ) -> dict:
         user = await self.user_repo.get_by_username(username)
         if not user or not verify_password(password, user.password_hash):
@@ -44,6 +45,11 @@ class AuthService:
             permissions = [p["code"] for p in await self.user_repo.get_user_permissions(user.id)]
 
         user.last_login_at = datetime.now(timezone.utc)
+
+        # FCM token faqat so'rovda kelganda yangilanadi — token yubormaydigan
+        # klientlar (masalan web) mavjud tokenni o'chirib yubormasligi uchun.
+        if fcm_token:
+            user.fcm_token = fcm_token
 
         jti = generate_jti()
         token_data = {

@@ -29,6 +29,7 @@ from app.infrastructure.database.models.user import User
 from app.infrastructure.database.repositories.room_repo import RoomRepository
 from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.application.services.reservation_service import ReservationService
+from app.application.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +203,7 @@ class AutomationService:
             existing = await self._linked_cleaning_task(reservation.id)
             if existing is None:
                 cleaner_id = await self._find_cleaner(hotel_id, reservation.branch_id)
-                await self.res_service._ensure_cleaning_task(
+                task = await self.res_service._ensure_cleaning_task(
                     reservation, hotel_id, room, actor, assigned_to=cleaner_id
                 )
                 logger.info(
@@ -210,6 +211,23 @@ class AutomationService:
                     reservation.id,
                     cleaner_id,
                 )
+                # Farroshga avtomatik biriktirilgan tozalash vazifasi haqida xabar
+                if task is not None and cleaner_id is not None:
+                    try:
+                        await NotificationService(self.session).notify(
+                            hotel_id=hotel_id,
+                            user_id=cleaner_id,
+                            title="Yangi vazifa biriktirildi",
+                            body=f"Tozalash — {room.room_number}-xona",
+                            entity_type="task",
+                            entity_id=task.id,
+                            send_push=True,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Auto-cleaning notification yuborilmadi (res=%s)",
+                            reservation.id,
+                        )
 
         # --- 2-bosqich: chiqish vaqti kelganda xona CLEANING ga o'tadi ---
         if now >= moment and room.current_status == "OCCUPIED":

@@ -1,14 +1,20 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
-from sqlalchemy import update as sa_update
+from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException
+from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.application.services.notification_service import NotificationService
 from app.application.dto.common import MessageResponse
+from app.application.dto.notification import (
+    NotificationSendRequest,
+    NotificationBroadcastRequest,
+    NotificationSendResponse,
+)
 from app.infrastructure.database.models.notification import Notification
+from app.infrastructure.database.models.user import User
 from app.presentation.middleware.auth import get_current_user, require_permission
 
 router = APIRouter(tags=["Notifications"])
@@ -33,6 +39,74 @@ def _map_notification_type(n: Notification) -> str:
     if n.entity_type == "inventory":
         return "inventory"
     return "system"
+
+
+def _require_sender(current_user: dict) -> None:
+    """Notification yuborishga faqat ADMIN va SUPER_ADMIN haqli."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException(
+            "Only ADMIN or SUPER_ADMIN can send notifications", "FORBIDDEN"
+        )
+
+
+@router.post("/send", response_model=NotificationSendResponse)
+async def send_notification(
+    data: NotificationSendRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Bitta foydalanuvchiga push notification (+ DB yozuv) yuboradi."""
+    _require_sender(current_user)
+
+    target = await session.get(User, data.user_id)
+    if not target or target.is_deleted:
+        raise NotFoundException("User not found", "USER_NOT_FOUND")
+
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or target.hotel_id
+    else:
+        h_id = current_user.get("hotel_id")
+        if not h_id:
+            raise ForbiddenException("Hotel context required")
+        if target.hotel_id != h_id:
+            raise ForbiddenException("User belongs to another hotel", "FORBIDDEN")
+    if not h_id:
+        raise ValidationException("hotel_id required", "HOTEL_ID_REQUIRED")
+
+    service = NotificationService(session)
+    notif, push_sent = await service.send_to_user(
+        h_id, target.id, data.title, data.body, data.entity_type, data.entity_id
+    )
+    return {"success": True, "notification_id": notif.id, "push_sent": push_sent}
+
+
+@router.post("/broadcast", response_model=NotificationSendResponse)
+async def broadcast_notification(
+    data: NotificationBroadcastRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Mehmonxonaning barcha faol foydalanuvchilariga push notification yuboradi."""
+    _require_sender(current_user)
+
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+        if not h_id:
+            raise ValidationException(
+                "hotel_id required for SUPER_ADMIN broadcast", "HOTEL_ID_REQUIRED"
+            )
+    else:
+        h_id = current_user.get("hotel_id")
+        if not h_id:
+            raise ForbiddenException("Hotel context required")
+
+    service = NotificationService(session)
+    notif, push_sent = await service.send_to_hotel(
+        h_id, data.title, data.body, data.entity_type, data.entity_id
+    )
+    return {"success": True, "notification_id": notif.id, "push_sent": push_sent}
 
 
 @router.get("/")

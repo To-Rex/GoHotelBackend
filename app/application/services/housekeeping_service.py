@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,18 @@ from app.infrastructure.database.models.room_status_history import RoomStatusHis
 from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.infrastructure.database.repositories.housekeeping_repo import HousekeepingRepository
 from app.infrastructure.database.repositories.room_repo import RoomRepository
+from app.application.services.notification_service import NotificationService
+
+logger = logging.getLogger(__name__)
+
+# Vazifa turi kodini o'zbekcha ko'rinishga o'giradi (notification matni uchun)
+TASK_TYPE_LABELS = {
+    "CLEANING": "Tozalash",
+    "DEEP_CLEANING": "Chuqur tozalash",
+    "MAINTENANCE": "Ta'mirlash",
+    "INSPECTION": "Tekshiruv",
+    "TURN_DOWN": "Xona tayyorlash",
+}
 
 
 class HousekeepingService:
@@ -18,6 +31,39 @@ class HousekeepingService:
         self.session = session
         self.repo = HousekeepingRepository(session)
         self.room_repo = RoomRepository(session)
+
+    async def _notify_assignment(
+        self, task: HousekeepingTask, assignee_id: UUID | None
+    ) -> None:
+        """Vazifa biriktirilgan farroshga notification + push yuboradi.
+
+        Xato bo'lsa jimgina o'tadi — asosiy vazifa operatsiyasini hech qachon
+        buzmaydi.
+        """
+        if not assignee_id:
+            return
+        try:
+            room = getattr(task, "room", None)
+            room_number = room.room_number if room else None
+            type_label = TASK_TYPE_LABELS.get(task.task_type, task.task_type)
+            body = (
+                f"{type_label} — {room_number}-xona" if room_number else type_label
+            )
+            await NotificationService(self.session).notify(
+                hotel_id=task.hotel_id,
+                user_id=assignee_id,
+                title="Yangi vazifa biriktirildi",
+                body=body,
+                entity_type="task",
+                entity_id=task.id,
+                send_push=True,
+            )
+        except Exception:
+            logger.exception(
+                "Vazifa notification yuborilmadi (task=%s, user=%s)",
+                task.id,
+                assignee_id,
+            )
 
     async def _enrich_photo_counts(self, tasks: list[HousekeepingTask]) -> None:
         if not tasks:
@@ -54,7 +100,10 @@ class HousekeepingService:
             created_by=created_by,
         )
         task = await self.repo.create(task)
-        return await self.get_task(task.id, hotel_id)
+        full_task = await self.get_task(task.id, hotel_id)
+        # Yaratishda darhol farroshga biriktirilgan bo'lsa — notification yuboramiz
+        await self._notify_assignment(full_task, full_task.assigned_to)
+        return full_task
 
     async def get_tasks(
         self,
@@ -121,9 +170,15 @@ class HousekeepingService:
 
     async def update_task(self, task_id: UUID, hotel_id: UUID, data: dict) -> HousekeepingTask:
         task = await self.get_task(task_id, hotel_id)
+        previous_assignee = task.assigned_to
         updatable = ["task_type", "priority", "assigned_to", "notes", "scheduled_date"]
         update_data = {k: v for k, v in data.items() if k in updatable and v is not None}
-        return await self.repo.update(task, **update_data)
+        updated = await self.repo.update(task, **update_data)
+        # Biriktirilgan farrosh o'zgargan bo'lsagina yangi farroshga xabar beramiz
+        new_assignee = update_data.get("assigned_to")
+        if new_assignee is not None and new_assignee != previous_assignee:
+            await self._notify_assignment(updated, new_assignee)
+        return updated
 
     async def update_task_status(
         self,
@@ -165,4 +220,9 @@ class HousekeepingService:
 
     async def assign_task(self, task_id: UUID, hotel_id: UUID, user_id: UUID) -> HousekeepingTask:
         task = await self.get_task(task_id, hotel_id)
-        return await self.repo.assign_task(task, user_id)
+        previous_assignee = task.assigned_to
+        assigned = await self.repo.assign_task(task, user_id)
+        # Yangi farroshga (o'zgargan bo'lsa) notification + push yuboramiz
+        if user_id != previous_assignee:
+            await self._notify_assignment(assigned, user_id)
+        return assigned

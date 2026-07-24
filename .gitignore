@@ -1,0 +1,4 @@
+# Maxfiy kalitlar — hech qachon git'ga tushmasin (Firebase service account va h.k.)
+secrets/
+*.serviceaccount.json
+*-firebase-adminsdk-*.json
