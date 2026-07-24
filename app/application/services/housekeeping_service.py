@@ -25,6 +25,14 @@ TASK_TYPE_LABELS = {
     "TURN_DOWN": "Xona tayyorlash",
 }
 
+# Status o'zgarganda yuboriladigan notification sarlavhasi
+TASK_STATUS_TITLES = {
+    "OPEN": "Vazifa qayta ochildi",
+    "IN_PROGRESS": "Vazifa boshlandi",
+    "COMPLETED": "Vazifa yakunlandi",
+    "CANCELLED": "Vazifa bekor qilindi",
+}
+
 
 class HousekeepingService:
     def __init__(self, session: AsyncSession):
@@ -227,6 +235,13 @@ class HousekeepingService:
                 )
                 self.session.add(history)
                 await self.session.flush()
+
+        # Status admin/manager tomonidan o'zgartirilganda (bekor qilish, qayta ochish
+        # va h.k.) biriktirilgan farroshga xabar beramiz. Farroshning o'z amali
+        # (o'ziga o'zi status o'zgartirsa) takroriy xabar bermaymiz.
+        if task.assigned_to and task.assigned_to != user_id:
+            title = TASK_STATUS_TITLES.get(status, "Vazifa holati o'zgardi")
+            await self._notify_assignment(task, task.assigned_to, title=title)
 
         return task
 
