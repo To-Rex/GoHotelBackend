@@ -50,12 +50,19 @@ class NotificationService:
         try:
             token = await self._get_user_token(user_id)
             if not token:
+                logger.info(
+                    "Push o'tkazib yuborildi — foydalanuvchida fcm_token yo'q (user_id=%s)",
+                    user_id,
+                )
                 return
-            await firebase.send_push(
+            sent = await firebase.send_push(
                 token,
                 title,
                 body,
                 data=self._build_data(entity_type, entity_id),
+            )
+            logger.info(
+                "Push yuborildi (user_id=%s, natija=%s, title=%s)", user_id, sent, title
             )
         except Exception:
             logger.exception("Push yuborishda xato (user_id=%s)", user_id)

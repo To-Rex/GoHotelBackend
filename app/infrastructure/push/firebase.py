@@ -77,10 +77,39 @@ def _send_sync(tokens: list[str], title: str, body: str | None, data: dict | Non
     str_data = {str(k): str(v) for k, v in (data or {}).items() if v is not None}
     notification = messaging.Notification(title=title, body=body or "")
 
+    # Android: YUQORI prioritet — heads-up banner darhol ko'rinsin (Doze/battery
+    # optimizatsiyada ham). iOS (APNS): alert + tovush.
+    android_cfg = messaging.AndroidConfig(
+        priority="high",
+        notification=messaging.AndroidNotification(
+            title=title,
+            body=body or "",
+            sound="default",
+            default_sound=True,
+            # Flutter default kanali — ko'p ilovalarda mavjud. Kanal bo'lmasa ham
+            # tizim standart kanaldan foydalanadi.
+            channel_id="high_importance_channel",
+        ),
+    )
+    apns_cfg = messaging.APNSConfig(
+        headers={"apns-priority": "10"},
+        payload=messaging.APNSPayload(
+            aps=messaging.Aps(
+                alert=messaging.ApsAlert(title=title, body=body or ""),
+                sound="default",
+                content_available=True,
+            )
+        ),
+    )
+
     # Yangi (send_each_for_multicast) va eski SDK versiyalarini ham qo'llab-quvvatlaymiz
     try:
         multicast = messaging.MulticastMessage(
-            tokens=tokens, notification=notification, data=str_data
+            tokens=tokens,
+            notification=notification,
+            data=str_data,
+            android=android_cfg,
+            apns=apns_cfg,
         )
         send_multicast = getattr(messaging, "send_each_for_multicast", None) or getattr(
             messaging, "send_multicast", None
@@ -88,7 +117,11 @@ def _send_sync(tokens: list[str], title: str, body: str | None, data: dict | Non
         if send_multicast is not None:
             resp = send_multicast(multicast)
             _log_invalid_tokens(tokens, resp)
-            return int(getattr(resp, "success_count", 0))
+            success = int(getattr(resp, "success_count", 0))
+            logger.info(
+                "FCM multicast: %s/%s muvaffaqiyatli yuborildi", success, len(tokens)
+            )
+            return success
     except Exception:
         logger.exception("FCM multicast yuborish muvaffaqiyatsiz")
 
@@ -97,11 +130,18 @@ def _send_sync(tokens: list[str], title: str, body: str | None, data: dict | Non
     for token in tokens:
         try:
             messaging.send(
-                messaging.Message(token=token, notification=notification, data=str_data)
+                messaging.Message(
+                    token=token,
+                    notification=notification,
+                    data=str_data,
+                    android=android_cfg,
+                    apns=apns_cfg,
+                )
             )
             success += 1
         except Exception:
             logger.warning("FCM yuborish muvaffaqiyatsiz (token=%s...)", token[:12])
+    logger.info("FCM (fallback): %s/%s muvaffaqiyatli yuborildi", success, len(tokens))
     return success
 
 
