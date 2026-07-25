@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models.permission import Permission, UserPermission
@@ -76,16 +76,27 @@ class UserRepository(BaseRepository[User]):
         hotel_id: UUID,
         granted_by: UUID,
     ) -> None:
+        unique_ids = list(dict.fromkeys(permission_ids))
+        # user_permissions has UNIQUE(user_id, permission_id) regardless of
+        # hotel, so rows granted under another hotel must go too or the
+        # re-insert below would collide.
         existing_result = await self.session.execute(
             select(UserPermission).where(
                 UserPermission.user_id == user_id,
-                UserPermission.hotel_id == hotel_id,
+                or_(
+                    UserPermission.hotel_id == hotel_id,
+                    UserPermission.permission_id.in_(unique_ids),
+                ),
             )
         )
         for ep in existing_result.scalars().all():
             await self.session.delete(ep)
+        # Flush deletes before re-inserting: within a single flush SQLAlchemy
+        # emits INSERTs before DELETEs, tripping the unique constraint when a
+        # permission is kept across the reassignment.
+        await self.session.flush()
 
-        for perm_id in permission_ids:
+        for perm_id in unique_ids:
             up = UserPermission(
                 user_id=user_id,
                 permission_id=perm_id,
@@ -102,6 +113,16 @@ class UserRepository(BaseRepository[User]):
         hotel_id: UUID,
         granted_by: UUID,
     ) -> UserPermission:
+        # UNIQUE(user_id, permission_id) — re-granting must stay idempotent.
+        existing_result = await self.session.execute(
+            select(UserPermission).where(
+                UserPermission.user_id == user_id,
+                UserPermission.permission_id == permission_id,
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+        if existing:
+            return existing
         up = UserPermission(
             user_id=user_id,
             permission_id=permission_id,
