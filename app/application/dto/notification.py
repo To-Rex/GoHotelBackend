@@ -42,3 +42,24 @@ class TestPushResponse(BaseModel):
     success: bool
     # 1 = yuborildi, 0 = yuborilmadi (token yaroqsiz yoki Firebase o'chiq)
     push_sent: int = 0
+
+
+class RegisterDeviceRequest(BaseModel):
+    """Joriy foydalanuvchining FCM device tokenini saqlash/yangilash so'rovi.
+
+    Mobil ilova ishga tushganda va token yangilanganda (onTokenRefresh) chaqiradi —
+    shunda token eskirmaydi va push kelib turadi.
+    """
+
+    fcm_token: str = Field(..., min_length=10, max_length=4096)
+
+
+class PushHealthResponse(BaseModel):
+    """Push (FCM) konfiguratsiyasi holati — diagnostika uchun."""
+
+    enabled: bool
+    configured: bool
+    credential_source: str
+    error: str | None = None
+    # Joriy foydalanuvchida saqlangan FCM token bormi
+    current_user_has_token: bool = False

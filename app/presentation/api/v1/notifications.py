@@ -14,6 +14,8 @@ from app.application.dto.notification import (
     NotificationSendResponse,
     TestPushRequest,
     TestPushResponse,
+    RegisterDeviceRequest,
+    PushHealthResponse,
 )
 from app.infrastructure.database.models.notification import Notification
 from app.infrastructure.database.models.user import User
@@ -55,6 +57,44 @@ async def test_push(data: TestPushRequest):
         data.fcm_token, data.title, data.body, data=data.data
     )
     return {"success": sent > 0, "push_sent": sent}
+
+
+@router.post("/register-device", response_model=MessageResponse)
+async def register_device(
+    data: RegisterDeviceRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Joriy foydalanuvchining FCM device tokenini saqlaydi/yangilaydi.
+
+    Mobil ilova login'dan keyin va token yangilanganda chaqiradi. Shu bilan
+    farrosh doim yaroqli token bilan turadi va vazifa push'lari yetib boradi.
+    """
+    user = await session.get(User, current_user["id"])
+    if not user or user.is_deleted:
+        raise NotFoundException("User not found", "USER_NOT_FOUND")
+    user.fcm_token = data.fcm_token
+    await session.flush()
+    return {"message": "Device token registered"}
+
+
+@router.get("/push-health", response_model=PushHealthResponse)
+async def push_health(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Push (FCM) konfiguratsiyasi holati — nega push kelmayotganini aniqlash uchun.
+
+    `configured=false` bo'lsa server Firebase kalitini topa olmayapti (deploy'da
+    sir qo'yilmagan). `current_user_has_token=false` bo'lsa foydalanuvchida saqlangan
+    FCM token yo'q (mobil ilova token yubormagan).
+    """
+    diag = firebase.diagnostics()
+    token = await session.execute(
+        select(User.fcm_token).where(User.id == current_user["id"])
+    )
+    diag["current_user_has_token"] = bool(token.scalar_one_or_none())
+    return diag
 
 
 def _require_sender(current_user: dict) -> None:

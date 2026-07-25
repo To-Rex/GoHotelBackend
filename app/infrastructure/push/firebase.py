@@ -13,6 +13,9 @@ bajariladi.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import json
 import logging
 import os
 from threading import Lock
@@ -24,11 +27,54 @@ logger = logging.getLogger(__name__)
 _app = None  # firebase_admin.App | None
 _init_done = False
 _lock = Lock()
+# Diagnostika uchun: init nima sababdan o'chganini eslab qolamiz (health endpoint).
+_last_error: str | None = None
+
+
+def _load_credential():
+    """firebase_admin credentials.Certificate uchun kirish qiymatini tayyorlaydi.
+
+    Ustuvorlik: FIREBASE_CREDENTIALS_JSON (env orqali xom JSON yoki base64) >
+    FIREBASE_CREDENTIALS_FILE (diskdagi fayl). Topilmasa (None, sabab) qaytadi.
+    """
+    global _last_error
+    from firebase_admin import credentials
+
+    raw = settings.FIREBASE_CREDENTIALS_JSON
+    if raw and raw.strip():
+        text = raw.strip()
+        # Xom JSON bo'lmasa, base64 sifatida ochishga urinamiz (env-varlar ko'pincha
+        # ko'p qatorli JSON'ni base64'da saqlaydi).
+        if not text.lstrip().startswith("{"):
+            try:
+                text = base64.b64decode(text).decode("utf-8")
+            except (binascii.Error, ValueError, UnicodeDecodeError):
+                _last_error = "FIREBASE_CREDENTIALS_JSON o'qib bo'lmadi (JSON ham, base64 ham emas)"
+                logger.error(_last_error)
+                return None
+        try:
+            info = json.loads(text)
+        except json.JSONDecodeError:
+            _last_error = "FIREBASE_CREDENTIALS_JSON yaroqsiz JSON"
+            logger.error(_last_error)
+            return None
+        return credentials.Certificate(info)
+
+    cred_path = settings.FIREBASE_CREDENTIALS_FILE
+    if cred_path and os.path.isfile(cred_path):
+        return credentials.Certificate(cred_path)
+
+    _last_error = (
+        f"Firebase kaliti topilmadi (fayl: {cred_path!r}, "
+        f"FIREBASE_CREDENTIALS_JSON: bo'sh)"
+    )
+    logger.warning("%s — push o'chirildi", _last_error)
+    return None
 
 
 def _init():
     """Firebase ilovasini bir marta lazy-init qiladi. Muvaffaqiyatsiz bo'lsa None."""
-    global _app, _init_done
+    global _app, _init_done, _last_error
     if _init_done:
         return _app
     with _lock:
@@ -36,25 +82,41 @@ def _init():
             return _app
         _init_done = True
         if not settings.FIREBASE_ENABLED:
+            _last_error = "FIREBASE_ENABLED=false"
             logger.info("Firebase push o'chirilgan (FIREBASE_ENABLED=false)")
-            return None
-        cred_path = settings.FIREBASE_CREDENTIALS_FILE
-        if not cred_path or not os.path.isfile(cred_path):
-            logger.warning(
-                "Firebase kalit fayli topilmadi: %s — push o'chirildi", cred_path
-            )
             return None
         try:
             import firebase_admin
-            from firebase_admin import credentials
 
-            cred = credentials.Certificate(cred_path)
+            cred = _load_credential()
+            if cred is None:
+                return None
             _app = firebase_admin.initialize_app(cred)
+            _last_error = None
             logger.info("Firebase push ishga tushdi (project=%s)", cred.project_id)
-        except Exception:
+        except Exception as exc:
+            _last_error = f"Firebase init muvaffaqiyatsiz: {exc}"
             logger.exception("Firebase init muvaffaqiyatsiz — push o'chirildi")
             _app = None
         return _app
+
+
+def diagnostics() -> dict:
+    """Push konfiguratsiyasi holati (health/diagnostika endpointi uchun)."""
+    configured = _init() is not None
+    source = "none"
+    if settings.FIREBASE_CREDENTIALS_JSON and settings.FIREBASE_CREDENTIALS_JSON.strip():
+        source = "env(FIREBASE_CREDENTIALS_JSON)"
+    elif settings.FIREBASE_CREDENTIALS_FILE and os.path.isfile(
+        settings.FIREBASE_CREDENTIALS_FILE
+    ):
+        source = f"file({settings.FIREBASE_CREDENTIALS_FILE})"
+    return {
+        "enabled": bool(settings.FIREBASE_ENABLED),
+        "configured": configured,
+        "credential_source": source,
+        "error": _last_error,
+    }
 
 
 def is_configured() -> bool:

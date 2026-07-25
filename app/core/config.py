@@ -77,6 +77,10 @@ class FirebaseSettings(BaseSettings):
     FIREBASE_ENABLED: bool = True
     # Service-account JSON kalitiga yo'l (loyiha ildizidan nisbiy yoki absolyut).
     FIREBASE_CREDENTIALS_FILE: str = "secrets/gohotel-firebase-service-account.json"
+    # Muqobil: service-account'ni butun JSON matn (yoki base64) sifatida env orqali
+    # berish. Deploy platformalarida (Railway/Render va h.k.) faylni commit qilmasdan
+    # sirni env-var qilib qo'yish uchun. Berilsa, FIREBASE_CREDENTIALS_FILE'dan ustun.
+    FIREBASE_CREDENTIALS_JSON: str | None = None
 
 
 class AutomationSettings(BaseSettings):
