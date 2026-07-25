@@ -50,8 +50,9 @@ async def create_service(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("service.create")),
 ):
-    if current_user.get("user_type") != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can create global services")
+    # ADMIN ham o'z mehmonxonasi uchun xizmat katalogini boshqara oladi
+    if current_user.get("user_type") not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can create global services")
     svc = Service(
         name=data["name"],
         code=data["code"],
@@ -77,8 +78,8 @@ async def update_service(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("service.update")),
 ):
-    if current_user.get("user_type") != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can update global services")
+    if current_user.get("user_type") not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can update global services")
     stmt = select(Service).where(Service.id == service_id)
     result = await session.execute(stmt)
     svc = result.scalar_one_or_none()

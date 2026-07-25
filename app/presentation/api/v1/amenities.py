@@ -32,8 +32,9 @@ async def create_amenity(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("service.manage")),
 ):
-    if current_user["user_type"] != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can manage amenities")
+    # ADMIN ham o'z mehmonxonasini boshqarishi uchun qulayliklarni yarata oladi
+    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can manage amenities")
     service = AmenityService(session)
     return await service.create_amenity(data.model_dump())
 
@@ -45,8 +46,8 @@ async def update_amenity(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("service.manage")),
 ):
-    if current_user["user_type"] != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can manage amenities")
+    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can manage amenities")
     service = AmenityService(session)
     return await service.update_amenity(amenity_id, data.model_dump(exclude_none=True))
 
@@ -57,8 +58,8 @@ async def delete_amenity(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("service.manage")),
 ):
-    if current_user["user_type"] != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can manage amenities")
+    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can manage amenities")
     service = AmenityService(session)
     await service.delete_amenity(amenity_id)
     return {"message": "Amenity deleted"}

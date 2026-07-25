@@ -29,8 +29,9 @@ async def create_room_type(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("room_type.create")),
 ):
-    if current_user["user_type"] != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can manage room types")
+    # ADMIN ham o'z mehmonxonasini boshqarishi uchun xona turlarini yarata oladi
+    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can manage room types")
     service = RoomService(session)
     return await service.create_room_type(data.model_dump())
 
@@ -52,8 +53,8 @@ async def update_room_type(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("room_type.update")),
 ):
-    if current_user["user_type"] != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can manage room types")
+    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can manage room types")
     service = RoomService(session)
     return await service.update_room_type(type_id, data.model_dump(exclude_none=True))
 
@@ -64,8 +65,8 @@ async def delete_room_type(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("room_type.delete")),
 ):
-    if current_user["user_type"] != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can manage room types")
+    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can manage room types")
     service = RoomService(session)
     await service.delete_room_type(type_id)
     return {"message": "Room type deleted"}
@@ -78,7 +79,7 @@ async def update_room_type_status(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("room_type.update")),
 ):
-    if current_user["user_type"] != "SUPER_ADMIN":
-        raise ForbiddenException("Only SUPER_ADMIN can manage room types")
+    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
+        raise ForbiddenException("Only SUPER_ADMIN or ADMIN can manage room types")
     service = RoomService(session)
     return await service.update_room_type(type_id, {"is_active": is_active})

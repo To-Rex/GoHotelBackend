@@ -50,6 +50,43 @@ PERMISSIONS = [
     # Service module
     ("service.view", "View Services", "service", "View hotel services"),
     ("service.manage", "Manage Services", "service", "Enable/disable hotel services"),
+    # --- Endpointlar tekshiradigan, lekin avval seed qilinmagan kodlar ---
+    # (idempotent: mavjudlari tashlab ketiladi, faqat yetishmayotganlari qo'shiladi)
+    # Room module (CRUD)
+    ("room.create", "Create Room", "room", "Create new rooms"),
+    ("room.update", "Update Room", "room", "Update room details and status"),
+    ("room.delete", "Delete Room", "room", "Delete rooms"),
+    ("room_type.create", "Create Room Type", "room", "Create room types"),
+    ("room_type.update", "Update Room Type", "room", "Update room types"),
+    ("room_type.delete", "Delete Room Type", "room", "Delete room types"),
+    # Guest module
+    ("guest.delete", "Delete Guest", "guest", "Delete guests"),
+    # Floor module
+    ("floor.create", "Create Floor", "floor", "Create floors"),
+    ("floor.update", "Update Floor", "floor", "Update floors"),
+    ("floor.delete", "Delete Floor", "floor", "Delete floors"),
+    # Branch module
+    ("branch.create", "Create Branch", "branch", "Create branches"),
+    ("branch.update", "Update Branch", "branch", "Update branches"),
+    # Hotel module
+    ("hotel.create", "Create Hotel", "hotel", "Create hotels"),
+    ("hotel.update", "Update Hotel", "hotel", "Update hotels and linked catalogs"),
+    ("hotel.delete", "Delete Hotel", "hotel", "Delete hotels"),
+    # Service module (catalog + per-hotel pricing)
+    ("service.create", "Create Service", "service", "Create global services"),
+    ("service.update", "Update Service", "service", "Update global services"),
+    ("hotel_service.manage", "Manage Hotel Services", "service", "Manage hotel service pricing"),
+    # Employee module
+    ("employee.delete", "Delete Employee", "employee", "Delete employees"),
+    ("permission.view", "View Permissions", "employee", "View employee permissions"),
+    ("permission.assign", "Assign Permissions", "employee", "Assign employee permissions"),
+    # Report module
+    ("report.generate", "Generate Reports", "report", "Generate reports"),
+    # Audit module
+    ("audit_log.view", "View Audit Logs", "audit", "View audit logs"),
+    # File module
+    ("file.upload", "Upload Files", "file", "Upload files"),
+    ("file.delete", "Delete Files", "file", "Delete files"),
 ]
 
 
