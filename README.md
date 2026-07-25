@@ -176,6 +176,7 @@ Bron yaratishda yangi imkoniyatlar:
 - **booking_type**: `DAILY` (kunlik) yoki `HOURLY` (soatlik)
 - **Narx avtomatik hisoblanadi**: kunlik = `base_price × kun`, soatlik = `base_price / 24 × soat`
 - **payment_amount + payment_method**: Bron bilan birga to'lov qabul qilish (invoice + payment bir tranzaksiyada)
+- **payments**: Qisman (bo'lib) to'lov — `[{amount, payment_method}, ...]` ro'yxati; har bir bo'lak alohida payment bo'lib yoziladi (masalan bir qismi `CASH`, qolgani `CREDIT_CARD`). Berilsa `payment_amount`/`payment_method` o'rniga shu ishlatiladi
 - **payment_status**: `UNPAID`, `PARTIALLY_PAID`, `PAID`
 - **payment_method**: `CASH`, `CREDIT_CARD`, `DEBIT_CARD`, `BANK_TRANSFER`, `MOBILE_PAYMENT`, `ONLINE`
 - Javobda `total_amount`, `paid_amount`, `payment_status`, `booking_type` qaytadi

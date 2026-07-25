@@ -238,8 +238,23 @@ class ReservationService:
         )
 
         total_amount = max(room_charge - discount_amount, 0)
-        payment_amount = float(data.get("payment_amount", 0))
-        payment_method = data.get("payment_method")
+
+        # Qisman (bo'lib) to'lov: `payments` ro'yxati berilsa — har bir bo'lak
+        # (summa + usul) alohida Payment bo'lib yoziladi. Berilmasa eski
+        # payment_amount + payment_method juftligi bitta to'lov sifatida
+        # ishlatiladi (eski klientlar uchun xatti-harakat aynan saqlanadi).
+        payment_items = [
+            {"amount": float(p.get("amount", 0)), "payment_method": p.get("payment_method")}
+            for p in (data.get("payments") or [])
+            if float(p.get("amount", 0)) > 0
+        ]
+        if not payment_items:
+            legacy_amount = float(data.get("payment_amount", 0))
+            if legacy_amount > 0:
+                payment_items = [
+                    {"amount": legacy_amount, "payment_method": data.get("payment_method")}
+                ]
+        payment_amount = sum(p["amount"] for p in payment_items)
 
         hotel_code = await self._get_hotel_code(hotel_id)
         reservation_number = generate_code("RES", hotel_code)
@@ -307,13 +322,22 @@ class ReservationService:
                 status=invoice_status,
             )
 
-            await self._create_payment(
-                hotel_id=hotel_id,
-                invoice=invoice,
-                amount=paid,
-                payment_method=payment_method,
-                created_by=created_by,
-            )
+            # Har bir to'lov bo'lagi alohida Payment sifatida yoziladi. Umumiy
+            # summa total_amount dan oshsa (paid cheklangan) — bo'laklar tartib
+            # bilan yoziladi va oxirgisi qolgan summaga qisqartiriladi.
+            remaining = paid
+            for item in payment_items:
+                if remaining <= 0:
+                    break
+                part = min(item["amount"], remaining)
+                await self._create_payment(
+                    hotel_id=hotel_id,
+                    invoice=invoice,
+                    amount=part,
+                    payment_method=item["payment_method"],
+                    created_by=created_by,
+                )
+                remaining -= part
 
         await self.session.flush()
         return reservation

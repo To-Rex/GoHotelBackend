@@ -5,6 +5,13 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 
+class ReservationPaymentItem(BaseModel):
+    """Qisman (bo'lib) to'lovning bitta bo'lagi: summa + to'lov usuli."""
+
+    amount: float = Field(gt=0)
+    payment_method: Literal["CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"]
+
+
 class ReservationCreateRequest(BaseModel):
     guest_id: UUID
     room_id: UUID
@@ -21,6 +28,10 @@ class ReservationCreateRequest(BaseModel):
     notes: str | None = None
     payment_amount: float = Field(default=0, ge=0)
     payment_method: Literal["CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"] | None = None
+    # Qisman to'lov: bir nechta usul bilan bo'lib to'lash. Berilsa payment_amount /
+    # payment_method o'rniga shu ro'yxat ishlatiladi (eski klientlar uchun eski
+    # maydonlar o'zgarishsiz qoladi).
+    payments: list[ReservationPaymentItem] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_hourly_booking(self):
