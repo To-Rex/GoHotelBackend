@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.infrastructure.database.models.user import User
+from app.infrastructure.database.models.permission import Permission
 from app.application.services.user_service import UserService
 from app.application.dto.user import PermissionAssignRequest, UserPermissionsResponse
 from app.application.dto.common import MessageResponse
@@ -22,6 +23,49 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
     return hotel_id
+
+
+# Menejer (EMPLOYEE turi, permission.assign ruxsatiga ega xodim) faqat
+# "Farrosh" roli doirasidagi ruxsatlarni bera/olib tashlay oladi.
+# ADMIN va SUPER_ADMIN uchun cheklov yo'q. Frontenddagi Farrosh shabloni
+# bilan bir xil to'plam (housekeeping.cleaning.* naqshi bilan).
+MANAGER_ASSIGNABLE_PATTERNS = (
+    "room.view",
+    "room.status.update",
+    "housekeeping.task.update",
+    "housekeeping.cleaning.*",
+)
+
+
+def _is_manager_assignable(code: str) -> bool:
+    for pattern in MANAGER_ASSIGNABLE_PATTERNS:
+        if pattern.endswith(".*"):
+            # "housekeeping.cleaning.*" -> "housekeeping.cleaning." prefiksi
+            if code.startswith(pattern[:-1]):
+                return True
+        elif code == pattern:
+            return True
+    return False
+
+
+async def _ensure_manager_scope(
+    session: AsyncSession, current_user: dict, changed_ids: set[UUID]
+) -> None:
+    """EMPLOYEE (menejer) o'zgartirayotgan ruxsatlar farrosh to'plamidan
+    tashqariga chiqmasligini tekshiradi. ADMIN/SUPER_ADMIN cheklanmaydi."""
+    if current_user["user_type"] in ("SUPER_ADMIN", "ADMIN"):
+        return
+    if not changed_ids:
+        return
+    result = await session.execute(
+        select(Permission).where(Permission.id.in_(changed_ids))
+    )
+    for perm in result.scalars().all():
+        if not _is_manager_assignable(perm.code):
+            raise ForbiddenException(
+                "Menejer faqat Farrosh roli doirasidagi ruxsatlarni o'zgartira oladi",
+                "MANAGER_SCOPE_LIMITED",
+            )
 
 
 @router.get("/")
@@ -74,6 +118,16 @@ async def assign_permissions(
     if not h_id:
         raise ForbiddenException("Hotel context required")
     service = UserService(session)
+    # Menejer uchun faqat o'zgargan (qo'shilgan/olib tashlangan) ruxsatlar
+    # tekshiriladi — farrosh to'plamidan tashqaridagi mavjud ruxsatlar
+    # ro'yxatda qolsa, bu o'zgarish hisoblanmaydi va rad etilmaydi.
+    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
+        current_perms = await service.get_user_permissions(employee_id)
+        current_ids = {UUID(str(p["id"])) for p in current_perms}
+        new_ids = {UUID(str(pid)) for pid in data.permission_ids}
+        await _ensure_manager_scope(
+            session, current_user, (new_ids - current_ids) | (current_ids - new_ids)
+        )
     await service.assign_permissions(employee_id, data.permission_ids, h_id, current_user["id"])
     return {"message": "Permissions updated"}
 
@@ -98,6 +152,7 @@ async def grant_permission(
         h_id = _get_hotel_id(current_user)
     if not h_id:
         raise ForbiddenException("Hotel context required")
+    await _ensure_manager_scope(session, current_user, {perm_id})
     service = UserService(session)
     await service.grant_permission(employee_id, perm_id, h_id, current_user["id"])
     return {"message": "Permission granted"}
@@ -123,6 +178,7 @@ async def revoke_permission(
         h_id = _get_hotel_id(current_user)
     if not h_id:
         raise ForbiddenException("Hotel context required")
+    await _ensure_manager_scope(session, current_user, {perm_id})
     service = UserService(session)
     await service.revoke_permission(employee_id, perm_id, h_id)
     return {"message": "Permission revoked"}
