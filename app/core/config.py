@@ -102,6 +102,9 @@ class AutomationSettings(BaseSettings):
     AUTO_CHECKOUT_GRACE_MINUTES: int = 60
     # Kunlik (soatsiz) bronlar uchun standart chiqish soati (mahalliy vaqt, 0-23)
     DEFAULT_CHECKOUT_HOUR: int = 12
+    # Soatlik bronlar orasidagi majburiy tanaffus (daqiqalarda) — mijoz chiqib
+    # ketgach xonani tayyorlash uchun; keyingi bron shu vaqtdan keyin boshlanadi
+    HOURLY_TURNOVER_MINUTES: int = 15
     # Mahalliy vaqt UTC dan necha daqiqa oldinda (O'zbekiston = +300). Bron
     # datetime'lari mahalliy "devor soati" sifatida saqlanadi; solishtirish shu
     # ofset bilan mahalliy hozirgi vaqtga keltiriladi.

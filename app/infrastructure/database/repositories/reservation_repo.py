@@ -1,9 +1,11 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
+
+from app.core.config import settings
 
 from app.infrastructure.database.models.invoice import Invoice
 from app.infrastructure.database.models.reservation import Reservation
@@ -92,13 +94,17 @@ class ReservationRepository(TenantBaseRepository[Reservation]):
             )
         )
         if booking_type == "HOURLY" and check_in_datetime and check_out_datetime:
+            # Soatlik bronlar orasida majburiy tanaffus: mijoz chiqib ketgach
+            # xona yana HOURLY_TURNOVER_MINUTES daqiqa band hisoblanadi
+            # (masalan, 10:00-11:00 bron bo'lsa keyingisi 11:15 dan boshlanadi).
+            turnover = timedelta(minutes=settings.HOURLY_TURNOVER_MINUTES)
             stmt = stmt.where(
                 Reservation.check_in_date <= check_in,
                 Reservation.check_out_date >= check_out,
             )
             stmt = stmt.where(
-                Reservation.check_in_datetime < check_out_datetime,
-                Reservation.check_out_datetime > check_in_datetime,
+                Reservation.check_in_datetime < check_out_datetime + turnover,
+                Reservation.check_out_datetime > check_in_datetime - turnover,
             )
         else:
             stmt = stmt.where(
