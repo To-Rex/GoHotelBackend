@@ -48,9 +48,10 @@ class RateLimitSettings(BaseSettings):
 
 class CORSSettings(BaseSettings):
     CORS_ORIGINS: list[str] = ["*"]
-    # Dokploy (sslip.io) subdomenlaridagi frontendlarga env ro'yxatidan qat'i nazar
+    # Dokploy (sslip.io) subdomenlaridagi frontendlarga hamda ishlab chiqarish
+    # domeni gohotels.uz (va uning subdomenlariga) env ro'yxatidan qat'i nazar
     # ruxsat beriladi — yangi frontend deploy bo'lganda CORS sinmasligi uchun.
-    CORS_ORIGIN_REGEX: str = r"https://.*\.sslip\.io"
+    CORS_ORIGIN_REGEX: str = r"https://(.*\.sslip\.io|([A-Za-z0-9-]+\.)*gohotels\.uz)$"
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

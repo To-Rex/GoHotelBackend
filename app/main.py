@@ -39,9 +39,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Ishlab chiqarish domeni env sozlamalaridan qat'i nazar DOIM ruxsat etiladi —
+# CORS_ORIGINS ro'yxati (masalan, faqat localhost) tor bo'lib qolsa ham
+# gohotels.uz saytida CORS xatosi chiqmasligi uchun. Mavjud ro'yxat saqlanadi,
+# faqat qo'shimcha domenlar qo'shiladi (dublikatlar olib tashlanadi).
+PRODUCTION_ORIGINS = ["https://gohotels.uz", "https://www.gohotels.uz"]
+_allow_origins = list(dict.fromkeys([*settings.CORS_ORIGINS, *PRODUCTION_ORIGINS]))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=_allow_origins,
     allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["*"],
