@@ -148,12 +148,20 @@ class FinanceService:
         skip: int = 0,
         limit: int = 100,
         status: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> list[Invoice]:
         stmt = select(Invoice)
         if hotel_id is not None:
             stmt = stmt.where(Invoice.hotel_id == hotel_id)
         if status:
             stmt = stmt.where(Invoice.status == status)
+        # Sana oralig'i bo'yicha filtr (hisobot uchun) — ixtiyoriy, berilmasa
+        # avvalgi xatti-harakat aynan saqlanadi
+        if date_from:
+            stmt = stmt.where(Invoice.invoice_date >= date_from)
+        if date_to:
+            stmt = stmt.where(Invoice.invoice_date <= date_to)
         stmt = stmt.order_by(Invoice.created_at.desc()).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -238,13 +246,22 @@ class FinanceService:
         return payment
 
     async def get_payments(
-        self, hotel_id: UUID | None, invoice_id: UUID | None = None
+        self,
+        hotel_id: UUID | None,
+        invoice_id: UUID | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> list[Payment]:
         if invoice_id:
             return await self.payment_repo.get_by_invoice(invoice_id, hotel_id)
         stmt = select(Payment)
         if hotel_id is not None:
             stmt = stmt.where(Payment.hotel_id == hotel_id)
+        # Sana oralig'i bo'yicha filtr (kunlik tushum hisoboti uchun)
+        if date_from:
+            stmt = stmt.where(Payment.payment_date >= date_from)
+        if date_to:
+            stmt = stmt.where(Payment.payment_date <= date_to)
         stmt = stmt.order_by(Payment.created_at.desc())
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

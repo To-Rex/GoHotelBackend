@@ -1,4 +1,5 @@
 from uuid import UUID
+from datetime import date
 
 from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +35,8 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
 @router.get("/invoices", response_model=list[InvoiceResponse])
 async def list_invoices(
     status: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     hotel_id: UUID | None = Query(default=None),
@@ -45,7 +48,10 @@ async def list_invoices(
     else:
         h_id = _get_hotel_id(current_user)
     service = FinanceService(session)
-    return await service.get_invoices(h_id, skip=skip, limit=limit, status=status)
+    return await service.get_invoices(
+        h_id, skip=skip, limit=limit, status=status,
+        date_from=date_from, date_to=date_to,
+    )
 
 
 @router.post("/invoices")
@@ -177,6 +183,8 @@ async def record_payment(
 @router.get("/payments", response_model=list[PaymentResponse])
 async def list_payments(
     invoice_id: UUID | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -186,7 +194,9 @@ async def list_payments(
     else:
         h_id = _get_hotel_id(current_user)
     service = FinanceService(session)
-    return await service.get_payments(h_id, invoice_id=invoice_id)
+    return await service.get_payments(
+        h_id, invoice_id=invoice_id, date_from=date_from, date_to=date_to
+    )
 
 
 @router.get("/ledgers", response_model=list[LedgerResponse])
