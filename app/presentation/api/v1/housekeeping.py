@@ -110,6 +110,28 @@ async def get_open_tasks(
     return await service.get_open_tasks(h_id, branch_id, skip=skip, limit=limit)
 
 
+@router.get("/occupied-rooms")
+async def get_occupied_rooms(
+    include_reserved: bool = Query(default=False),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Farrosh uchun: hozir band (CHECKED_IN) xonalar va chiqish vaqtlari.
+
+    Chiqishga eng yaqin xona birinchi qaytadi (kechikkanlar undan ham oldin).
+    `include_reserved=true` bo'lsa hali kirmagan (CONFIRMED) bronlar ham
+    qo'shiladi. Har bir yozuvda expected_checkout, minutes_until_checkout va
+    is_overdue maydonlari bor.
+    """
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    service = HousekeepingService(session)
+    return await service.get_occupied_rooms(h_id, include_reserved=include_reserved)
+
+
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
 async def get_task(
     task_id: UUID = Path(),

@@ -1,12 +1,15 @@
 import logging
 from uuid import UUID
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select as sa_select, func
 
+from app.core.config import settings
 from app.core.exceptions import NotFoundException, ValidationException
+from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
+from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.room_status_history import RoomStatusHistory
 from app.infrastructure.database.models.file_attachment import FileAttachment
@@ -39,6 +42,75 @@ class HousekeepingService:
         self.session = session
         self.repo = HousekeepingRepository(session)
         self.room_repo = RoomRepository(session)
+
+    async def get_occupied_rooms(
+        self, hotel_id: UUID | None, include_reserved: bool = False
+    ) -> list[dict]:
+        """Farrosh uchun: hozir band xonalar va ularning chiqish vaqtlari.
+
+        Chiqishga eng yaqin bron BIRINCHI ko'rsatiladi (vaqti o'tib ketganlar
+        undan ham oldin). DAILY bronlarda chiqish vaqti DEFAULT_CHECKOUT_HOUR
+        (standart 12:00) deb olinadi, HOURLY bronlarda aniq check_out_datetime —
+        avtomatik chiqish (automation_service) bilan bir xil mantiq.
+        """
+        statuses = ["CHECKED_IN"] + (["CONFIRMED"] if include_reserved else [])
+        stmt = (
+            sa_select(Reservation, Room, Guest)
+            .join(Room, Room.id == Reservation.room_id)
+            .join(Guest, Guest.id == Reservation.guest_id)
+            .where(
+                Reservation.is_deleted.is_(False),
+                Reservation.status.in_(statuses),
+            )
+        )
+        if hotel_id is not None:
+            stmt = stmt.where(Reservation.hotel_id == hotel_id)
+        result = await self.session.execute(stmt)
+        rows = result.all()
+
+        # Bron vaqtlari mahalliy "devor soati" sifatida saqlanadi — naive
+        # holda solishtiramiz (automation_service._local_now bilan bir xil)
+        local_now = (
+            datetime.now(timezone.utc) + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
+        ).replace(tzinfo=None)
+
+        def checkout_moment(r: Reservation) -> datetime:
+            if r.check_out_datetime is not None:
+                return r.check_out_datetime.replace(tzinfo=None)
+            hour = max(0, min(23, settings.DEFAULT_CHECKOUT_HOUR))
+            return datetime.combine(r.check_out_date, time(hour=hour))
+
+        items: list[dict] = []
+        for r, room, guest in rows:
+            co = checkout_moment(r)
+            minutes_left = int((co - local_now).total_seconds() // 60)
+            items.append(
+                {
+                    "room_id": str(room.id),
+                    "room_number": room.room_number,
+                    "room_status": room.current_status,
+                    "floor_id": str(room.floor_id) if room.floor_id else None,
+                    "reservation_id": str(r.id),
+                    "reservation_number": r.reservation_number,
+                    "reservation_status": r.status,
+                    "booking_type": r.booking_type,
+                    "guest_name": f"{guest.first_name} {guest.last_name or ''}".strip(),
+                    "check_in_date": str(r.check_in_date),
+                    "check_out_date": str(r.check_out_date),
+                    "check_out_datetime": (
+                        r.check_out_datetime.replace(tzinfo=None).isoformat()
+                        if r.check_out_datetime
+                        else None
+                    ),
+                    "expected_checkout": co.isoformat(),
+                    "minutes_until_checkout": minutes_left,
+                    "is_overdue": minutes_left < 0,
+                }
+            )
+
+        # Chiqishga eng yaqini birinchi (kechikkanlar ro'yxat boshida)
+        items.sort(key=lambda x: x["expected_checkout"])
+        return items
 
     async def _notify_assignment(
         self,

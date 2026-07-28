@@ -121,11 +121,11 @@ class UserRepository(BaseRepository[User]):
             )
         )
         existing = existing_result.scalar_one_or_none()
-        if existing:
+        if existing:`
             return existing
         up = UserPermission(
             user_id=user_id,
-            permission_id=permission_id,
+            permiss`ion_id=permission_id,
             hotel_id=hotel_id,
             granted_by=granted_by,
         )
