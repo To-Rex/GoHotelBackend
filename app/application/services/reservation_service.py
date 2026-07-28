@@ -63,7 +63,11 @@ class ReservationService:
             if hours < 1:
                 hours = 1
             hourly_rate = base_price / 24
-            room_charge = round(hourly_rate * hours, 2)
+            # Butun so'mga yaxlitlaymiz — aks holda 380 000/24 kabi bo'linmalar
+            # 15 833.33 kabi tiyinli summa hosil qilib, frontend butun so'm
+            # yuborganda 0.33 "qarz" qolib ketardi (bron "Qisman to'langan"
+            # bo'lib qolardi). Frontend ham xuddi shunday butun so'mga yaxlitlaydi.
+            room_charge = float(round(hourly_rate * hours))
             return room_charge, hours
 
         nights = (check_out_date - check_in_date).days
@@ -163,7 +167,8 @@ class ReservationService:
         final_discount_amount = discount_amount
         final_discount_percent = discount_percent
         if discount_percent > 0:
-            final_discount_amount = round(room_charge * discount_percent / 100, 2)
+            # Chegirma ham butun so'mga yaxlitlanadi — tiyinli qoldiq qolmasligi uchun
+            final_discount_amount = float(round(room_charge * discount_percent / 100))
         return final_discount_amount, final_discount_percent
 
     async def create_reservation(

@@ -1,7 +1,7 @@
 from uuid import UUID
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictException, NotFoundException, ValidationException
@@ -68,6 +68,23 @@ class RoomService:
 
     async def delete_room_type(self, type_id: UUID) -> None:
         rt = await self.get_room_type(type_id)
+
+        # rooms.room_type_id FK RESTRICT — turga biriktirilgan xona (arxivdagi
+        # ham) bo'lsa DB o'chirishga yo'l qo'ymaydi va 500 xato chiqardi.
+        # Buning o'rniga tushunarli 409 qaytaramiz. hotel_room_types
+        # bog'lanishlari esa CASCADE bilan avtomatik o'chadi.
+        count_stmt = (
+            select(func.count()).select_from(Room).where(Room.room_type_id == type_id)
+        )
+        result = await self.session.execute(count_stmt)
+        room_count = result.scalar() or 0
+        if room_count > 0:
+            raise ConflictException(
+                f"Bu xona turiga {room_count} ta xona biriktirilgan. "
+                "Avval o'sha xonalarni boshqa turga o'tkazing yoki o'chiring.",
+                "ROOM_TYPE_IN_USE",
+            )
+
         await self.session.delete(rt)
         await self.session.flush()
 
