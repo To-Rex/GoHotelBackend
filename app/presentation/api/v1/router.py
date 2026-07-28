@@ -21,6 +21,7 @@ from app.presentation.api.v1 import (
     amenities,
     tasks,
     problems,
+    maintenance,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -46,3 +47,4 @@ api_router.include_router(notifications.router, prefix="/notifications", tags=["
 api_router.include_router(amenities.router, prefix="/amenities", tags=["Amenities"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Mobile Tasks"])
 api_router.include_router(problems.router, prefix="/problems", tags=["Mobile Problems"])
+api_router.include_router(maintenance.router, prefix="/maintenance", tags=["Maintenance"])
