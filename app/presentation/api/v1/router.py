@@ -22,6 +22,7 @@ from app.presentation.api.v1 import (
     tasks,
     problems,
     maintenance,
+    expenses,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -48,3 +49,4 @@ api_router.include_router(amenities.router, prefix="/amenities", tags=["Amenitie
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Mobile Tasks"])
 api_router.include_router(problems.router, prefix="/problems", tags=["Mobile Problems"])
 api_router.include_router(maintenance.router, prefix="/maintenance", tags=["Maintenance"])
+api_router.include_router(expenses.router, prefix="/expenses", tags=["Expenses"])

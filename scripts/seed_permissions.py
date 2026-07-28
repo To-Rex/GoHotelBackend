@@ -87,6 +87,10 @@ PERMISSIONS = [
     # File module
     ("file.upload", "Upload Files", "file", "Upload files"),
     ("file.delete", "Delete Files", "file", "Delete files"),
+    # Expense module (xarajatlar)
+    ("expense.view", "View Expenses", "expense", "View hotel expenses"),
+    ("expense.create", "Create Expense", "expense", "Record hotel expenses"),
+    ("expense.delete", "Delete Expense", "expense", "Delete hotel expenses"),
 ]
 
 

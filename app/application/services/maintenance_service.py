@@ -33,6 +33,7 @@ HOTEL_SCOPED_TABLES = [
     "audit_logs",
     "reports",
     "room_status_history",
+    "expenses",
 ]
 
 # Faqat operatsion fayllar; mehmonxonaning o'z fayllari ('Hotel') saqlanadi

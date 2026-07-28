@@ -24,6 +24,7 @@ from app.infrastructure.database.models.building import Building
 from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.infrastructure.database.models.notification import Notification
 from app.infrastructure.database.models.report import Report
+from app.infrastructure.database.models.expense import Expense
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -32,6 +33,6 @@ __all__ = [
     "HousekeepingTask", "ChecklistItem", "Problem",
     "Ledger", "JournalEntry", "JournalEntryLine",
     "Invoice", "InvoiceLineItem", "InvoiceItem", "Payment", "AuditLog",
-    "FileAttachment", "Notification", "Report",
+    "FileAttachment", "Notification", "Report", "Expense",
     "Amenity", "HotelAmenity", "RoomAmenity",
 ]

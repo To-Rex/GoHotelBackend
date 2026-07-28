@@ -43,6 +43,7 @@ CLEAR_TABLES = [
     "audit_logs",
     "reports",
     "room_status_history",
+    "expenses",
 ]
 
 # Faqat operatsion fayllar o'chiriladi; mehmonxona fayllari ('Hotel') qoladi
