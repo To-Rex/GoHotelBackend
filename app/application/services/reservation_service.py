@@ -804,6 +804,18 @@ class ReservationService:
             )
             self.session.add(history)
 
+        # Bron bekor qilinganda unga bog'liq hisob-faktura ham bekor qilinadi
+        # (VOID) — aks holda Moliya bo'limida faol bo'lib qolaverardi.
+        # Qabul qilingan to'lov yozuvlari (payments) audit uchun saqlanadi;
+        # pul qaytarish jarayoni tizimdan tashqarida hal qilinadi.
+        invoice = await self.invoice_repo.get_by_reservation(reservation_id, hotel_id)
+        if invoice and invoice.status not in ("VOID", "REFUNDED"):
+            invoice.status = "VOID"
+            void_note = f"Reservation {reservation.reservation_number} cancelled"
+            invoice.notes = (
+                f"{invoice.notes}\n{void_note}" if invoice.notes else void_note
+            )
+
         reservation = await self.repo.cancel_reservation(
             reservation, reason or "Cancelled by user", user_id
         )
