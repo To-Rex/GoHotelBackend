@@ -1,8 +1,9 @@
 """Xarajatlar (chiqimlar) endpointlari — Xarajatlar sahifasi uchun.
 
-Kirish huquqi: ADMIN/SUPER_ADMIN (bypass) yoki expense.* ruxsatiga ega xodim
-(masalan, menejer). Har bir xarajatda kim kiritgani (created_by) saqlanadi
-va ro'yxatda ism-familiya bilan qaytariladi.
+Ko'rish va kiritish BARCHA tizimga kirgan xodimlar uchun ochiq (har bir
+xarajatda kim kiritgani created_by sifatida majburiy saqlanadi va ro'yxatda
+ism-familiya bilan qaytariladi — javobgarlik saqlanadi). O'chirish esa faqat
+expense.delete ruxsati bilan (ADMIN/SUPER_ADMIN avtomatik).
 """
 from datetime import date
 from typing import Literal
@@ -71,7 +72,7 @@ async def list_expenses(
     limit: int = Query(default=500, ge=1, le=1000),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("expense.view")),
+    current_user: dict = Depends(get_current_user),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         h_id = hotel_id or current_user.get("hotel_id")
@@ -99,7 +100,7 @@ async def create_expense(
     data: ExpenseCreateRequest,
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("expense.create")),
+    current_user: dict = Depends(get_current_user),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         h_id = hotel_id or current_user.get("hotel_id")
