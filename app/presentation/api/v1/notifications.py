@@ -187,6 +187,11 @@ async def get_notifications(
             "timestamp": n.created_at.isoformat() if n.created_at else None,
             "is_read": n.is_read,
             "has_actions": n.entity_type in ("task", "problem"),
+            "task_id": (
+                str(n.entity_id)
+                if n.entity_type == "task" and n.entity_id
+                else None
+            ),
         }
         for n in notifications
     ]
@@ -216,6 +221,11 @@ async def get_broadcasts(
             "timestamp": n.created_at.isoformat() if n.created_at else None,
             "is_read": n.is_read,
             "has_actions": n.entity_type in ("task", "problem"),
+            "task_id": (
+                str(n.entity_id)
+                if n.entity_type == "task" and n.entity_id
+                else None
+            ),
         }
         for n in notifications
     ]

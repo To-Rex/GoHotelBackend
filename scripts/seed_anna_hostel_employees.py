@@ -80,8 +80,9 @@ PERMISSIONS = [
     ("hotel_service.manage", "Manage Hotel Services", "service"),
 ]
 
+# reservation.cancel ATAYLAB yo'q — resepshn bron bekor qila olmaydi
 RECEPTION_CODES = [
-    "reservation.create", "reservation.update", "reservation.cancel",
+    "reservation.create", "reservation.update",
     "reservation.view", "guest.create", "guest.update", "guest.view",
     "guest.checkin", "guest.checkout", "guest.delete",
     "room.view", "room.status.update",

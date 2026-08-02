@@ -298,8 +298,9 @@ async def seed():
             perm_map[code] = p
         await session.flush()
 
+        # reservation.cancel ATAYLAB yo'q — resepshn bron bekor qila olmaydi
         reception_codes = [
-            "reservation.create", "reservation.update", "reservation.cancel",
+            "reservation.create", "reservation.update",
             "reservation.view", "guest.create", "guest.update", "guest.view",
             "guest.checkin", "guest.checkout", "room.view", "room.status.update",
         ]

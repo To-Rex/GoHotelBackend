@@ -414,7 +414,8 @@ async def seed():
         # ------------------------------------------------
         # 10. PERMISSIONS — assign to employees
         # ------------------------------------------------
-        reception_codes = ["reservation.create", "reservation.update", "reservation.cancel",
+        # reservation.cancel ATAYLAB yo'q — resepshn bron bekor qila olmaydi
+        reception_codes = ["reservation.create", "reservation.update",
                            "reservation.view", "guest.create", "guest.update", "guest.view",
                            "guest.checkin", "guest.checkout", "room.view", "room.status.update"]
         cleaner_codes = ["housekeeping.task.create", "housekeeping.task.assign",

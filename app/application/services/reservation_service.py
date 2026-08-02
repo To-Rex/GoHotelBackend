@@ -16,8 +16,9 @@ from app.infrastructure.database.repositories.guest_repo import GuestRepository
 from app.infrastructure.database.repositories.finance_repo import InvoiceRepository
 from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
+from app.application.services.notification_service import NotificationService
 from app.shared.utils import generate_code
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 
 class ReservationService:
@@ -564,18 +565,30 @@ class ReservationService:
         room: Room,
         created_by: UUID,
         assigned_to: UUID | None = None,
+        active_only: bool = False,
     ) -> HousekeepingTask | None:
         """Bron uchun tozalash tunini yaratadi (agar hali mavjud bo'lmasa).
 
         Idempotent: shu bronga bog'langan bekor qilinmagan CLEANING tun bo'lsa,
         yangisi yaratilmaydi (avtomatik va qo'lda chiqish yo'llari dublikat
         yaratmasligi uchun).
+
+        active_only=True bo'lsa faqat FAOL (OPEN/IN_PROGRESS) vazifa mavjudligi
+        tekshiriladi — avvalroq COMPLETED bo'lgan vazifa yangisini yaratishga
+        to'sqinlik qilmaydi. Bu bekor qilish oqimi uchun: farrosh vazifani
+        mehmon hali ichkaridaligida yakunlagan bo'lsa ham, bekor qilishda xona
+        CLEANING holatidan chiqishi uchun yangi ochiq vazifa kerak.
         """
+        status_filter = (
+            HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"])
+            if active_only
+            else HousekeepingTask.status != "CANCELLED"
+        )
         existing = await self.session.execute(
             select(HousekeepingTask).where(
                 HousekeepingTask.reservation_id == reservation.id,
                 HousekeepingTask.task_type == "CLEANING",
-                HousekeepingTask.status != "CANCELLED",
+                status_filter,
             )
         )
         if existing.scalars().first():
@@ -782,6 +795,39 @@ class ReservationService:
             "status": "CHECKED_OUT",
         }
 
+    async def _find_cleaner(self, hotel_id: UUID, branch_id: UUID) -> UUID | None:
+        """Eng kam yuklamali farroshni topadi (automation_service bilan bir xil
+        mantiq): farrosh = housekeeping.* ruxsatiga ega EMPLOYEE. Iloji bo'lsa
+        o'sha filialdan. Topilmasa None — vazifa biriktirilmay yaratiladi."""
+        employees = await self.user_repo.get_employees(hotel_id, limit=500)
+        candidates = []
+        for e in employees:
+            if getattr(e, "is_deleted", False):
+                continue
+            perms = await self.user_repo.get_user_permissions(e.id)
+            if any(str(p.get("code", "")).startswith("housekeeping.") for p in perms):
+                candidates.append(e)
+        if not candidates:
+            return None
+
+        same_branch = [e for e in candidates if e.branch_id == branch_id]
+        pool = same_branch or candidates
+        pool_ids = [e.id for e in pool]
+
+        counts: dict[UUID, int] = {pid: 0 for pid in pool_ids}
+        rows = await self.session.execute(
+            select(HousekeepingTask.assigned_to, func.count())
+            .where(
+                HousekeepingTask.assigned_to.in_(pool_ids),
+                HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
+            )
+            .group_by(HousekeepingTask.assigned_to)
+        )
+        for assigned_to, cnt in rows.all():
+            if assigned_to in counts:
+                counts[assigned_to] = cnt
+        return min(pool_ids, key=lambda pid: counts.get(pid, 0))
+
     async def cancel_reservation(
         self, reservation_id: UUID, hotel_id: UUID, user_id: UUID, reason: str | None = None
     ) -> Reservation:
@@ -795,6 +841,8 @@ class ReservationService:
                 "RESERVATION_LOCKED",
             )
 
+        was_checked_in = reservation.status == "CHECKED_IN"
+
         room = await self.room_repo.get_by_id(reservation.room_id, hotel_id)
         if room and room.current_status == "RESERVED":
             room.current_status = "AVAILABLE"
@@ -804,6 +852,20 @@ class ReservationService:
                 hotel_id=hotel_id,
                 room_id=room.id,
                 status="AVAILABLE",
+                changed_by=user_id,
+                notes=f"Reservation {reservation.reservation_number} cancelled",
+            )
+            self.session.add(history)
+        elif room and was_checked_in and room.current_status == "OCCUPIED":
+            # Mehmon ichkarida edi — xona tozalashga o'tadi; tozalash vazifasi
+            # yakunlangach housekeeping oqimi uni o'zi AVAILABLE qiladi
+            room.current_status = "CLEANING"
+            await self.room_repo.update(room, current_status="CLEANING")
+
+            history = RoomStatusHistory(
+                hotel_id=hotel_id,
+                room_id=room.id,
+                status="CLEANING",
                 changed_by=user_id,
                 notes=f"Reservation {reservation.reservation_number} cancelled",
             )
@@ -824,6 +886,37 @@ class ReservationService:
         reservation = await self.repo.cancel_reservation(
             reservation, reason or "Cancelled by user", user_id
         )
+
+        # Mehmon KIRGAN bron bekor qilinganda farroshga avtomatik tozalash
+        # vazifasi yaratiladi (eng kam yuklamali farroshga biriktiriladi;
+        # farrosh topilmasa vazifa biriktirilmagan holda ochiq qoladi).
+        # Hali kirilmagan (PENDING/CONFIRMED) bron bekor qilinsa xona
+        # ishlatilmagan — tozalash talab etilmaydi. active_only=True: avvalroq
+        # yakunlangan vazifa yangi ochiq vazifa yaratishga to'sqinlik qilmaydi,
+        # aks holda xona CLEANING holatida tiqilib qolardi.
+        if room and was_checked_in:
+            cleaner_id = await self._find_cleaner(hotel_id, reservation.branch_id)
+            task = await self._ensure_cleaning_task(
+                reservation, hotel_id, room, user_id,
+                assigned_to=cleaner_id, active_only=True,
+            )
+            if task and cleaner_id:
+                # Push/notification xatosi bekor qilish oqimini hech qachon buzmaydi
+                try:
+                    await NotificationService(self.session).notify(
+                        hotel_id=hotel_id,
+                        user_id=cleaner_id,
+                        title="Bron bekor qilindi — tozalash vazifasi",
+                        body=(
+                            f"{room.room_number}-xona bo'shatildi, "
+                            "tozalash vazifasi sizga biriktirildi"
+                        ),
+                        entity_type="task",
+                        entity_id=task.id,
+                    )
+                except Exception:
+                    pass
+
         await self.session.flush()
         return reservation
 
