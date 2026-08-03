@@ -215,6 +215,9 @@ class RoomService:
                 filters["room_type_id"] = room_type_id
             if status:
                 filters["current_status"] = status
+            # O'chirilgan (soft-delete) xonalar ro'yxatga chiqmasligi kerak —
+            # aks holda o'chirish UI'da "ishlamagandek" ko'rinadi
+            filters["is_deleted"] = False
             return await self.room_repo.get_all_unscoped(skip, limit, **filters)
         if status:
             return await self.room_repo.get_rooms_by_status(hotel_id, status, skip, limit)
@@ -226,6 +229,8 @@ class RoomService:
             filters["floor_id"] = floor_id
         if room_type_id:
             filters["room_type_id"] = room_type_id
+        # O'chirilgan xonalar ro'yxatdan yashiriladi
+        filters["is_deleted"] = False
         return await self.room_repo.get_all(hotel_id, skip, limit, **filters)
 
     async def get_room(self, room_id: UUID, hotel_id: UUID | None) -> Room:
