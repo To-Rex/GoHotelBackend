@@ -63,12 +63,9 @@ class ReservationService:
             hours = delta.total_seconds() / 3600
             if hours < 1:
                 hours = 1
-            hourly_rate = base_price / settings.HOURLY_RATE_DIVISOR
-            # Butun so'mga yaxlitlaymiz — aks holda 380 000/24 kabi bo'linmalar
-            # 15 833.33 kabi tiyinli summa hosil qilib, frontend butun so'm
-            # yuborganda 0.33 "qarz" qolib ketardi (bron "Qisman to'langan"
-            # bo'lib qolardi). Frontend ham xuddi shunday butun so'mga yaxlitlaydi.
-            room_charge = float(round(hourly_rate * hours))
+            # Soatlik bron narxi davomiylikka BOG'LIQ EMAS — kunlik narx
+            # to'liq olinadi (1 soat ham, 24 soat ham bir xil narx)
+            room_charge = float(round(base_price))
             return room_charge, hours
 
         nights = (check_out_date - check_in_date).days

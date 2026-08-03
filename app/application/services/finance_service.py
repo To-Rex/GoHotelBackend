@@ -3,7 +3,6 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.core.config import settings
 from app.core.exceptions import NotFoundException, ValidationException, BadRequestException
 from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem
 from app.infrastructure.database.models.payment import Payment
@@ -80,9 +79,9 @@ class FinanceService:
             hours = delta.total_seconds() / 3600
             if hours < 1:
                 hours = 1
-            hourly_rate = base_price / settings.HOURLY_RATE_DIVISOR
-            # Butun so'mga yaxlitlanadi (reservation_service bilan bir xil)
-            room_charge = float(round(hourly_rate * hours))
+            # Soatlik bron narxi davomiylikka bog'liq emas — kunlik narx
+            # to'liq olinadi (reservation_service bilan bir xil)
+            room_charge = float(round(base_price))
             nights = hours
             duration_label = "hour(s)"
 
