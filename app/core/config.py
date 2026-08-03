@@ -68,6 +68,30 @@ class LogSettings(BaseSettings):
     LOG_FORMAT: str = "json"
 
 
+class WebAuthnSettings(BaseSettings):
+    """Face ID/Windows Hello (passkey) autentifikatsiyasi sozlamalari.
+
+    WebAuthn kredensiallari yagona RP ID'ga bog'lanadi va faqat shu RP ID bilan
+    mos keladigan origin'lardan ishlaydi. Lokal ishlab chiqishda frontend
+    localhost'da ochilsa, .env orqali quyidagilarni ustidan yozing:
+        WEBAUTHN_RP_ID=localhost
+        WEBAUTHN_ORIGINS=["http://localhost:5173","http://localhost:8004"]
+    """
+
+    WEBAUTHN_RP_ID: str = "gohotels.uz"
+    WEBAUTHN_RP_NAME: str = "GoHotel"
+    WEBAUTHN_ORIGINS: list[str] = ["https://gohotels.uz", "https://www.gohotels.uz"]
+
+    @field_validator("WEBAUTHN_ORIGINS", mode="before")
+    @classmethod
+    def parse_webauthn_origins(cls, v: object) -> list[str]:
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            return json.loads(v)
+        return []
+
+
 class FirebaseSettings(BaseSettings):
     """Firebase Cloud Messaging (push notification) sozlamalari.
 
@@ -121,6 +145,7 @@ class Settings(
     LogSettings,
     FirebaseSettings,
     AutomationSettings,
+    WebAuthnSettings,
 ):
     model_config = SettingsConfigDict(
         env_file=".env",

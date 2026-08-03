@@ -25,6 +25,8 @@ from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.infrastructure.database.models.notification import Notification
 from app.infrastructure.database.models.report import Report
 from app.infrastructure.database.models.expense import Expense
+from app.infrastructure.database.models.webauthn_credential import WebAuthnCredential
+from app.infrastructure.database.models.webauthn_challenge import WebAuthnChallenge
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -35,4 +37,5 @@ __all__ = [
     "Invoice", "InvoiceLineItem", "InvoiceItem", "Payment", "AuditLog",
     "FileAttachment", "Notification", "Report", "Expense",
     "Amenity", "HotelAmenity", "RoomAmenity",
+    "WebAuthnCredential", "WebAuthnChallenge",
 ]

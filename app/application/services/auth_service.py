@@ -40,16 +40,29 @@ class AuthService:
         if user.is_deleted:
             raise ForbiddenException("Account has been deleted", "ACCOUNT_DELETED")
 
+        # FCM token faqat so'rovda kelganda yangilanadi — token yubormaydigan
+        # klientlar (masalan web) mavjud tokenni o'chirib yubormasligi uchun.
+        if fcm_token:
+            user.fcm_token = fcm_token
+
+        return await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
+
+    async def issue_tokens(
+        self,
+        user,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict:
+        """Access/refresh token juftligini yaratib, sessiya yozuvini saqlaydi.
+
+        Parol bilan login va WebAuthn (Face ID/passkey) login uchun umumiy —
+        ikkalasi ham foydalanuvchi allaqachon tekshirilgach shu yerga keladi.
+        """
         permissions: list[str] = []
         if user.user_type == "EMPLOYEE":
             permissions = [p["code"] for p in await self.user_repo.get_user_permissions(user.id)]
 
         user.last_login_at = datetime.now(timezone.utc)
-
-        # FCM token faqat so'rovda kelganda yangilanadi — token yubormaydigan
-        # klientlar (masalan web) mavjud tokenni o'chirib yubormasligi uchun.
-        if fcm_token:
-            user.fcm_token = fcm_token
 
         jti = generate_jti()
         token_data = {
