@@ -63,7 +63,7 @@ class ReservationService:
             hours = delta.total_seconds() / 3600
             if hours < 1:
                 hours = 1
-            hourly_rate = base_price / 24
+            hourly_rate = base_price / settings.HOURLY_RATE_DIVISOR
             # Butun so'mga yaxlitlaymiz — aks holda 380 000/24 kabi bo'linmalar
             # 15 833.33 kabi tiyinli summa hosil qilib, frontend butun so'm
             # yuborganda 0.33 "qarz" qolib ketardi (bron "Qisman to'langan"
