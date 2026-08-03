@@ -112,6 +112,7 @@ class FloorRepository(TenantBaseRepository[Floor]):
             .where(
                 Floor.hotel_id == hotel_id,
                 Floor.branch_id == branch_id,
+                Floor.is_deleted.is_(False),
             )
             .order_by(Floor.floor_number)
         )

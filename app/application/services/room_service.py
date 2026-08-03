@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictException, NotFoundException, ValidationException
 from app.infrastructure.database.models.floor import Floor
 from app.infrastructure.database.models.hotel import Hotel
+from app.infrastructure.database.models.housekeeping import HousekeepingTask
+from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.room_status_history import RoomStatusHistory
 from app.infrastructure.database.models.room_type import RoomType, HotelRoomType
@@ -136,6 +138,21 @@ class RoomService:
     # --- Floors ---
 
     async def create_floor(self, hotel_id: UUID, branch_id: UUID, data: dict) -> Floor:
+        # (branch, floor_number) unikal — DB xatosi (500) o'rniga aniq 409
+        dup = await self.session.execute(
+            select(Floor.id)
+            .where(
+                Floor.branch_id == branch_id,
+                Floor.floor_number == data["floor_number"],
+                Floor.is_deleted.is_(False),
+            )
+            .limit(1)
+        )
+        if dup.first():
+            raise ConflictException(
+                f"Bu filialda {data['floor_number']}-qavat allaqachon mavjud",
+                "FLOOR_NUMBER_EXISTS",
+            )
         floor = Floor(
             hotel_id=hotel_id,
             branch_id=branch_id,
@@ -148,10 +165,10 @@ class RoomService:
         self, hotel_id: UUID | None, branch_id: UUID | None = None
     ) -> list[Floor]:
         if hotel_id is None:
-            return await self.floor_repo.get_all_unscoped(limit=500)
+            return await self.floor_repo.get_all_unscoped(limit=500, is_deleted=False)
         if branch_id:
             return await self.floor_repo.get_by_branch(hotel_id, branch_id)
-        return await self.floor_repo.get_all(hotel_id, limit=500)
+        return await self.floor_repo.get_all(hotel_id, limit=500, is_deleted=False)
 
     async def get_floor(self, floor_id: UUID, hotel_id: UUID | None) -> Floor:
         if hotel_id is None:
@@ -163,14 +180,70 @@ class RoomService:
         return floor
 
     async def update_floor(self, floor: Floor, **values) -> Floor:
+        # Qavat raqami o'zgartirilsa — dublikatni oldindan tekshiramiz
+        # (aks holda DB unikal cheklovi 500 xato berardi)
+        new_number = values.get("floor_number")
+        if new_number is not None and new_number != floor.floor_number:
+            dup = await self.session.execute(
+                select(Floor.id)
+                .where(
+                    Floor.branch_id == floor.branch_id,
+                    Floor.floor_number == new_number,
+                    Floor.id != floor.id,
+                    Floor.is_deleted.is_(False),
+                )
+                .limit(1)
+            )
+            if dup.first():
+                raise ConflictException(
+                    f"Bu filialda {new_number}-qavat allaqachon mavjud",
+                    "FLOOR_NUMBER_EXISTS",
+                )
         return await self.floor_repo.update(floor, **values)
 
+    async def _room_has_references(self, room_id: UUID) -> bool:
+        """Xonaga bog'liq (FK RESTRICT) yozuvlar bormi — bron, xo'jalik
+        vazifasi yoki holat tarixi. Bo'lsa, xona qatorini butunlay o'chirib
+        bo'lmaydi (arxivda qolishi kerak)."""
+        for model in (Reservation, HousekeepingTask, RoomStatusHistory):
+            stmt = select(model.id).where(model.room_id == room_id).limit(1)
+            if (await self.session.execute(stmt)).first():
+                return True
+        return False
+
     async def delete_floor(self, floor_id: UUID, hotel_id: UUID) -> None:
+        """Qavatni unga biriktirilgan xonalari bilan BIRGA o'chiradi.
+
+        Xonalar: tarixi (bron/vazifa/holat yozuvi) yo'qlari butunlay
+        o'chiriladi; tarixi borlari arxivga (soft delete) o'tadi — hisobotlar
+        va bron tarixi buzilmaydi. Agar tarixli xonalar qolsa, ularning qatori
+        FK orqali qavatni ushlab turadi — bunday holatda qavat ham arxivga
+        o'tadi (ro'yxatlarda ko'rinmaydi), aks holda butunlay o'chiriladi.
+        """
         floor = await self.get_floor(floor_id, hotel_id)
-        rooms = await self.room_repo.get_all(hotel_id, 0, 1, floor_id=floor_id)
-        if rooms:
-            raise ConflictException("Floor has rooms, cannot delete", "FLOOR_HAS_ROOMS")
-        await self.floor_repo.delete(floor)
+
+        rooms_stmt = select(Room).where(Room.floor_id == floor_id)
+        rooms = list((await self.session.execute(rooms_stmt)).scalars().all())
+
+        now = datetime.now(timezone.utc)
+        history_rooms = 0
+        for room in rooms:
+            if await self._room_has_references(room.id):
+                if not room.is_deleted:
+                    room.is_deleted = True
+                    room.deleted_at = now
+                history_rooms += 1
+            else:
+                # Qulayliklar bog'lanishi (room_amenities) CASCADE bilan o'chadi
+                await self.session.delete(room)
+        await self.session.flush()
+
+        if history_rooms:
+            floor.is_deleted = True
+            floor.deleted_at = now
+            await self.session.flush()
+        else:
+            await self.floor_repo.delete(floor)
 
     # --- Rooms ---
 
@@ -302,6 +375,14 @@ class RoomService:
 
     async def soft_delete_room(self, room_id: UUID, hotel_id: UUID) -> Room:
         room = await self.get_room(room_id, hotel_id)
+        # Tarixi (bron/vazifa/holat yozuvi) BO'LMAGAN xona butunlay o'chiriladi —
+        # qatori qolib qavat/xona turi o'chirishlarini bloklab yurmasligi uchun
+        # (qulayliklar bog'lanishi CASCADE bilan o'zi o'chadi). Tarixi borlar
+        # arxivga (soft delete) o'tadi — hisobotlar va tarix buzilmaydi.
+        if not await self._room_has_references(room.id):
+            await self.session.delete(room)
+            await self.session.flush()
+            return room
         room.is_deleted = True
         room.deleted_at = datetime.now(timezone.utc)
         await self.session.flush()

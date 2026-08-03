@@ -3,17 +3,25 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import ForeignKey, SmallInteger, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, SmallInteger, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import FullMixin, SoftDeleteMixin
 
 
-class Floor(FullMixin, Base):
+class Floor(FullMixin, SoftDeleteMixin, Base):
     __tablename__ = "floors"
     __table_args__ = (
-        UniqueConstraint("branch_id", "floor_number", name="uq_floors_branch_number"),
+        # Qavat raqami faqat FAOL qavatlar orasida unikal — arxivga (soft
+        # delete) o'tgan qavat raqamini qayta ishlatish mumkin bo'lishi uchun
+        Index(
+            "uq_floors_branch_number_active",
+            "branch_id",
+            "floor_number",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

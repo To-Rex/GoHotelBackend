@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Numeric, SmallInteger, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Numeric, SmallInteger, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import RoomStatus
@@ -14,7 +14,15 @@ from app.shared.mixins import FullMixin, SoftDeleteMixin
 class Room(FullMixin, SoftDeleteMixin, Base):
     __tablename__ = "rooms"
     __table_args__ = (
-        UniqueConstraint("branch_id", "room_number", name="uq_rooms_branch_number"),
+        # Xona raqami faqat FAOL xonalar orasida unikal — arxivdagi (soft
+        # delete) xona raqamini yangi xona uchun qayta ishlatish mumkin
+        Index(
+            "uq_rooms_branch_number_active",
+            "branch_id",
+            "room_number",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
