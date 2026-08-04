@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Numeric, SmallInteger, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Numeric, SmallInteger, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,9 +14,16 @@ from app.shared.mixins import FullMixin
 class RoomType(FullMixin, Base):
     __tablename__ = "room_types"
     __table_args__ = (
-        UniqueConstraint("name", name="uq_room_types_name"),
+        # Tur nomi mehmonxona doirasida unikal — har bir mehmonxona admini
+        # o'z turlarini mustaqil yaratadi
+        Index("uq_room_types_hotel_name", "hotel_id", "name", unique=True),
     )
 
+    # Har bir xona turi bitta mehmonxonaga tegishli. NULL — egasiz (eski
+    # global yozuvlar uchun o'tish davri qiymati; yangi turlar doim egali)
+    hotel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     capacity: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)

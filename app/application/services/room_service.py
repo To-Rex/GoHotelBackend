@@ -27,14 +27,18 @@ class RoomService:
 
     # --- Room Types ---
 
-    async def create_room_type(self, data: dict) -> RoomType:
-        stmt = select(RoomType).where(RoomType.name == data["name"])
+    async def create_room_type(self, data: dict, hotel_id: UUID | None = None) -> RoomType:
+        # Nom unikaliligi mehmonxona doirasida tekshiriladi
+        stmt = select(RoomType).where(
+            RoomType.name == data["name"], RoomType.hotel_id == hotel_id
+        )
         result = await self.session.execute(stmt)
         if result.scalar_one_or_none():
             raise ConflictException(
                 f"Room type '{data['name']}' already exists", "ROOM_TYPE_EXISTS"
             )
         rt = RoomType(
+            hotel_id=hotel_id,
             name=data["name"],
             description=data.get("description"),
             capacity=data.get("capacity", 1),
@@ -46,8 +50,14 @@ class RoomService:
         await self.session.refresh(rt)
         return rt
 
-    async def get_room_types(self, active_only: bool = False) -> list[RoomType]:
+    async def get_room_types(
+        self, active_only: bool = False, hotel_id: UUID | None = None
+    ) -> list[RoomType]:
         stmt = select(RoomType).order_by(RoomType.name)
+        # Har bir mehmonxona faqat O'Z turlarini ko'radi; hotel_id berilmasa
+        # (SUPER_ADMIN kontekstsiz) — hammasi qaytadi
+        if hotel_id is not None:
+            stmt = stmt.where(RoomType.hotel_id == hotel_id)
         if active_only:
             stmt = stmt.where(RoomType.is_active.is_(True))
         result = await self.session.execute(stmt)
@@ -61,6 +71,22 @@ class RoomService:
 
     async def update_room_type(self, type_id: UUID, data: dict) -> RoomType:
         rt = await self.get_room_type(type_id)
+        # Nom o'zgartirilsa — o'sha mehmonxona doirasida dublikatni tekshiramiz
+        new_name = data.get("name")
+        if new_name and new_name != rt.name:
+            dup = await self.session.execute(
+                select(RoomType.id)
+                .where(
+                    RoomType.name == new_name,
+                    RoomType.hotel_id == rt.hotel_id,
+                    RoomType.id != rt.id,
+                )
+                .limit(1)
+            )
+            if dup.first():
+                raise ConflictException(
+                    f"Room type '{new_name}' already exists", "ROOM_TYPE_EXISTS"
+                )
         updatable = ["name", "description", "capacity", "base_price", "amenities", "is_active"]
         for key in updatable:
             if key in data and data[key] is not None:
