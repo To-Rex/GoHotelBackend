@@ -192,6 +192,39 @@ class AutomationService:
                     )
                 )
                 await self.session.flush()
+            # Mehmon kirmagan bo'lsa ham farrosh xonani ko'zdan kechirsin —
+            # muammo bo'lsa xabar berishi uchun tozalash vazifasi yaratiladi
+            existing = await self._linked_cleaning_task(reservation.id)
+            if existing is None:
+                cleaner_id = await self._find_cleaner(hotel_id, reservation.branch_id)
+                task = await self.res_service._ensure_cleaning_task(
+                    reservation, hotel_id, room, actor, assigned_to=cleaner_id
+                )
+                logger.info(
+                    "Inspection cleaning task created for expired CONFIRMED "
+                    "reservation %s (cleaner=%s)",
+                    reservation.id,
+                    cleaner_id,
+                )
+                if task is not None and cleaner_id is not None:
+                    try:
+                        await NotificationService(self.session).notify(
+                            hotel_id=hotel_id,
+                            user_id=cleaner_id,
+                            title="Xonani ko'zdan kechiring",
+                            body=(
+                                f"{room.room_number}-xona — bron vaqti tugadi "
+                                f"(mehmon kirmagan), xonani tekshirib chiqing"
+                            ),
+                            entity_type="task",
+                            entity_id=task.id,
+                            send_push=True,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Ko'zdan kechirish notification yuborilmadi (res=%s)",
+                            reservation.id,
+                        )
             logger.info(
                 "Reservation %s auto CHECKED_OUT (was CONFIRMED, never checked in)",
                 reservation.id,
