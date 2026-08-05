@@ -112,8 +112,8 @@ class AutomationSettings(BaseSettings):
     """Bron chiqishini avtomatlashtirish (fon vazifasi) sozlamalari.
 
     Oqim: chiqish vaqtidan LEAD daqiqa oldin farroshga tozalash tuni yaratiladi;
-    chiqish vaqti kelganda xona "CLEANING" bo'ladi; tozalash tugagach (yoki
-    GRACE daqiqadan keyin, farrosh bajarmasa ham) bron avtomatik "CHECKED_OUT".
+    chiqish vaqti kelganda xona "CLEANING" bo'ladi va bron darhol "CHECKED_OUT"
+    qilinadi (GRACE=0). Tozalash vazifasi bron holatidan mustaqil davom etadi.
     """
 
     # Fon rejalashtiruvchisini yoqish/o'chirish
@@ -122,8 +122,10 @@ class AutomationSettings(BaseSettings):
     AUTO_CHECKOUT_INTERVAL_SECONDS: int = 60
     # Chiqish vaqtidan necha daqiqa oldin tozalash tuni yaratiladi (farroshga yuboriladi)
     HOUSEKEEPING_LEAD_MINUTES: int = 5
-    # Tozalash bajarilmasa, chiqish vaqtidan necha daqiqa keyin majburan CHECKED_OUT qilinadi
-    AUTO_CHECKOUT_GRACE_MINUTES: int = 60
+    # Chiqish vaqtidan necha daqiqa keyin bron CHECKED_OUT qilinadi.
+    # 0 — vaqt tugashi bilanoq (keyingi tekshiruv siklida) chiqariladi;
+    # tozalash vazifasi bunga bog'liq emas, o'z holicha davom etadi
+    AUTO_CHECKOUT_GRACE_MINUTES: int = 0
     # Kunlik (soatsiz) bronlar uchun standart chiqish soati (mahalliy vaqt, 0-23)
     DEFAULT_CHECKOUT_HOUR: int = 12
     # Soatlik bronlar orasidagi majburiy tanaffus (daqiqalarda) — mijoz chiqib
