@@ -162,11 +162,13 @@ class ReservationService:
         return payment
 
     async def _compute_discount(self, room_charge: float, discount_amount: float, discount_percent: float) -> tuple[float, float]:
-        final_discount_amount = discount_amount
-        final_discount_percent = discount_percent
-        if discount_percent > 0:
+        # Bazadan kelgan qiymatlar Decimal bo'ladi — float arifmetikasi bilan
+        # aralashsa TypeError beradi, shuning uchun kirishda bir xillashtiriladi
+        final_discount_amount = float(discount_amount or 0)
+        final_discount_percent = float(discount_percent or 0)
+        if final_discount_percent > 0:
             # Chegirma ham butun so'mga yaxlitlanadi — tiyinli qoldiq qolmasligi uchun
-            final_discount_amount = float(round(room_charge * discount_percent / 100))
+            final_discount_amount = float(round(room_charge * final_discount_percent / 100))
         return final_discount_amount, final_discount_percent
 
     async def create_reservation(

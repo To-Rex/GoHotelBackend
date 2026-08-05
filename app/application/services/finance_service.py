@@ -88,6 +88,10 @@ class FinanceService:
         hotel_code = await self._get_hotel_code(hotel_id)
         invoice_number = generate_code("INV", hotel_code)
 
+        # Bazadan kelgan chegirma Decimal — float bilan ayirishda TypeError
+        # bermasligi uchun bir xillashtiriladi
+        discount = float(reservation.discount_amount or 0)
+
         invoice = Invoice(
             hotel_id=hotel_id,
             reservation_id=reservation_id,
@@ -97,8 +101,8 @@ class FinanceService:
             due_date=date.today() + timedelta(days=7),
             subtotal=room_charge,
             tax_amount=0,
-            discount_amount=reservation.discount_amount or 0,
-            total_amount=max(room_charge - (reservation.discount_amount or 0), 0),
+            discount_amount=discount,
+            total_amount=max(room_charge - discount, 0),
             paid_amount=0,
             status="ISSUED",
             created_by=created_by,
