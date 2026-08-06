@@ -58,6 +58,8 @@ class TaskResponse(BaseModel):
     hotel_id: UUID
     branch_id: UUID
     room_id: UUID
+    # Vazifa qaysi bronga bog'langan (chiqish oqimi uchun muhim)
+    reservation_id: UUID | None = None
     task_type: str
     status: str
     priority: str
