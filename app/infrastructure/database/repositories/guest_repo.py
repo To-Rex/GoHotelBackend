@@ -1,9 +1,10 @@
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
 from typing import Sequence
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models.guest import Guest
@@ -55,6 +56,66 @@ class GuestRepository(TenantBaseRepository[Guest]):
         stmt = stmt.order_by(Guest.created_at.desc()).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def find_duplicate(
+        self, passport_number: str | None, phone: str | None
+    ) -> Guest | None:
+        """Passport raqami yoki telefon bo'yicha mavjud mehmonni topadi (global).
+
+        Formatga chidamli: passport harflari/raqamlaridan boshqa belgilar,
+        telefonning esa raqamlardan boshqa belgilari e'tiborga olinmaydi.
+        Telefon oxirgi 9 raqami bo'yicha solishtiriladi — +998 kod bilan
+        yoki kodsiz yozilgani farq qilmaydi.
+        """
+        if passport_number:
+            norm = re.sub(r"[^A-Z0-9]", "", passport_number.upper())
+            if len(norm) >= 5:
+                stmt = (
+                    select(Guest)
+                    .where(
+                        Guest.is_deleted.is_(False),
+                        func.upper(
+                            func.regexp_replace(
+                                func.coalesce(Guest.passport_number, ""),
+                                "[^A-Za-z0-9]",
+                                "",
+                                "g",
+                            )
+                        )
+                        == norm,
+                    )
+                    .order_by(Guest.created_at.desc())
+                    .limit(1)
+                )
+                guest = (await self.session.execute(stmt)).scalars().first()
+                if guest:
+                    return guest
+        if phone:
+            digits = re.sub(r"\D", "", phone)
+            if len(digits) >= 7:
+                tail = digits[-9:]
+                stored = func.regexp_replace(
+                    func.coalesce(Guest.phone, ""), r"\D", "", "g"
+                )
+                cond = (
+                    func.right(stored, 9) == tail
+                    if len(digits) >= 9
+                    else stored == digits
+                )
+                stmt = (
+                    select(Guest)
+                    .where(
+                        Guest.is_deleted.is_(False),
+                        func.length(stored) >= 7,
+                        cond,
+                    )
+                    .order_by(Guest.created_at.desc())
+                    .limit(1)
+                )
+                guest = (await self.session.execute(stmt)).scalars().first()
+                if guest:
+                    return guest
+        return None
 
     async def get_by_passport(
         self, hotel_id: UUID, passport_number: str

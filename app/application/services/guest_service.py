@@ -14,6 +14,31 @@ class GuestService:
         self.repo = GuestRepository(session)
 
     async def create_guest(self, hotel_id: UUID, data: dict) -> Guest:
+        # Dublikatning oldini olish: passport yoki telefon bo'yicha mavjud
+        # mehmon topilsa, yangisini yaratmasdan o'shani qaytaramiz — xato ham
+        # bermaymiz, mijoz avtomatik "tanlangan" bo'ladi. Mavjud mehmonning
+        # BO'SH maydonlarigina yangi ma'lumot bilan to'ldiriladi (ustiga
+        # yozilmaydi — mavjud ma'lumot buzilmasin)
+        existing = await self.repo.find_duplicate(
+            data.get("passport_number"), data.get("phone")
+        )
+        if existing:
+            enrichable = [
+                "phone",
+                "email",
+                "passport_number",
+                "nationality",
+                "birth_date",
+                "id_document_type",
+                "id_document_number",
+                "address",
+            ]
+            for field in enrichable:
+                if not getattr(existing, field, None) and data.get(field):
+                    setattr(existing, field, data[field])
+            await self.session.flush()
+            return existing
+
         guest = Guest(
             hotel_id=hotel_id,
             first_name=data["first_name"],
