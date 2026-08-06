@@ -27,6 +27,7 @@ from app.core.exceptions import (
     NotFoundException,
     ValidationException,
 )
+from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.shop import (
     ShopBatch,
@@ -145,11 +146,18 @@ def _sale_dict(
     s: ShopSale,
     creator: User | None = None,
     reservation: Reservation | None = None,
+    guest: Guest | None = None,
 ) -> dict:
     return {
         "id": str(s.id),
         "reservation_id": str(s.reservation_id) if s.reservation_id else None,
         "reservation_number": reservation.reservation_number if reservation else None,
+        # Bron kimga tegishli — chek tafsilotida mijoz ko'rsatiladi
+        "guest_name": (
+            f"{guest.first_name or ''} {guest.last_name or ''}".strip() or None
+            if guest
+            else None
+        ),
         "total_amount": float(s.total_amount),
         "payment_method": s.payment_method,
         "status": s.status,
@@ -345,9 +353,10 @@ async def list_sales(
 ):
     h_id = _get_hotel_id(current_user, hotel_id)
     stmt = (
-        select(ShopSale, User, Reservation)
+        select(ShopSale, User, Reservation, Guest)
         .join(User, User.id == ShopSale.created_by)
         .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
+        .outerjoin(Guest, Guest.id == Reservation.guest_id)
         .options(selectinload(ShopSale.items))
         .where(ShopSale.hotel_id == h_id)
     )
@@ -360,7 +369,7 @@ async def list_sales(
         stmt = stmt.where(ShopSale.status == status)
     stmt = stmt.order_by(ShopSale.created_at.desc()).limit(limit)
     rows = (await session.execute(stmt)).all()
-    return [_sale_dict(s, u, r) for s, u, r in rows]
+    return [_sale_dict(s, u, r, g) for s, u, r, g in rows]
 
 
 @router.post("/sales")
@@ -460,7 +469,10 @@ async def create_sale(
     await session.flush()
 
     creator = await session.get(User, current_user["id"])
-    return _sale_dict(sale, creator, reservation)
+    guest = (
+        await session.get(Guest, reservation.guest_id) if reservation else None
+    )
+    return _sale_dict(sale, creator, reservation, guest)
 
 
 @router.post("/sales/{sale_id}/pay")
@@ -489,7 +501,10 @@ async def pay_sale(
         if sale.reservation_id
         else None
     )
-    return _sale_dict(sale, creator, reservation)
+    guest = (
+        await session.get(Guest, reservation.guest_id) if reservation else None
+    )
+    return _sale_dict(sale, creator, reservation, guest)
 
 
 @router.delete("/sales/{sale_id}")
