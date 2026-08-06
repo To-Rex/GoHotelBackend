@@ -23,6 +23,7 @@ from app.presentation.api.v1 import (
     problems,
     maintenance,
     expenses,
+    shop,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -50,3 +51,4 @@ api_router.include_router(tasks.router, prefix="/tasks", tags=["Mobile Tasks"])
 api_router.include_router(problems.router, prefix="/problems", tags=["Mobile Problems"])
 api_router.include_router(maintenance.router, prefix="/maintenance", tags=["Maintenance"])
 api_router.include_router(expenses.router, prefix="/expenses", tags=["Expenses"])
+api_router.include_router(shop.router, prefix="/shop", tags=["Shop"])

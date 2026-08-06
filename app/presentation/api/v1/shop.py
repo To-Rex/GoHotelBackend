@@ -1,0 +1,510 @@
+"""Do'kon endpointlari: mahsulotlar, FIFO partiyalar, sotuvlar.
+
+Qoidalar:
+- Ko'rish va sotish — tizimga kirgan barcha xodimlar uchun (xarajatlar kabi);
+  har bir sotuvda kim sotgani (created_by) saqlanadi.
+- Mahsulot/partiya boshqaruvi — ADMIN/SUPER_ADMIN yoki xizmat boshqaruvi
+  ruxsatiga ega xodim (menejer) uchun.
+- Narx partiyada: sotuvda eng eski (FIFO) partiyadan boshlab yechiladi, bitta
+  mahsulot ikki partiyaga bo'linsa chekda ikki qator (har xil narx) bo'ladi.
+- Sotuv bronga biriktirilsa PENDING (to'lov keyin, odatda chiqishda) bo'ladi;
+  oddiy sotuv darhol PAID.
+"""
+from datetime import date, datetime, time
+from typing import Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Path, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.exceptions import (
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
+from app.infrastructure.database.models.reservation import Reservation
+from app.infrastructure.database.models.shop import (
+    ShopBatch,
+    ShopProduct,
+    ShopSale,
+    ShopSaleItem,
+)
+from app.infrastructure.database.models.user import User
+from app.presentation.middleware.auth import get_current_user
+from app.presentation.api.v1._deps import require_active_hotel
+
+router = APIRouter(dependencies=[Depends(require_active_hotel)])
+
+# Mahsulot/partiya boshqaruviga ruxsat beruvchi kodlar — frontenddagi
+# /services boshqaruvi doirasi bilan bir xil
+MANAGE_CODES = (
+    "service.manage",
+    "service.create",
+    "service.update",
+    "hotel_service.manage",
+)
+
+
+def _get_hotel_id(current_user: dict, hotel_id: UUID | None = None) -> UUID:
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+        if not h_id:
+            raise ForbiddenException("Hotel ID required for SUPER_ADMIN")
+        return h_id
+    h_id = current_user.get("hotel_id")
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return h_id
+
+
+def _ensure_manage(current_user: dict) -> None:
+    if current_user["user_type"] in ("ADMIN", "SUPER_ADMIN"):
+        return
+    codes = current_user.get("permissions", [])
+    if not any(c in codes for c in MANAGE_CODES):
+        raise ForbiddenException("Shop management permission required")
+
+
+# ---------------------------------------------------------------- DTO --
+
+
+class ProductCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    category: str | None = Field(default=None, max_length=50)
+    emoji: str | None = Field(default=None, max_length=8)
+
+
+class ProductUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    category: str | None = Field(default=None, max_length=50)
+    emoji: str | None = Field(default=None, max_length=8)
+    is_active: bool | None = None
+
+
+class BatchCreateRequest(BaseModel):
+    quantity: int = Field(..., gt=0, le=100000)
+    sale_price: float = Field(..., gt=0)
+    cost_price: float | None = Field(default=None, ge=0)
+
+
+class SaleItemRequest(BaseModel):
+    product_id: UUID
+    quantity: int = Field(..., gt=0, le=10000)
+
+
+class SaleCreateRequest(BaseModel):
+    items: list[SaleItemRequest] = Field(..., min_length=1)
+    payment_method: Literal["CASH", "CARD", "TRANSFER"] | None = None
+    reservation_id: UUID | None = None
+
+
+class SalePayRequest(BaseModel):
+    payment_method: Literal["CASH", "CARD", "TRANSFER"]
+
+
+# ------------------------------------------------------------ helpers --
+
+
+def _batch_dict(b: ShopBatch) -> dict:
+    return {
+        "id": str(b.id),
+        "quantity": b.quantity,
+        "remaining": b.remaining,
+        "cost_price": float(b.cost_price) if b.cost_price is not None else None,
+        "sale_price": float(b.sale_price),
+        "created_at": b.created_at.isoformat() if b.created_at else None,
+    }
+
+
+def _product_dict(p: ShopProduct, batches: list[ShopBatch]) -> dict:
+    ordered = sorted(batches, key=lambda b: b.created_at or datetime.min)
+    stock = sum(b.remaining for b in ordered)
+    # Joriy narx — FIFO bo'yicha birinchi bo'sh bo'lmagan partiya narxi
+    current = next((b for b in ordered if b.remaining > 0), None)
+    last = ordered[-1] if ordered else None
+    return {
+        "id": str(p.id),
+        "name": p.name,
+        "category": p.category,
+        "emoji": p.emoji,
+        "is_active": p.is_active,
+        "stock": stock,
+        "current_price": float(current.sale_price) if current else (
+            float(last.sale_price) if last else None
+        ),
+        "batches": [_batch_dict(b) for b in ordered],
+    }
+
+
+def _sale_dict(
+    s: ShopSale,
+    creator: User | None = None,
+    reservation: Reservation | None = None,
+) -> dict:
+    return {
+        "id": str(s.id),
+        "reservation_id": str(s.reservation_id) if s.reservation_id else None,
+        "reservation_number": reservation.reservation_number if reservation else None,
+        "total_amount": float(s.total_amount),
+        "payment_method": s.payment_method,
+        "status": s.status,
+        "created_by": str(s.created_by),
+        "created_by_name": (
+            f"{creator.first_name} {creator.last_name}".strip() if creator else None
+        ),
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+        "items": [
+            {
+                "product_id": str(i.product_id),
+                "product_name": i.product_name,
+                "quantity": i.quantity,
+                "unit_price": float(i.unit_price),
+                "total_price": float(i.total_price),
+            }
+            for i in s.items
+        ],
+    }
+
+
+# ----------------------------------------------------------- products --
+
+
+@router.get("/products")
+async def list_products(
+    include_inactive: bool = Query(default=False),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _get_hotel_id(current_user, hotel_id)
+    stmt = (
+        select(ShopProduct)
+        .options(selectinload(ShopProduct.batches))
+        .where(ShopProduct.hotel_id == h_id)
+        .order_by(ShopProduct.name)
+    )
+    if not include_inactive:
+        stmt = stmt.where(ShopProduct.is_active.is_(True))
+    products = (await session.execute(stmt)).scalars().all()
+    return [_product_dict(p, p.batches) for p in products]
+
+
+@router.post("/products")
+async def create_product(
+    data: ProductCreateRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+
+    dup = await session.execute(
+        select(ShopProduct.id).where(
+            ShopProduct.hotel_id == h_id, ShopProduct.name == data.name.strip()
+        )
+    )
+    if dup.first():
+        raise ConflictException(
+            "Product with this name already exists", "SHOP_PRODUCT_EXISTS"
+        )
+
+    product = ShopProduct(
+        hotel_id=h_id,
+        name=data.name.strip(),
+        category=(data.category or "").strip() or None,
+        emoji=(data.emoji or "").strip() or None,
+        created_by=current_user["id"],
+    )
+    session.add(product)
+    await session.flush()
+    return _product_dict(product, [])
+
+
+@router.put("/products/{product_id}")
+async def update_product(
+    product_id: UUID = Path(),
+    data: ProductUpdateRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    product = await session.get(
+        ShopProduct, product_id, options=[selectinload(ShopProduct.batches)]
+    )
+    if not product or product.hotel_id != h_id:
+        raise NotFoundException("Product not found", "SHOP_PRODUCT_NOT_FOUND")
+
+    if data.name is not None and data.name.strip() != product.name:
+        dup = await session.execute(
+            select(ShopProduct.id).where(
+                ShopProduct.hotel_id == h_id,
+                ShopProduct.name == data.name.strip(),
+                ShopProduct.id != product_id,
+            )
+        )
+        if dup.first():
+            raise ConflictException(
+                "Product with this name already exists", "SHOP_PRODUCT_EXISTS"
+            )
+        product.name = data.name.strip()
+    if data.category is not None:
+        product.category = data.category.strip() or None
+    if data.emoji is not None:
+        product.emoji = data.emoji.strip() or None
+    if data.is_active is not None:
+        product.is_active = data.is_active
+    await session.flush()
+    return _product_dict(product, product.batches)
+
+
+@router.delete("/products/{product_id}")
+async def delete_product(
+    product_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    product = await session.get(ShopProduct, product_id)
+    if not product or product.hotel_id != h_id:
+        raise NotFoundException("Product not found", "SHOP_PRODUCT_NOT_FOUND")
+
+    # Sotuv tarixi bor mahsulot o'chirilmaydi (tarix buzilmasin) — faqat
+    # nofaol qilinadi; tarixi yo'q bo'lsa butunlay o'chadi (partiyalari bilan)
+    has_sales = (
+        await session.execute(
+            select(ShopSaleItem.id).where(ShopSaleItem.product_id == product_id).limit(1)
+        )
+    ).first()
+    if has_sales:
+        product.is_active = False
+        await session.flush()
+        return {"message": "Product deactivated (has sales history)", "deactivated": True}
+    await session.delete(product)
+    await session.flush()
+    return {"message": "Product deleted", "deactivated": False}
+
+
+@router.post("/products/{product_id}/batches")
+async def add_batch(
+    product_id: UUID = Path(),
+    data: BatchCreateRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    product = await session.get(
+        ShopProduct, product_id, options=[selectinload(ShopProduct.batches)]
+    )
+    if not product or product.hotel_id != h_id:
+        raise NotFoundException("Product not found", "SHOP_PRODUCT_NOT_FOUND")
+
+    batch = ShopBatch(
+        hotel_id=h_id,
+        product_id=product_id,
+        quantity=data.quantity,
+        remaining=data.quantity,
+        cost_price=data.cost_price,
+        sale_price=data.sale_price,
+        created_by=current_user["id"],
+    )
+    session.add(batch)
+    await session.flush()
+    await session.refresh(product, ["batches"])
+    return _product_dict(product, product.batches)
+
+
+# -------------------------------------------------------------- sales --
+
+
+@router.get("/sales")
+async def list_sales(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    status: str | None = Query(default=None),
+    hotel_id: UUID | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=1000),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _get_hotel_id(current_user, hotel_id)
+    stmt = (
+        select(ShopSale, User, Reservation)
+        .join(User, User.id == ShopSale.created_by)
+        .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
+        .options(selectinload(ShopSale.items))
+        .where(ShopSale.hotel_id == h_id)
+    )
+    if date_from:
+        stmt = stmt.where(ShopSale.created_at >= datetime.combine(date_from, time.min))
+    if date_to:
+        stmt = stmt.where(ShopSale.created_at <= datetime.combine(date_to, time.max))
+    if status:
+        stmt = stmt.where(ShopSale.status == status)
+    stmt = stmt.order_by(ShopSale.created_at.desc()).limit(limit)
+    rows = (await session.execute(stmt)).all()
+    return [_sale_dict(s, u, r) for s, u, r in rows]
+
+
+@router.post("/sales")
+async def create_sale(
+    data: SaleCreateRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _get_hotel_id(current_user, hotel_id)
+
+    reservation: Reservation | None = None
+    if data.reservation_id:
+        reservation = await session.get(Reservation, data.reservation_id)
+        if (
+            not reservation
+            or reservation.hotel_id != h_id
+            or getattr(reservation, "is_deleted", False)
+        ):
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+        if reservation.status not in ("CONFIRMED", "CHECKED_IN"):
+            raise ValidationException(
+                "Sale can be linked only to an active reservation",
+                "RESERVATION_NOT_ACTIVE",
+            )
+    elif not data.payment_method:
+        raise ValidationException(
+            "Payment method is required for a direct sale", "PAYMENT_METHOD_REQUIRED"
+        )
+
+    # Bitta chek ichida bir mahsulot bir necha qatorda kelsa — jamlaymiz
+    wanted: dict[UUID, int] = {}
+    for item in data.items:
+        wanted[item.product_id] = wanted.get(item.product_id, 0) + item.quantity
+
+    sale_items: list[ShopSaleItem] = []
+    total = 0.0
+
+    for product_id, qty in wanted.items():
+        product = await session.get(ShopProduct, product_id)
+        if not product or product.hotel_id != h_id or not product.is_active:
+            raise NotFoundException("Product not found", "SHOP_PRODUCT_NOT_FOUND")
+
+        # FIFO: eng eski partiyalardan boshlab yechamiz. Qatorlar qulflanadi —
+        # parallel sotuvlar bir qoldiqni ikki marta sotolmaydi
+        batches = (
+            (
+                await session.execute(
+                    select(ShopBatch)
+                    .where(ShopBatch.product_id == product_id, ShopBatch.remaining > 0)
+                    .order_by(ShopBatch.created_at)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        available = sum(b.remaining for b in batches)
+        if available < qty:
+            raise ConflictException(
+                f"Insufficient stock for {product.name}: {available} left",
+                "SHOP_INSUFFICIENT_STOCK",
+            )
+
+        left = qty
+        for batch in batches:
+            if left <= 0:
+                break
+            take = min(batch.remaining, left)
+            batch.remaining -= take
+            left -= take
+            unit = float(batch.sale_price)
+            line_total = unit * take
+            total += line_total
+            sale_items.append(
+                ShopSaleItem(
+                    product_id=product_id,
+                    batch_id=batch.id,
+                    product_name=product.name,
+                    quantity=take,
+                    unit_price=unit,
+                    total_price=line_total,
+                )
+            )
+
+    sale = ShopSale(
+        hotel_id=h_id,
+        reservation_id=data.reservation_id,
+        total_amount=total,
+        payment_method=data.payment_method if not data.reservation_id else None,
+        status="PENDING" if data.reservation_id else "PAID",
+        created_by=current_user["id"],
+        items=sale_items,
+    )
+    session.add(sale)
+    await session.flush()
+
+    creator = await session.get(User, current_user["id"])
+    return _sale_dict(sale, creator, reservation)
+
+
+@router.post("/sales/{sale_id}/pay")
+async def pay_sale(
+    sale_id: UUID = Path(),
+    data: SalePayRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _get_hotel_id(current_user, hotel_id)
+    sale = await session.get(ShopSale, sale_id, options=[selectinload(ShopSale.items)])
+    if not sale or sale.hotel_id != h_id:
+        raise NotFoundException("Sale not found", "SHOP_SALE_NOT_FOUND")
+    if sale.status == "PAID":
+        raise ConflictException("Sale is already paid", "SHOP_SALE_ALREADY_PAID")
+
+    sale.status = "PAID"
+    sale.payment_method = data.payment_method
+    await session.flush()
+
+    creator = await session.get(User, sale.created_by)
+    reservation = (
+        await session.get(Reservation, sale.reservation_id)
+        if sale.reservation_id
+        else None
+    )
+    return _sale_dict(sale, creator, reservation)
+
+
+@router.delete("/sales/{sale_id}")
+async def cancel_sale(
+    sale_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Sotuvni bekor qilish (faqat boshqaruv huquqi bilan): qoldiqlar aynan
+    o'z partiyalariga qaytariladi, chek o'chadi."""
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    sale = await session.get(ShopSale, sale_id, options=[selectinload(ShopSale.items)])
+    if not sale or sale.hotel_id != h_id:
+        raise NotFoundException("Sale not found", "SHOP_SALE_NOT_FOUND")
+
+    for item in sale.items:
+        if item.batch_id:
+            batch = await session.get(ShopBatch, item.batch_id)
+            if batch:
+                batch.remaining += item.quantity
+
+    await session.delete(sale)
+    await session.flush()
+    return {"message": "Sale cancelled and stock restored"}
