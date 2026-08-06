@@ -24,6 +24,19 @@ class GuestRepository(TenantBaseRepository[Guest]):
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def get_all_global(
+        self, skip: int = 0, limit: int = 100
+    ) -> Sequence[Guest]:
+        """Global ro'yxat: mehmonxonadan qat'i nazar, yangilari birinchi."""
+        stmt = (
+            select(Guest)
+            .order_by(Guest.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
     async def search(
         self, hotel_id: UUID | None, query: str, skip: int = 0, limit: int = 100
     ) -> list[Guest]:

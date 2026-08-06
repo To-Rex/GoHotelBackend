@@ -1,5 +1,5 @@
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,17 +33,16 @@ class GuestService:
     async def get_guests(
         self, hotel_id: UUID | None, skip: int = 0, limit: int = 100, query: str | None = None
     ) -> list[Guest]:
+        # Mehmonlar bazasi GLOBAL — barcha mehmonxonalar bitta umumiy
+        # ro'yxatni ko'radi (guest.hotel_id faqat kim birinchi kiritganini
+        # bildiradi, filtr sifatida ishlatilmaydi)
         if query:
-            return await self.repo.search(hotel_id, query, skip, limit)
-        if hotel_id is None:
-            return await self.repo.get_all_unscoped(skip, limit)
-        return await self.repo.get_all(hotel_id, skip, limit)
+            return await self.repo.search(None, query, skip, limit)
+        return await self.repo.get_all_global(skip, limit)
 
     async def get_guest(self, guest_id: UUID, hotel_id: UUID | None) -> Guest:
-        if hotel_id is None:
-            guest = await self.repo.get_by_id_unscoped(guest_id)
-        else:
-            guest = await self.repo.get_by_id(guest_id, hotel_id)
+        # Global mehmonlar: qaysi mehmonxonadan so'ralganidan qat'i nazar topiladi
+        guest = await self.repo.get_by_id_unscoped(guest_id)
         if not guest:
             raise NotFoundException("Guest not found", "GUEST_NOT_FOUND")
         return guest
@@ -67,7 +66,11 @@ class GuestService:
         return await self.repo.update(guest, **update_data)
 
     async def soft_delete_guest(self, guest_id: UUID, hotel_id: UUID) -> Guest:
-        guest = await self.repo.soft_delete(guest_id, hotel_id)
+        # Global mehmonlar: o'chirish ham mehmonxonaga bog'lanmagan
+        guest = await self.repo.get_by_id_unscoped(guest_id)
         if not guest:
             raise NotFoundException("Guest not found", "GUEST_NOT_FOUND")
+        guest.is_deleted = True
+        guest.deleted_at = datetime.now(timezone.utc)
+        await self.session.flush()
         return guest

@@ -174,7 +174,9 @@ class ReservationService:
     async def create_reservation(
         self, hotel_id: UUID, branch_id: UUID, data: dict, created_by: UUID
     ) -> Reservation:
-        guest = await self.guest_repo.get_by_id(data["guest_id"], hotel_id)
+        # Mehmonlar globallashgan: boshqa mehmonxonada ro'yxatga olingan
+        # mehmon uchun ham shu mehmonxonada bron qilish mumkin
+        guest = await self.guest_repo.get_by_id_unscoped(data["guest_id"])
         if not guest:
             raise NotFoundException("Guest not found", "GUEST_NOT_FOUND")
 
