@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -91,6 +93,11 @@ class ShopSale(FullMixin, Base):
     payment_method: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="PAID", server_default="PAID"
+    )
+    # To'lov qachon olingan — moliya hisobotida tushum shu sanaga tushadi
+    # (bronga yozilgan sotuv keyinroq to'lansa, o'sha kunning tushumi bo'ladi)
+    paid_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

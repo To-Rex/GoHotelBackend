@@ -10,7 +10,7 @@ Qoidalar:
 - Sotuv bronga biriktirilsa PENDING (to'lov keyin, odatda chiqishda) bo'ladi;
   oddiy sotuv darhol PAID.
 """
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -153,6 +153,7 @@ def _sale_dict(
         "total_amount": float(s.total_amount),
         "payment_method": s.payment_method,
         "status": s.status,
+        "paid_at": s.paid_at.isoformat() if s.paid_at else None,
         "created_by": str(s.created_by),
         "created_by_name": (
             f"{creator.first_name} {creator.last_name}".strip() if creator else None
@@ -333,6 +334,10 @@ async def list_sales(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     status: str | None = Query(default=None),
+    # Sana qaysi maydon bo'yicha filtrlanadi: "created" — sotuv qayd etilgan
+    # vaqt (do'kon sahifasi); "paid" — to'lov olingan vaqt (moliya hisoboti,
+    # bronga yozilib keyin to'langan sotuv o'sha kun tushumiga tushadi)
+    date_by: Literal["created", "paid"] = Query(default="created"),
     hotel_id: UUID | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=1000),
     session: AsyncSession = Depends(get_db),
@@ -346,10 +351,11 @@ async def list_sales(
         .options(selectinload(ShopSale.items))
         .where(ShopSale.hotel_id == h_id)
     )
+    date_col = ShopSale.paid_at if date_by == "paid" else ShopSale.created_at
     if date_from:
-        stmt = stmt.where(ShopSale.created_at >= datetime.combine(date_from, time.min))
+        stmt = stmt.where(date_col >= datetime.combine(date_from, time.min))
     if date_to:
-        stmt = stmt.where(ShopSale.created_at <= datetime.combine(date_to, time.max))
+        stmt = stmt.where(date_col <= datetime.combine(date_to, time.max))
     if status:
         stmt = stmt.where(ShopSale.status == status)
     stmt = stmt.order_by(ShopSale.created_at.desc()).limit(limit)
@@ -446,6 +452,7 @@ async def create_sale(
         total_amount=total,
         payment_method=data.payment_method if not data.reservation_id else None,
         status="PENDING" if data.reservation_id else "PAID",
+        paid_at=None if data.reservation_id else datetime.now(timezone.utc),
         created_by=current_user["id"],
         items=sale_items,
     )
@@ -473,6 +480,7 @@ async def pay_sale(
 
     sale.status = "PAID"
     sale.payment_method = data.payment_method
+    sale.paid_at = datetime.now(timezone.utc)
     await session.flush()
 
     creator = await session.get(User, sale.created_by)
