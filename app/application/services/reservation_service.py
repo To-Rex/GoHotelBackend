@@ -1007,6 +1007,10 @@ class ReservationService:
                 pass
 
         await self.session.flush()
+        # updated_at (server tomonda onupdate) flush'dan keyin eskirgan bo'ladi —
+        # javob serializatsiyasi commit'dan keyin sinxron kontekstda unga murojaat
+        # qilib MissingGreenlet xatosiga yiqilmasligi uchun hozir yangilab olamiz
+        await self.session.refresh(reservation)
         return reservation
 
     async def mark_no_show(
