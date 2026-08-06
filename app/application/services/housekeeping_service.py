@@ -308,6 +308,34 @@ class HousekeepingService:
                 self.session.add(history)
                 await self.session.flush()
 
+            # Resepsiya "mehmon chiqmoqda" deb belgilagan bron: farrosh
+            # tozalashni yakunladi — bron avtomatik CHECKED_OUT qilinadi.
+            # (Oddiy rejadagi tozalash vazifalarida checkout_requested_at bo'sh
+            # bo'ladi — ularda bron holatiga tegilmaydi, avvalgi xatti-harakat
+            # to'liq saqlanadi.)
+            if task.reservation_id:
+                from app.infrastructure.database.models.reservation import Reservation
+
+                reservation = await self.session.get(Reservation, task.reservation_id)
+                if (
+                    reservation is not None
+                    and not getattr(reservation, "is_deleted", False)
+                    and reservation.status == "CHECKED_IN"
+                    and reservation.checkout_requested_at is not None
+                ):
+                    # Aylanma importning oldini olish uchun lokal import
+                    from app.application.services.reservation_service import (
+                        ReservationService,
+                    )
+
+                    await ReservationService(self.session).check_out(
+                        reservation.id,
+                        hotel_id,
+                        user_id,
+                        transition_room=False,
+                        create_cleaning_task=False,
+                    )
+
         # Status admin/manager tomonidan o'zgartirilganda (bekor qilish, qayta ochish
         # va h.k.) biriktirilgan farroshga xabar beramiz. Farroshning o'z amali
         # (o'ziga o'zi status o'zgartirsa) takroriy xabar bermaymiz.

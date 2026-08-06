@@ -921,6 +921,94 @@ class ReservationService:
         await self.session.flush()
         return reservation
 
+    async def request_checkout(
+        self, reservation_id: UUID, hotel_id: UUID, user_id: UUID
+    ) -> Reservation:
+        """Resepsiya "mehmon chiqmoqda" deb belgilaydi.
+
+        Bron darhol yopilmaydi: xona CLEANING holatiga o'tadi, farroshga
+        tozalash vazifasi boradi (push bilan). Farrosh vazifani yakunlagach
+        housekeeping oqimi bron holatini avtomatik CHECKED_OUT qiladi.
+        Takroriy chaqiruv xavfsiz (idempotent) — xato bermaydi.
+        """
+        reservation = await self.repo.get_by_id(reservation_id, hotel_id)
+        if not reservation:
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+        if reservation.status != "CHECKED_IN":
+            raise ValidationException(
+                "Checkout can be requested only for checked-in reservations "
+                f"(status: {reservation.status})",
+                "INVALID_STATUS",
+            )
+
+        room = await self.room_repo.get_by_id(reservation.room_id, hotel_id)
+        if not room:
+            raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
+
+        if reservation.checkout_requested_at is None:
+            reservation.checkout_requested_at = datetime.now(timezone.utc)
+
+        # Mehmon chiqyapti — xona tozalash holatiga o'tadi
+        if room.current_status == "OCCUPIED":
+            room.current_status = "CLEANING"
+            await self.room_repo.update(room, current_status="CLEANING")
+            self.session.add(
+                RoomStatusHistory(
+                    hotel_id=hotel_id,
+                    room_id=room.id,
+                    status="CLEANING",
+                    changed_by=user_id,
+                    notes=f"Checkout requested for {reservation.reservation_number}",
+                )
+            )
+
+        cleaner_id = await self._find_cleaner(hotel_id, reservation.branch_id)
+        task = await self._ensure_cleaning_task(
+            reservation, hotel_id, room, user_id,
+            assigned_to=cleaner_id, active_only=True,
+        )
+        notify_task = task
+        notify_target = cleaner_id if task else None
+        if task is None:
+            # Faol vazifa allaqachon mavjud (masalan, avtomatik ogohlantirish
+            # yaratgan) — o'sha vazifaning farroshiga xabar beramiz;
+            # biriktirilmagan bo'lsa hozir biriktiramiz
+            result = await self.session.execute(
+                select(HousekeepingTask)
+                .where(
+                    HousekeepingTask.reservation_id == reservation.id,
+                    HousekeepingTask.task_type == "CLEANING",
+                    HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
+                )
+                .order_by(HousekeepingTask.created_at.desc())
+            )
+            notify_task = result.scalars().first()
+            if notify_task is not None:
+                if notify_task.assigned_to is None and cleaner_id:
+                    notify_task.assigned_to = cleaner_id
+                notify_target = notify_task.assigned_to
+
+        if notify_task is not None and notify_target:
+            # Push xatosi asosiy oqimni hech qachon buzmasin
+            try:
+                await NotificationService(self.session).notify(
+                    hotel_id=hotel_id,
+                    user_id=notify_target,
+                    title="Mijoz chiqmoqda",
+                    body=(
+                        f"{room.room_number}-xona — mijoz chiqmoqda, xonani "
+                        "tozalab tekshiring. Vazifa yakunlangach bron avtomatik yopiladi"
+                    ),
+                    entity_type="task",
+                    entity_id=notify_task.id,
+                    send_push=True,
+                )
+            except Exception:
+                pass
+
+        await self.session.flush()
+        return reservation
+
     async def mark_no_show(
         self, reservation_id: UUID, hotel_id: UUID, user_id: UUID
     ) -> Reservation:

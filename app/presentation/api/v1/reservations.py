@@ -217,6 +217,31 @@ async def check_out(
     return await service.check_out(reservation_id, h_id, current_user["id"])
 
 
+@router.post("/{reservation_id}/request-checkout", response_model=ReservationResponse)
+async def request_checkout(
+    reservation_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """Resepsiya uchun: mehmon chiqmoqda — farroshga tozalash vazifasi boradi,
+    farrosh yakunlagach bron avtomatik CHECKED_OUT bo'ladi."""
+    if current_user["user_type"] == "SUPER_ADMIN":
+        if not hotel_id:
+            reservation = await session.get(Reservation, reservation_id)
+            if not reservation:
+                raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+            h_id = reservation.hotel_id
+        else:
+            h_id = hotel_id
+    else:
+        h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    service = ReservationService(session)
+    return await service.request_checkout(reservation_id, h_id, current_user["id"])
+
+
 @router.post("/{reservation_id}/cancel", response_model=ReservationResponse)
 async def cancel_reservation(
     reservation_id: UUID = Path(),

@@ -86,6 +86,11 @@ class Reservation(FullMixin, SoftDeleteMixin, Base):
     cancelled_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # Resepsiya "mehmon chiqmoqda" deb belgilagan vaqt: farrosh tozalashni
+    # yakunlagach bron avtomatik CHECKED_OUT qilinadi
+    checkout_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     hotel: Mapped["Hotel"] = relationship("Hotel", back_populates="reservations")
     branch: Mapped["Branch"] = relationship("Branch", back_populates="reservations")

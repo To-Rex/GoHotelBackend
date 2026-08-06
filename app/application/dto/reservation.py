@@ -93,6 +93,8 @@ class ReservationResponse(BaseModel):
     notes: str | None
     cancelled_reason: str | None
     cancelled_at: datetime | None
+    # Resepsiya "mehmon chiqmoqda" deb belgilagan vaqt (chiqish jarayonida)
+    checkout_requested_at: datetime | None = None
     created_by: UUID
     created_at: datetime
     updated_at: datetime
