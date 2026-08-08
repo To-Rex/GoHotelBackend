@@ -220,12 +220,24 @@ async def check_out(
 @router.post("/{reservation_id}/request-checkout", response_model=ReservationResponse)
 async def request_checkout(
     reservation_id: UUID = Path(),
+    self_assign: bool = Query(default=False),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(require_permission("reservation.update")),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Resepsiya uchun: mehmon chiqmoqda — farroshga tozalash vazifasi boradi,
-    farrosh yakunlagach bron avtomatik CHECKED_OUT bo'ladi."""
+    """Chiqish jarayonini boshlash: farroshga tozalash vazifasi boradi,
+    farrosh yakunlagach bron avtomatik CHECKED_OUT bo'ladi.
+
+    Resepsiya/menejer (reservation.update) ham, farroshning o'zi
+    (housekeeping.task.update) ham chaqira oladi. self_assign=true bo'lsa
+    vazifa chaqiruvchining o'ziga biriktiriladi (farrosh tugmasi).
+    """
+    perms = current_user.get("permissions", [])
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN") and not (
+        "reservation.update" in perms or "housekeeping.task.update" in perms
+    ):
+        raise ForbiddenException("Permission required to request checkout")
+
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
             reservation = await session.get(Reservation, reservation_id)
@@ -239,7 +251,12 @@ async def request_checkout(
     if not h_id:
         raise ForbiddenException("Hotel context required")
     service = ReservationService(session)
-    return await service.request_checkout(reservation_id, h_id, current_user["id"])
+    return await service.request_checkout(
+        reservation_id,
+        h_id,
+        current_user["id"],
+        assign_to=current_user["id"] if self_assign else None,
+    )
 
 
 @router.post("/{reservation_id}/cancel", response_model=ReservationResponse)

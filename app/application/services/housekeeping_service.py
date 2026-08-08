@@ -320,7 +320,7 @@ class HousekeepingService:
                 if (
                     reservation is not None
                     and not getattr(reservation, "is_deleted", False)
-                    and reservation.status == "CHECKED_IN"
+                    and reservation.status in ("CHECKED_IN", "CONFIRMED")
                     and reservation.checkout_requested_at is not None
                 ):
                     # Aylanma importning oldini olish uchun lokal import
@@ -334,6 +334,7 @@ class HousekeepingService:
                         user_id,
                         transition_room=False,
                         create_cleaning_task=False,
+                        allowed_statuses=("CHECKED_IN", "CONFIRMED"),
                     )
 
         # Status admin/manager tomonidan o'zgartirilganda (bekor qilish, qayta ochish

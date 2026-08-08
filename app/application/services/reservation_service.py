@@ -922,21 +922,30 @@ class ReservationService:
         return reservation
 
     async def request_checkout(
-        self, reservation_id: UUID, hotel_id: UUID, user_id: UUID
+        self,
+        reservation_id: UUID,
+        hotel_id: UUID,
+        user_id: UUID,
+        assign_to: UUID | None = None,
     ) -> Reservation:
-        """Resepsiya "mehmon chiqmoqda" deb belgilaydi.
+        """Chiqish jarayonini boshlash: resepsiya "mehmon chiqmoqda" deb
+        belgilaydi yoki farrosh "xonani tozalash"ni bosadi.
 
         Bron darhol yopilmaydi: xona CLEANING holatiga o'tadi, farroshga
         tozalash vazifasi boradi (push bilan). Farrosh vazifani yakunlagach
         housekeeping oqimi bron holatini avtomatik CHECKED_OUT qiladi.
-        Takroriy chaqiruv xavfsiz (idempotent) — xato bermaydi.
+        assign_to berilsa (farroshning o'zi bosganda) vazifa aynan unga
+        biriktiriladi. Takroriy chaqiruv xavfsiz (idempotent).
         """
         reservation = await self.repo.get_by_id(reservation_id, hotel_id)
         if not reservation:
             raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
-        if reservation.status != "CHECKED_IN":
+        # CONFIRMED ham qabul qilinadi: kirish rasmiylashtirilmagan bo'lsa-da,
+        # xona ishlatilgan bo'lishi mumkin — farrosh tozalab yakunlagach bron
+        # baribir yopilishi kerak
+        if reservation.status not in ("CHECKED_IN", "CONFIRMED"):
             raise ValidationException(
-                "Checkout can be requested only for checked-in reservations "
+                "Checkout can be requested only for active reservations "
                 f"(status: {reservation.status})",
                 "INVALID_STATUS",
             )
@@ -948,8 +957,9 @@ class ReservationService:
         if reservation.checkout_requested_at is None:
             reservation.checkout_requested_at = datetime.now(timezone.utc)
 
-        # Mehmon chiqyapti — xona tozalash holatiga o'tadi
-        if room.current_status == "OCCUPIED":
+        # Mehmon chiqyapti — xona tozalash holatiga o'tadi (band yoki band
+        # qilingan holatdan)
+        if room.current_status in ("OCCUPIED", "RESERVED"):
             room.current_status = "CLEANING"
             await self.room_repo.update(room, current_status="CLEANING")
             self.session.add(
@@ -962,7 +972,7 @@ class ReservationService:
                 )
             )
 
-        cleaner_id = await self._find_cleaner(hotel_id, reservation.branch_id)
+        cleaner_id = assign_to or await self._find_cleaner(hotel_id, reservation.branch_id)
         task = await self._ensure_cleaning_task(
             reservation, hotel_id, room, user_id,
             assigned_to=cleaner_id, active_only=True,
@@ -984,7 +994,10 @@ class ReservationService:
             )
             notify_task = result.scalars().first()
             if notify_task is not None:
-                if notify_task.assigned_to is None and cleaner_id:
+                if assign_to:
+                    # Farrosh o'zi bosdi — vazifa aynan unga biriktiriladi
+                    notify_task.assigned_to = assign_to
+                elif notify_task.assigned_to is None and cleaner_id:
                     notify_task.assigned_to = cleaner_id
                 notify_target = notify_task.assigned_to
 
