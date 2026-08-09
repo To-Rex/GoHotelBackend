@@ -221,8 +221,8 @@ class ShiftService:
         await self.session.flush()
         return self._serialize(s)
 
-    async def compute_expected_cash(self, s: ShiftSession) -> Decimal:
-        """Sessiya davomidagi naqd harakat: boshlang'ich + tushum - chiqim.
+    async def cash_breakdown(self, s: ShiftSession) -> dict:
+        """Sessiya kassasi tarkibi: boshlang'ich + naqd tushumlar - naqd chiqimlar.
 
         Faqat SESSIYA EGASI bajargan amallar hisoblanadi (created_by) — har
         kim o'z pullariga javob beradi.
@@ -267,7 +267,24 @@ class ShiftService:
         )
         cash_out = _dec(exp.scalar() or 0)
 
-        return _dec(s.opening_cash) + cash_in + shop_in - cash_out
+        opening = _dec(s.opening_cash)
+        return {
+            "opening_cash": opening,
+            "payments_cash": cash_in,
+            "shop_cash": shop_in,
+            "expenses_cash": cash_out,
+            "expected_cash": opening + cash_in + shop_in - cash_out,
+        }
+
+    async def compute_expected_cash(self, s: ShiftSession) -> Decimal:
+        return (await self.cash_breakdown(s))["expected_cash"]
+
+    async def my_expected_cash(self, hotel_id: UUID, current: dict) -> dict:
+        """Joriy xodimning FAOL sessiyasi uchun kassada bo'lishi kerak bo'lgan
+        summa (tarkibi bilan) — topshirish dialogida ko'rsatiladi."""
+        user_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
+        s = await self._my_active(hotel_id, user_id)
+        return {k: float(v) for k, v in (await self.cash_breakdown(s)).items()}
 
     async def _close_with_count(
         self, s: ShiftSession, counted_cash: float, notes: str | None, closed_by: UUID

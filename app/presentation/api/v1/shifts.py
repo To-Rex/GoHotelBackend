@@ -79,6 +79,17 @@ async def get_state(
     return await ShiftService(session).get_state(_hotel_id(current_user), current_user)
 
 
+@router.get("/expected-cash")
+async def expected_cash(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Faol sessiya kassasida bo'lishi kerak bo'lgan summa (tarkibi bilan)."""
+    return await ShiftService(session).my_expected_cash(
+        _hotel_id(current_user), current_user
+    )
+
+
 @router.post("/open")
 async def open_shift(
     data: OpenShiftRequest,
