@@ -36,4 +36,8 @@ class UserProfileResponse(BaseModel):
     phone: str | None
     status: str
     permissions: list[str] = []
+    # Ish jadvali — frontend navbarda ish tugashiga qancha qolganini ko'rsatadi
+    work_hours_per_day: int = 8
+    work_start: str = "09:00"
+    work_end: str = "18:00"
     last_login_at: datetime | None

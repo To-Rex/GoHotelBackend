@@ -188,5 +188,8 @@ class AuthService:
             "phone": user.phone,
             "status": user.status,
             "permissions": permissions,
+            "work_hours_per_day": user.work_hours_per_day or 8,
+            "work_start": user.work_start or "09:00",
+            "work_end": user.work_end or "18:00",
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
         }
