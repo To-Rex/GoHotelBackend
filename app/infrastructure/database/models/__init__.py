@@ -28,6 +28,7 @@ from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.webauthn_credential import WebAuthnCredential
 from app.infrastructure.database.models.webauthn_challenge import WebAuthnChallenge
 from app.infrastructure.database.models.shop import ShopProduct, ShopBatch, ShopSale, ShopSaleItem
+from app.infrastructure.database.models.user_face_profile import UserFaceProfile
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -40,4 +41,5 @@ __all__ = [
     "Amenity", "HotelAmenity", "RoomAmenity",
     "WebAuthnCredential", "WebAuthnChallenge",
     "ShopProduct", "ShopBatch", "ShopSale", "ShopSaleItem",
+    "UserFaceProfile",
 ]

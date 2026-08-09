@@ -24,6 +24,7 @@ from app.presentation.api.v1 import (
     maintenance,
     expenses,
     shop,
+    face,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -52,3 +53,4 @@ api_router.include_router(problems.router, prefix="/problems", tags=["Mobile Pro
 api_router.include_router(maintenance.router, prefix="/maintenance", tags=["Maintenance"])
 api_router.include_router(expenses.router, prefix="/expenses", tags=["Expenses"])
 api_router.include_router(shop.router, prefix="/shop", tags=["Shop"])
+api_router.include_router(face.router, prefix="/auth/face", tags=["Face Login"])
