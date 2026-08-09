@@ -117,9 +117,13 @@ async def face_login(
             best_user = user
 
     if best_user is None or best_score < face_service.MATCH_THRESHOLD:
-        logger.info("Yuz-kirish rad etildi (eng yaxshi o'xshashlik: %.3f)", best_score)
+        logger.warning(
+            "Yuz-kirish rad etildi: BEGONA shaxs urinishi (eng yaxshi o'xshashlik: %.3f)",
+            best_score,
+        )
         raise UnauthorizedException(
-            "Yuz tanilmadi. Yorug'roq joyda qayta uriring yoki parol bilan kiring",
+            "Begona shaxs: bu yuz tizimda ro'yxatdan o'tmagan. "
+            "Parol bilan kiring yoki avval tizimga kirib yuzingizni biriktiring",
             "FACE_NOT_RECOGNIZED",
         )
 
