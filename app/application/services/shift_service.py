@@ -412,8 +412,23 @@ class ShiftService:
         result = await self.session.execute(
             stmt.order_by(ShiftSession.started_at.desc()).limit(limit)
         )
+        rows = result.all()
+
+        # Qabul qilgan / yopgan shaxslarning ism-familiyalari (bitta so'rovda)
+        extra_ids = {s.accepted_by for s, _ in rows if s.accepted_by} | {
+            s.closed_by for s, _ in rows if s.closed_by
+        }
+        names: dict = {}
+        if extra_ids:
+            ures = await self.session.execute(select(User).where(User.id.in_(extra_ids)))
+            names = {u.id: f"{u.first_name} {u.last_name}" for u in ures.scalars()}
+
         out = []
-        for s, u in result.all():
+        for s, u in rows:
             # Tarixda kassa raqamlari ochiq — sessiya allaqachon yopilgan
-            out.append(self._serialize(s, u, include_cash=s.status == "CLOSED"))
+            d = self._serialize(s, u, include_cash=s.status == "CLOSED")
+            d["accepted_at"] = s.accepted_at.isoformat() if s.accepted_at else None
+            d["accepted_by_name"] = names.get(s.accepted_by)
+            d["closed_by_name"] = names.get(s.closed_by)
+            out.append(d)
         return out
