@@ -141,6 +141,86 @@ class AutomationService:
                 await self.session.rollback()
                 logger.exception("Auto-checkout failed for reservation %s", rid)
 
+        # Muddati o'tgan xo'jalik vazifalarini avtomatik yakunlash
+        try:
+            await self._auto_complete_tasks()
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            logger.exception("Auto-complete tasks tick failed")
+
+    async def _auto_complete_tasks(self) -> None:
+        """Belgilangan vaqtdan oshib ketgan OPEN/IN_PROGRESS vazifalarni yopadi.
+
+        Vaqt chegarasi vazifa turiga qarab: mehmonxona sozlamasi (hotels.settings
+        -> hk_auto_complete) yoki standart qiymatlar. Yakunlash odatiy
+        housekeeping oqimi orqali bo'ladi — xona AVAILABLE'ga qaytadi va
+        "chiqish so'ralgan" bron bo'lsa avtomatik CHECKED_OUT bo'ladi.
+        Vazifa "avto yakunlangan" deb belgilanadi.
+        """
+        from app.application.services.housekeeping_service import (
+            HousekeepingService,
+            resolve_auto_complete_minutes,
+        )
+        from app.infrastructure.database.models.hotel import Hotel
+        from app.infrastructure.database.models.housekeeping import HousekeepingTask
+
+        now_utc = datetime.now(timezone.utc)
+        rows = (
+            (
+                await self.session.execute(
+                    select(HousekeepingTask).where(
+                        HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return
+
+        # Mehmonxona sozlamalari keshi (bitta tickda qayta-qayta o'qimaslik uchun)
+        settings_cache: dict = {}
+        for task in rows:
+            try:
+                if task.hotel_id not in settings_cache:
+                    hotel = await self.session.get(Hotel, task.hotel_id)
+                    settings_cache[task.hotel_id] = (hotel.settings if hotel else {}) or {}
+                minutes = resolve_auto_complete_minutes(
+                    settings_cache[task.hotel_id], task.task_type
+                )
+                if minutes <= 0:
+                    continue  # bu tur uchun avto-yakunlash o'chirilgan
+
+                # Boshlangan vazifada — boshlangan vaqtdan, ochiqda — yaratilgandan
+                ref = (
+                    task.started_at
+                    if task.status == "IN_PROGRESS" and task.started_at
+                    else task.created_at
+                )
+                if ref is None:
+                    continue
+                if ref.tzinfo is None:
+                    ref = ref.replace(tzinfo=timezone.utc)
+                if ref + timedelta(minutes=minutes) > now_utc:
+                    continue
+
+                # Odatiy yakunlash oqimi: xona holati va bron hook'lari ishlaydi
+                completed = await HousekeepingService(self.session).update_task_status(
+                    task.id, task.hotel_id, "COMPLETED", task.created_by
+                )
+                completed.auto_completed = True
+                await self.session.flush()
+                logger.info(
+                    "Task %s auto-completed (%s, %d daqiqa o'tdi)",
+                    task.id,
+                    task.task_type,
+                    minutes,
+                )
+            except Exception:
+                logger.exception("Auto-complete failed for task %s", task.id)
+
     async def _process(self, reservation: Reservation, now: datetime) -> None:
         moment = self._checkout_moment(reservation)
         lead = timedelta(minutes=settings.HOUSEKEEPING_LEAD_MINUTES)

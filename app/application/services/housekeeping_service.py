@@ -36,6 +36,32 @@ TASK_STATUS_TITLES = {
     "CANCELLED": "Vazifa bekor qilindi",
 }
 
+# Vazifa turlari bo'yicha AVTOMATIK YAKUNLASH vaqtlari (daqiqalarda) —
+# xodim qo'lda yakunlamasa scheduler shu vaqtdan keyin o'zi yopadi.
+# Mehmonxona bo'yicha o'zgartirilishi mumkin (hotels.settings JSON'ida
+# "hk_auto_complete" kaliti ostida saqlanadi). 0 — o'chirilgan.
+HK_AUTO_COMPLETE_DEFAULTS: dict[str, int] = {
+    "CLEANING": 20,
+    "DEEP_CLEANING": 30,
+    "MAINTENANCE": 60,
+    "INSPECTION": 15,
+    "TURN_DOWN": 15,
+}
+
+HK_SETTINGS_KEY = "hk_auto_complete"
+
+
+def resolve_auto_complete_minutes(
+    hotel_settings: dict | None, task_type: str
+) -> int:
+    """Mehmonxona sozlamasi (bo'lsa) yoki standart qiymatni qaytaradi."""
+    overrides = (hotel_settings or {}).get(HK_SETTINGS_KEY) or {}
+    try:
+        value = int(overrides.get(task_type, HK_AUTO_COMPLETE_DEFAULTS.get(task_type, 0)))
+        return max(value, 0)
+    except (TypeError, ValueError):
+        return HK_AUTO_COMPLETE_DEFAULTS.get(task_type, 0)
+
 
 class HousekeepingService:
     def __init__(self, session: AsyncSession):

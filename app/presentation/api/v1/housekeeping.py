@@ -1,12 +1,19 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
+from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
-from app.application.services.housekeeping_service import HousekeepingService
+from app.application.services.housekeeping_service import (
+    HousekeepingService,
+    HK_AUTO_COMPLETE_DEFAULTS,
+    HK_SETTINGS_KEY,
+    resolve_auto_complete_minutes,
+)
 from app.application.dto.housekeeping import (
     TaskCreateRequest,
     TaskUpdateRequest,
@@ -28,6 +35,66 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
     return hotel_id
+
+
+class AutoCompleteSettingsRequest(BaseModel):
+    """Vazifa turlari bo'yicha avtomatik yakunlash vaqtlari (daqiqa, 0=o'chirilgan)."""
+
+    durations: dict[str, int] = Field(default_factory=dict)
+
+
+@router.get("/auto-complete-settings")
+async def get_auto_complete_settings(
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Joriy mehmonxonaning avto-yakunlash vaqtlari (standartlar bilan birga)."""
+    h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel_settings = (hotel.settings if hotel else {}) or {}
+    durations = {
+        task_type: resolve_auto_complete_minutes(hotel_settings, task_type)
+        for task_type in HK_AUTO_COMPLETE_DEFAULTS
+    }
+    return {"durations": durations, "defaults": HK_AUTO_COMPLETE_DEFAULTS}
+
+
+@router.put("/auto-complete-settings")
+async def save_auto_complete_settings(
+    data: AutoCompleteSettingsRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Avto-yakunlash vaqtlarini saqlash — faqat ADMIN/SUPER_ADMIN."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException("Only admins can change auto-complete settings")
+    h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+
+    cleaned: dict[str, int] = {}
+    for task_type in HK_AUTO_COMPLETE_DEFAULTS:
+        if task_type in data.durations:
+            value = int(data.durations[task_type])
+            if value < 0 or value > 1440:
+                raise ForbiddenException("Duration must be between 0 and 1440 minutes")
+            cleaned[task_type] = value
+
+    # JSONB ustunini YANGI dict bilan almashtiramiz — SQLAlchemy o'zgarishni
+    # sezishi uchun (ichki mutatsiya kuzatilmaydi)
+    new_settings = dict(hotel.settings or {})
+    new_settings[HK_SETTINGS_KEY] = {**(new_settings.get(HK_SETTINGS_KEY) or {}), **cleaned}
+    hotel.settings = new_settings
+    await session.flush()
+
+    durations = {
+        task_type: resolve_auto_complete_minutes(new_settings, task_type)
+        for task_type in HK_AUTO_COMPLETE_DEFAULTS
+    }
+    return {"durations": durations, "defaults": HK_AUTO_COMPLETE_DEFAULTS}
 
 
 @router.get("/tasks", response_model=list[TaskResponse])

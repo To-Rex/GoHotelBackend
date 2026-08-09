@@ -5,6 +5,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -54,6 +55,11 @@ class HousekeepingTask(FullMixin, Base):
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Belgilangan vaqt ichida qo'lda yakunlanmagani uchun scheduler tomonidan
+    # avtomatik yopilgan vazifa — ilovada "avto" belgisi bilan ko'rsatiladi
+    auto_completed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

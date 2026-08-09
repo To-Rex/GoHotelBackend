@@ -68,6 +68,8 @@ class TaskResponse(BaseModel):
     scheduled_date: date | None
     started_at: datetime | None
     completed_at: datetime | None
+    # Scheduler tomonidan avtomatik yakunlangan (qo'lda emas)
+    auto_completed: bool = False
     created_by: UUID
     created_at: datetime
     photo_count: int = 0
