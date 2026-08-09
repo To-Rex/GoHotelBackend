@@ -50,6 +50,12 @@ class ForceCloseRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=1000)
 
 
+class CorrectShiftRequest(BaseModel):
+    counted_cash: float = Field(..., ge=0)
+    # Izoh majburiy — tuzatish sababi auditda qolishi shart
+    note: str = Field(..., min_length=3, max_length=1000)
+
+
 @router.get("/settings")
 async def get_settings(
     session: AsyncSession = Depends(get_db),
@@ -154,6 +160,23 @@ async def force_close(
         data.session_id,
         data.counted_cash,
         data.notes,
+    )
+
+
+@router.put("/{session_id}/correct")
+async def correct_shift(
+    session_id: UUID,
+    data: CorrectShiftRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Yopilgan sessiya sanalgan summasini tuzatish (admin/menejer, izoh shart)."""
+    return await ShiftService(session).correct_session(
+        _hotel_id(current_user),
+        current_user,
+        session_id,
+        data.counted_cash,
+        data.note,
     )
 
 

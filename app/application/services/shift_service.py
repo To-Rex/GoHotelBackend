@@ -98,6 +98,8 @@ class ShiftService:
             data["expected_cash"] = float(s.expected_cash) if s.expected_cash is not None else None
             data["counted_cash"] = float(s.counted_cash) if s.counted_cash is not None else None
             data["cash_diff"] = float(s.cash_diff) if s.cash_diff is not None else None
+            # Tuzatishlar tarixi — tahrirlangani va avvalgi qiymatlar ko'rinadi
+            data["corrections"] = s.corrections or []
         return data
 
     async def _open_sessions(self, hotel_id: UUID, branch_id: UUID | None) -> list[tuple[ShiftSession, User]]:
@@ -409,6 +411,57 @@ class ShiftService:
         s.notes = f"{s.notes}\n{note}" if s.notes else note
         if notes:
             s.notes += f": {notes}"
+        await self.session.flush()
+        return self._serialize(s, include_cash=True)
+
+    async def correct_session(
+        self,
+        hotel_id: UUID,
+        current: dict,
+        session_id: UUID,
+        counted_cash: float,
+        note: str,
+    ) -> dict:
+        """Yopilgan sessiyadagi sanalgan summani tuzatish (admin/menejer).
+
+        Audit: eski qiymat o'chirilmaydi — har bir tuzatish (eski/yangi,
+        kim, qachon, izoh) corrections ro'yxatiga qo'shib boriladi.
+        """
+        is_admin = current["user_type"] in ("ADMIN", "SUPER_ADMIN")
+        has_perm = "shift.force_close" in (current.get("permissions") or [])
+        if not (is_admin or has_perm):
+            raise ForbiddenException("Tuzatish huquqi yo'q", "FORBIDDEN")
+
+        s = await self.session.get(ShiftSession, session_id)
+        if not s or s.hotel_id != hotel_id:
+            raise NotFoundException("Sessiya topilmadi", "SHIFT_NOT_FOUND")
+        if s.status != "CLOSED":
+            raise ConflictException(
+                "Faqat yopilgan sessiyani tuzatish mumkin", "SHIFT_NOT_CLOSED"
+            )
+
+        corrector_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
+        corrector = await self.session.get(User, corrector_id)
+
+        old_counted = float(s.counted_cash) if s.counted_cash is not None else None
+        old_diff = float(s.cash_diff) if s.cash_diff is not None else None
+        s.counted_cash = _dec(counted_cash)
+        s.cash_diff = _dec(counted_cash) - _dec(s.expected_cash or 0)
+
+        entry = {
+            "old_counted_cash": old_counted,
+            "new_counted_cash": float(counted_cash),
+            "old_diff": old_diff,
+            "new_diff": float(s.cash_diff),
+            "corrected_by": str(corrector_id),
+            "corrected_by_name": (
+                f"{corrector.first_name} {corrector.last_name}" if corrector else None
+            ),
+            "corrected_at": datetime.now(timezone.utc).isoformat(),
+            "note": note,
+        }
+        # YANGI ro'yxat — JSONB o'zgarishini SQLAlchemy sezishi uchun
+        s.corrections = [*(s.corrections or []), entry]
         await self.session.flush()
         return self._serialize(s, include_cash=True)
 

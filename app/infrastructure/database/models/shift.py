@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -66,5 +67,7 @@ class ShiftSession(FullMixin, Base):
     )
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Tuzatishlar tarixi (audit): [{old/new qiymatlar, kim, qachon, izoh}, ...]
+    corrections: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
