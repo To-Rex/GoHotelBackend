@@ -29,6 +29,7 @@ from app.infrastructure.database.models.webauthn_credential import WebAuthnCrede
 from app.infrastructure.database.models.webauthn_challenge import WebAuthnChallenge
 from app.infrastructure.database.models.shop import ShopProduct, ShopBatch, ShopSale, ShopSaleItem
 from app.infrastructure.database.models.user_face_profile import UserFaceProfile
+from app.infrastructure.database.models.shift import ShiftSession
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -42,4 +43,5 @@ __all__ = [
     "WebAuthnCredential", "WebAuthnChallenge",
     "ShopProduct", "ShopBatch", "ShopSale", "ShopSaleItem",
     "UserFaceProfile",
+    "ShiftSession",
 ]

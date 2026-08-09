@@ -91,6 +91,8 @@ PERMISSIONS = [
     ("expense.view", "View Expenses", "expense", "View hotel expenses"),
     ("expense.create", "Create Expense", "expense", "Record hotel expenses"),
     ("expense.delete", "Delete Expense", "expense", "Delete hotel expenses"),
+    # Shift module (smena va kassa)
+    ("shift.force_close", "Force Close Shift", "shift", "Force close another employee's shift/cash session"),
 ]
 
 
