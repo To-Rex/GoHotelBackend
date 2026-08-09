@@ -14,6 +14,10 @@ class EmployeeCreateRequest(BaseModel):
     email: str | None = None
     phone: str | None = None
     hire_date: date | None = None
+    # Ish jadvali: kunlik soat (default 8) va vaqt oralig'i "HH:MM"
+    work_hours_per_day: int | None = Field(None, ge=1, le=24)
+    work_start: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
+    work_end: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
 
 
 class EmployeeUpdateRequest(BaseModel):
@@ -23,6 +27,9 @@ class EmployeeUpdateRequest(BaseModel):
     phone: str | None = None
     branch_id: UUID | None = None
     status: str | None = None
+    work_hours_per_day: int | None = Field(None, ge=1, le=24)
+    work_start: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
+    work_end: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
 
 
 class AdminCreateRequest(BaseModel):
@@ -55,6 +62,9 @@ class UserResponse(BaseModel):
     phone: str | None
     status: str
     hire_date: date | None
+    work_hours_per_day: int = 8
+    work_start: str = "09:00"
+    work_end: str = "18:00"
     termination_date: date | None
     is_deleted: bool
     last_login_at: datetime | None

@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import UserStatus, UserType
@@ -32,6 +32,16 @@ class User(FullMixin, SoftDeleteMixin, Base):
         String(20), nullable=False, default=UserStatus.ACTIVE.value
     )
     hire_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # Ish jadvali: kunlik ish soati va ish vaqti oralig'i ("HH:MM" ko'rinishida)
+    work_hours_per_day: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=8, server_default="8"
+    )
+    work_start: Mapped[str] = mapped_column(
+        String(5), nullable=False, default="09:00", server_default="09:00"
+    )
+    work_end: Mapped[str] = mapped_column(
+        String(5), nullable=False, default="18:00", server_default="18:00"
+    )
     termination_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

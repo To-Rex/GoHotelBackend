@@ -50,6 +50,9 @@ class UserService:
             email=data.get("email"),
             phone=data.get("phone"),
             hire_date=data.get("hire_date"),
+            work_hours_per_day=data.get("work_hours_per_day") or 8,
+            work_start=data.get("work_start") or "09:00",
+            work_end=data.get("work_end") or "18:00",
             status="ACTIVE",
         )
         return await self.repo.create(user)
@@ -72,7 +75,10 @@ class UserService:
 
     async def update_employee(self, user_id: UUID, hotel_id: UUID, data: dict) -> User:
         user = await self.get_employee(user_id, hotel_id)
-        updatable = ["first_name", "last_name", "email", "phone", "branch_id", "status"]
+        updatable = [
+            "first_name", "last_name", "email", "phone", "branch_id", "status",
+            "work_hours_per_day", "work_start", "work_end",
+        ]
         update_data = {k: v for k, v in data.items() if k in updatable and v is not None}
         return await self.repo.update(user, **update_data)
 
