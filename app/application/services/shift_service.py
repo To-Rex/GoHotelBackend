@@ -10,7 +10,7 @@ Qoidalar (jahon amaliyoti: Opera PMS / r_keeper uslubida):
      admin/menejer majburiy yopadi.
   5. Rejim va kunlik kesim vaqti mehmonxona sozlamalarida (hotels.settings).
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -122,7 +122,12 @@ class ShiftService:
     async def get_state(self, hotel_id: UUID, current: dict) -> dict:
         """Joriy foydalanuvchi uchun to'liq smena holati (frontend guard uchun)."""
         settings = await self.get_settings(hotel_id)
-        state: dict = {**settings, "my_session": None, "blocking_session": None}
+        state: dict = {
+            **settings,
+            "my_session": None,
+            "blocking_session": None,
+            "accepted_session": None,
+        }
         if settings["mode"] != "cash":
             return state
 
@@ -130,13 +135,39 @@ class ShiftService:
         branch_id = current.get("branch_id")
         branch_uuid = UUID(branch_id) if isinstance(branch_id, str) else branch_id
 
+        my_obj: ShiftSession | None = None
         sessions = await self._open_sessions(hotel_id, branch_uuid)
         for s, u in sessions:
             if s.user_id == user_id:
                 state["my_session"] = self._serialize(s, u)
+                my_obj = s
             elif state["blocking_session"] is None:
                 # Boshqa xodimning yopilmagan sessiyasi — qattiq blok manbai
                 state["blocking_session"] = self._serialize(s, u)
+
+        # Men QABUL QILIB OLGAN avvalgi smena — joriy sessiyam davomida
+        # hisobot sifatida ko'rsatiladi (summalar avvalgi xodim hisobida).
+        if my_obj is not None:
+            stmt = (
+                select(ShiftSession, User)
+                .join(User, User.id == ShiftSession.user_id)
+                .where(
+                    ShiftSession.hotel_id == hotel_id,
+                    ShiftSession.accepted_by == user_id,
+                    ShiftSession.status == "CLOSED",
+                    # Faqat joriy sessiyam ochilishi bilan qabul qilingani
+                    ShiftSession.accepted_at >= my_obj.started_at - timedelta(minutes=2),
+                )
+                .order_by(ShiftSession.accepted_at.desc())
+                .limit(1)
+            )
+            row = (await self.session.execute(stmt)).first()
+            if row:
+                prev = self._serialize(row[0], row[1], include_cash=True)
+                prev["accepted_at"] = (
+                    row[0].accepted_at.isoformat() if row[0].accepted_at else None
+                )
+                state["accepted_session"] = prev
         return state
 
     # ------------------------------------------------------------------ actions
