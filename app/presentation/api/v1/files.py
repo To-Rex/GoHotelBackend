@@ -78,6 +78,50 @@ async def upload_file_endpoint(
     }
 
 
+@router.get("/by-entity")
+async def list_entity_files(
+    entity_type: str = Query(),
+    entity_id: UUID | None = Query(default=None),
+    category: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Obyekt(lar)ga biriktirilgan fayllar ro'yxati yuklab olish havolalari
+    bilan — masalan, xodim suratlari (entity_type="user", category="photo").
+    entity_id berilmasa mehmonxonaning shu turdagi barcha fayllari qaytadi
+    (eng yangilari birinchi) — ro'yxatlarda avatarlar uchun bitta so'rov kifoya.
+    """
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    stmt = select(FileAttachment).where(
+        FileAttachment.entity_type == entity_type,
+        FileAttachment.is_deleted.is_(False),
+    )
+    if h_id is not None:
+        stmt = stmt.where(FileAttachment.hotel_id == h_id)
+    if entity_id is not None:
+        stmt = stmt.where(FileAttachment.entity_id == entity_id)
+    if category:
+        stmt = stmt.where(FileAttachment.category == category)
+    stmt = stmt.order_by(FileAttachment.created_at.desc()).limit(limit)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": str(a.id),
+            "entity_id": str(a.entity_id),
+            "category": a.category,
+            "mime_type": a.mime_type,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "download_url": get_presigned_url(a.minio_bucket, a.minio_path),
+        }
+        for a in rows
+    ]
+
+
 @router.get("/{file_id}")
 async def get_file(
     file_id: UUID = Path(),
