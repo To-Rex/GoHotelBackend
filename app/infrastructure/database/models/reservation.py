@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import BookingType, PaymentStatus, ReservationStatus
@@ -91,6 +92,8 @@ class Reservation(FullMixin, SoftDeleteMixin, Base):
     checkout_requested_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Xona ko'chirishlar auditi: [{qaysi xonadan/xonaga, kim, qachon, narx}, ...]
+    room_moves: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     hotel: Mapped["Hotel"] = relationship("Hotel", back_populates="reservations")
     branch: Mapped["Branch"] = relationship("Branch", back_populates="reservations")

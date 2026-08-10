@@ -63,6 +63,10 @@ class ReservationCancelRequest(BaseModel):
     reason: str | None = None
 
 
+class MoveRoomRequest(BaseModel):
+    new_room_id: UUID
+
+
 class ReservationServiceAddRequest(BaseModel):
     hotel_service_id: UUID
     quantity: int = Field(default=1, ge=1)
@@ -95,6 +99,8 @@ class ReservationResponse(BaseModel):
     cancelled_at: datetime | None
     # Resepsiya "mehmon chiqmoqda" deb belgilagan vaqt (chiqish jarayonida)
     checkout_requested_at: datetime | None = None
+    # Xona ko'chirishlar auditi (kim, qachon, qaysi xonadan qaysinisiga)
+    room_moves: list | None = None
     created_by: UUID
     created_at: datetime
     updated_at: datetime

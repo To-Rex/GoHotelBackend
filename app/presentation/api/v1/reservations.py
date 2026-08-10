@@ -9,7 +9,12 @@ from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.branch import Branch
-from app.application.services.reservation_service import ReservationService
+from app.application.services.reservation_service import (
+    ReservationService,
+    RESERVATION_EDIT_KEY,
+    DEFAULT_EDIT_WINDOW_MINUTES,
+    resolve_edit_window_minutes,
+)
 from app.application.dto.reservation import (
     ReservationCreateRequest,
     ReservationUpdateRequest,
@@ -17,6 +22,7 @@ from app.application.dto.reservation import (
     ReservationServiceAddRequest,
     ReservationResponse,
     ReservationDetailResponse,
+    MoveRoomRequest,
 )
 from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
@@ -32,6 +38,49 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
     return hotel_id
+
+
+# DIQQAT: literal marshrutlar /{reservation_id} dan OLDIN turishi shart
+@router.get("/edit-window-settings")
+async def get_edit_window_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Bron tahriri (xona almashtirish) vaqt oynasi — daqiqalarda, 0 = cheklovsiz."""
+    from app.infrastructure.database.models.hotel import Hotel
+
+    h_id = _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    return {
+        "window_minutes": resolve_edit_window_minutes(hotel.settings if hotel else None),
+        "default_minutes": DEFAULT_EDIT_WINDOW_MINUTES,
+    }
+
+
+@router.put("/edit-window-settings")
+async def save_edit_window_settings(
+    window_minutes: int = Query(ge=0, le=1440),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Vaqt oynasini saqlash — faqat ADMIN/SUPER_ADMIN."""
+    from app.infrastructure.database.models.hotel import Hotel
+
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException("Faqat administrator o'zgartira oladi")
+    h_id = _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — o'zgarish sezilishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[RESERVATION_EDIT_KEY] = {"window_minutes": int(window_minutes)}
+    hotel.settings = new_settings
+    await session.flush()
+    return {
+        "window_minutes": int(window_minutes),
+        "default_minutes": DEFAULT_EDIT_WINDOW_MINUTES,
+    }
 
 
 @router.get("/", response_model=list[ReservationResponse])
@@ -169,6 +218,19 @@ async def update_reservation(
     return await service.update_reservation(
         reservation_id, h_id, data.model_dump(exclude_none=True)
     )
+
+
+@router.post("/{reservation_id}/move-room", response_model=ReservationResponse)
+async def move_room(
+    reservation_id: UUID = Path(),
+    data: MoveRoomRequest = ...,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """Bronni boshqa xonaga ko'chirish (vaqt oynasi va bandlik tekshiruvi bilan)."""
+    h_id = _get_hotel_id(current_user)
+    service = ReservationService(session)
+    return await service.move_room(h_id, reservation_id, data.new_room_id, current_user)
 
 
 @router.post("/{reservation_id}/check-in", response_model=ReservationResponse)

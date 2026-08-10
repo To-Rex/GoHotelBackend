@@ -3,7 +3,13 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundException, ConflictException, ValidationException, BadRequestException
+from app.core.exceptions import (
+    NotFoundException,
+    ConflictException,
+    ValidationException,
+    BadRequestException,
+    ForbiddenException,
+)
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.room_status_history import RoomStatusHistory
@@ -19,6 +25,20 @@ from app.infrastructure.database.models.service import HotelService
 from app.application.services.notification_service import NotificationService
 from app.shared.utils import generate_code
 from sqlalchemy import func, select
+
+
+# Bron tahriri (xona almashtirish) uchun vaqt oynasi sozlamasi:
+# hotels.settings JSONB ichida saqlanadi. 0 — cheklovsiz.
+RESERVATION_EDIT_KEY = "reservation_edit"
+DEFAULT_EDIT_WINDOW_MINUTES = 10
+
+
+def resolve_edit_window_minutes(hotel_settings: dict | None) -> int:
+    raw = (hotel_settings or {}).get(RESERVATION_EDIT_KEY) or {}
+    value = raw.get("window_minutes")
+    if isinstance(value, (int, float)) and 0 <= value <= 1440:
+        return int(value)
+    return DEFAULT_EDIT_WINDOW_MINUTES
 
 
 class ReservationService:
@@ -170,6 +190,192 @@ class ReservationService:
             # Chegirma ham butun so'mga yaxlitlanadi — tiyinli qoldiq qolmasligi uchun
             final_discount_amount = float(round(room_charge * final_discount_percent / 100))
         return final_discount_amount, final_discount_percent
+
+    async def move_room(
+        self,
+        hotel_id: UUID,
+        reservation_id: UUID,
+        new_room_id: UUID,
+        current: dict,
+    ) -> Reservation:
+        """Bronni boshqa xonaga ko'chirish.
+
+        Qoidalar:
+          - faqat PENDING/CONFIRMED/CHECKED_IN bronlar;
+          - oddiy xodim uchun bron yaratilgandan keyingi N daqiqa ichida
+            (sozlamalardan, default 10; 0 — cheklovsiz); ADMIN/SUPER_ADMIN
+            istalgan payt ko'chira oladi;
+          - yangi xona bronning QOLGAN davri uchun bo'sh bo'lishi shart;
+          - narx: kirilmagan bronda butun davr yangi xona narxida; CHECKED_IN
+            da yashab bo'lingan kunlar eski narxda, qolganlari yangi narxda
+            (soatlik bron — yangi xonaning yaxlit narxi). Farq bron balansida
+            qo'shimcha to'lov/kamayish sifatida ko'rinadi;
+          - tozalash vazifasi AVTOMATIK ochilmaydi;
+          - har ko'chirish room_moves auditiga yoziladi (o'chirilmaydi).
+        """
+        reservation = await self.repo.get_by_id(reservation_id, hotel_id)
+        if not reservation:
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+        if reservation.status not in ("PENDING", "CONFIRMED", "CHECKED_IN"):
+            raise ValidationException(
+                f"Faqat faol bronni ko'chirish mumkin (holat: {reservation.status})",
+                "INVALID_STATUS",
+            )
+        if reservation.room_id == new_room_id:
+            raise ValidationException("Bron allaqachon shu xonada", "SAME_ROOM")
+
+        # Tahrir oynasi: oddiy xodim faqat belgilangan daqiqalar ichida
+        is_admin = current.get("user_type") in ("ADMIN", "SUPER_ADMIN")
+        if not is_admin:
+            from app.infrastructure.database.models.hotel import Hotel
+            hotel = await self.session.get(Hotel, hotel_id)
+            window = resolve_edit_window_minutes(hotel.settings if hotel else None)
+            if window > 0 and reservation.created_at:
+                created = reservation.created_at
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                elapsed_min = (
+                    datetime.now(timezone.utc) - created
+                ).total_seconds() / 60
+                if elapsed_min > window:
+                    raise ForbiddenException(
+                        f"Tahrirlash muddati tugagan ({window} daqiqa). "
+                        "Administratorga murojaat qiling.",
+                        "EDIT_WINDOW_EXPIRED",
+                    )
+
+        old_room = await self.room_repo.get_by_id(reservation.room_id, hotel_id)
+        new_room = await self.room_repo.get_by_id(new_room_id, hotel_id)
+        if not new_room:
+            raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
+        if new_room.current_status in ("MAINTENANCE", "INSPECTION", "OUT_OF_SERVICE"):
+            raise ConflictException(
+                f"{new_room.room_number}-xona hozir band emas holatda "
+                f"({new_room.current_status})",
+                "ROOM_NOT_AVAILABLE",
+            )
+
+        booking_type = reservation.booking_type or "DAILY"
+        now_utc = datetime.now(timezone.utc)
+        local_today = (
+            now_utc + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
+        ).date()
+
+        # Qolgan davr uchun bandlik tekshiruvi
+        eff_check_in = reservation.check_in_date
+        eff_in_dt = reservation.check_in_datetime
+        if reservation.status == "CHECKED_IN":
+            if booking_type == "DAILY":
+                eff_check_in = min(
+                    max(reservation.check_in_date, local_today),
+                    reservation.check_out_date - timedelta(days=1),
+                )
+            elif reservation.check_in_datetime and reservation.check_out_datetime:
+                if now_utc < reservation.check_out_datetime:
+                    eff_in_dt = max(reservation.check_in_datetime, now_utc)
+
+        available = await self.repo.check_room_availability(
+            new_room_id,
+            eff_check_in,
+            reservation.check_out_date,
+            exclude_reservation_id=reservation.id,
+            booking_type=booking_type,
+            check_in_datetime=eff_in_dt,
+            check_out_datetime=reservation.check_out_datetime,
+        )
+        if not available:
+            raise ConflictException(
+                f"{new_room.room_number}-xona bu davr uchun band",
+                "ROOM_ALREADY_BOOKED",
+            )
+
+        # --- Narx qayta hisobi ---
+        old_base = await self._get_room_base_price(reservation.room_id, hotel_id)
+        new_base = await self._get_room_base_price(new_room_id, hotel_id)
+
+        if booking_type == "HOURLY":
+            # Soatlik narx davomiylikka bog'liq emas — yangi xonaning yaxlit narxi
+            new_charge = float(round(new_base))
+        else:
+            nights = max((reservation.check_out_date - reservation.check_in_date).days, 1)
+            if reservation.status == "CHECKED_IN":
+                stayed = (local_today - reservation.check_in_date).days
+                stayed = max(0, min(stayed, nights))
+                new_charge = float(old_base) * stayed + float(new_base) * (nights - stayed)
+            else:
+                new_charge = float(new_base) * nights
+
+        discount_amount, _ = await self._compute_discount(
+            new_charge,
+            reservation.discount_amount or 0,
+            reservation.discount_percent or 0,
+        )
+        new_room_total = max(new_charge - discount_amount, 0)
+
+        # Invoice bilan sinxronlash: xizmat qatorlari saqlanadi, xona qatori yangilanadi
+        service_total = 0.0
+        invoice = await self.invoice_repo.get_by_reservation(reservation_id, hotel_id)
+        if invoice:
+            line_items = await self.invoice_repo.get_line_items(invoice.id)
+            duration_label = "hour(s)" if booking_type == "HOURLY" else "night(s)"
+            duration = 1 if booking_type == "HOURLY" else max(
+                (reservation.check_out_date - reservation.check_in_date).days, 1
+            )
+            for li in line_items:
+                if li.line_type == "ROOM_CHARGE":
+                    li.description = (
+                        f"Room charge: {new_room.room_number} "
+                        f"({duration} {duration_label} @ {new_base})"
+                    )
+                    li.quantity = duration
+                    li.unit_price = new_base
+                    li.total_price = new_charge
+                elif li.line_type == "SERVICE_CHARGE":
+                    service_total += float(li.total_price or 0)
+            invoice.subtotal = new_charge
+            invoice.discount_amount = discount_amount
+            invoice.total_amount = max(new_room_total + service_total, 0)
+
+        old_total = float(reservation.total_amount or 0)
+        new_total = max(new_room_total + service_total, 0)
+        reservation.total_amount = new_total
+
+        # To'lov holati yangi jamiga ko'ra
+        paid = float(reservation.paid_amount or 0)
+        if paid <= 0:
+            reservation.payment_status = "UNPAID"
+        elif paid >= new_total:
+            reservation.payment_status = "PAID"
+        else:
+            reservation.payment_status = "PARTIALLY_PAID"
+
+        # Xonalar holati (tozalash vazifasi OCHILMAYDI — resepsiya xohlasa qo'lda ochadi)
+        if old_room and old_room.current_status in ("OCCUPIED", "RESERVED"):
+            old_room.current_status = "AVAILABLE"
+        new_room.current_status = (
+            "OCCUPIED" if reservation.status == "CHECKED_IN" else "RESERVED"
+        )
+
+        # Audit yozuvi — kim, qachon, qayerdan qayerga, narx o'zgarishi
+        mover = await self.user_repo.get_by_id(UUID(str(current["id"])))
+        entry = {
+            "from_room_id": str(reservation.room_id),
+            "from_room_number": old_room.room_number if old_room else None,
+            "to_room_id": str(new_room_id),
+            "to_room_number": new_room.room_number,
+            "old_total": old_total,
+            "new_total": new_total,
+            "moved_by": str(current["id"]),
+            "moved_by_name": f"{mover.first_name} {mover.last_name}" if mover else None,
+            "moved_at": now_utc.isoformat(),
+        }
+        reservation.room_moves = [*(reservation.room_moves or []), entry]
+        reservation.room_id = new_room_id
+
+        await self.session.flush()
+        # Javob serializatsiyasida eskirgan atributlar muammo bermasligi uchun
+        await self.session.refresh(reservation)
+        return reservation
 
     async def create_reservation(
         self, hotel_id: UUID, branch_id: UUID, data: dict, created_by: UUID
