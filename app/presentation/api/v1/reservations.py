@@ -202,6 +202,16 @@ async def update_reservation(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("reservation.update")),
 ):
+    # Bron tafsilotlarini TAHRIRLASH — faqat menejer (shift.force_close) yoki
+    # administrator. Qabulxona xodimi tahrirlay olmaydi (xonani almashtirish
+    # esa /move-room orqali vaqt oynasi ichida mumkin).
+    if current_user["user_type"] == "EMPLOYEE" and "shift.force_close" not in (
+        current_user.get("permissions") or []
+    ):
+        raise ForbiddenException(
+            "Bron tafsilotlarini tahrirlash faqat menejer yoki administrator uchun",
+            "FORBIDDEN",
+        )
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
             reservation = await session.get(Reservation, reservation_id)
