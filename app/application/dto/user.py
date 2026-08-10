@@ -27,6 +27,9 @@ class EmployeeUpdateRequest(BaseModel):
     phone: str | None = None
     branch_id: UUID | None = None
     status: str | None = None
+    # Login/parolni faqat ADMIN/SUPER_ADMIN o'zgartira oladi (endpointda tekshiriladi)
+    username: str | None = Field(None, min_length=3, max_length=100)
+    password: str | None = Field(None, min_length=6)
     work_hours_per_day: int | None = Field(None, ge=1, le=24)
     work_start: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
     work_end: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")

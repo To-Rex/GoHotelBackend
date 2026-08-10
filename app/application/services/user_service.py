@@ -75,6 +75,19 @@ class UserService:
 
     async def update_employee(self, user_id: UUID, hotel_id: UUID, data: dict) -> User:
         user = await self.get_employee(user_id, hotel_id)
+
+        # Login almashtirish — bandlik tekshiruvi bilan
+        new_username = data.get("username")
+        if new_username and new_username != user.username:
+            existing = await self.repo.get_by_username(new_username)
+            if existing and existing.id != user.id:
+                raise ConflictException("Username already exists", "USERNAME_EXISTS")
+            user.username = new_username
+
+        # Parol almashtirish — hash bilan saqlanadi
+        if data.get("password"):
+            user.password_hash = hash_password(data["password"])
+
         updatable = [
             "first_name", "last_name", "email", "phone", "branch_id", "status",
             "work_hours_per_day", "work_start", "work_end",

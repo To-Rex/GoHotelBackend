@@ -94,6 +94,14 @@ async def update_employee(
         h_id = _get_hotel_id(current_user)
     if not h_id:
         raise ForbiddenException("Hotel context required")
+    # Login/parol almashtirish — faqat administrator huquqi
+    if (data.username or data.password) and current_user["user_type"] not in (
+        "ADMIN",
+        "SUPER_ADMIN",
+    ):
+        raise ForbiddenException(
+            "Faqat administrator login va parolni o'zgartira oladi", "FORBIDDEN"
+        )
     service = UserService(session)
     return await service.update_employee(employee_id, h_id, data.model_dump(exclude_none=True))
 
