@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -106,6 +107,35 @@ class ShopSale(FullMixin, Base):
     items: Mapped[list["ShopSaleItem"]] = relationship(
         "ShopSaleItem", back_populates="sale", cascade="all, delete-orphan"
     )
+
+
+class ShopWriteoff(FullMixin, Base):
+    """Ombor harakati: spisaniye yoki inventarizatsiya tuzatishi.
+
+    quantity ISHORALI: musbat — ombordan chiqarilgan (kamomad/spisaniye),
+    manfiy — inventarizatsiyada ortiqcha topilib qoldiqqa qo'shilgan.
+    Chiqarish sotuvdagi kabi FIFO tartibida partiyalardan yechiladi.
+    """
+
+    __tablename__ = "shop_writeoffs"
+
+    hotel_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shop_products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # WRITEOFF — qo'lda spisaniye; INVENTORY — inventarizatsiya tuzatishi
+    kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="WRITEOFF", server_default="WRITEOFF"
+    )
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    product: Mapped["ShopProduct"] = relationship("ShopProduct")
 
 
 class ShopSaleItem(FullMixin, Base):

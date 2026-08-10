@@ -34,6 +34,7 @@ from app.infrastructure.database.models.shop import (
     ShopProduct,
     ShopSale,
     ShopSaleItem,
+    ShopWriteoff,
 )
 from app.infrastructure.database.models.user import User
 from app.presentation.middleware.auth import get_current_user
@@ -531,3 +532,243 @@ async def cancel_sale(
     await session.delete(sale)
     await session.flush()
     return {"message": "Sale cancelled and stock restored"}
+
+
+# ---------------------------------------------------------- warehouse --
+
+
+class WriteoffRequest(BaseModel):
+    quantity: int = Field(..., gt=0, le=100000)
+    # Sabab majburiy — spisaniye auditsiz bo'lmaydi
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+class InventoryRequest(BaseModel):
+    counted: int = Field(..., ge=0, le=1000000)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+async def _fifo_deduct(
+    session: AsyncSession, product_id: UUID, qty: int, product_name: str
+) -> None:
+    """Sotuvdagi kabi FIFO tartibida (qulflab) partiyalardan yechish."""
+    batches = (
+        (
+            await session.execute(
+                select(ShopBatch)
+                .where(ShopBatch.product_id == product_id, ShopBatch.remaining > 0)
+                .order_by(ShopBatch.created_at)
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    available = sum(b.remaining for b in batches)
+    if available < qty:
+        raise ConflictException(
+            f"Insufficient stock for {product_name}: {available} left",
+            "SHOP_INSUFFICIENT_STOCK",
+        )
+    left = qty
+    for batch in batches:
+        if left <= 0:
+            break
+        take = min(batch.remaining, left)
+        batch.remaining -= take
+        left -= take
+
+
+@router.post("/products/{product_id}/writeoff")
+async def writeoff_product(
+    product_id: UUID = Path(),
+    data: WriteoffRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Spisaniye: singan/muddati o'tgan mahsulotni sabab bilan chiqarish."""
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    product = await session.get(
+        ShopProduct, product_id, options=[selectinload(ShopProduct.batches)]
+    )
+    if not product or product.hotel_id != h_id:
+        raise NotFoundException("Product not found", "SHOP_PRODUCT_NOT_FOUND")
+
+    await _fifo_deduct(session, product_id, data.quantity, product.name)
+    session.add(
+        ShopWriteoff(
+            hotel_id=h_id,
+            product_id=product_id,
+            kind="WRITEOFF",
+            quantity=data.quantity,
+            reason=data.reason,
+            created_by=current_user["id"],
+        )
+    )
+    await session.flush()
+    await session.refresh(product, ["batches"])
+    return _product_dict(product, product.batches)
+
+
+@router.post("/products/{product_id}/inventory")
+async def inventory_product(
+    product_id: UUID = Path(),
+    data: InventoryRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Inventarizatsiya: haqiqiy sanalgan qoldiq kiritiladi, farq tizimda
+    tuzatiladi (kamomad — FIFO chiqarish, ortiqcha — oxirgi narxda kirim)."""
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    product = await session.get(
+        ShopProduct, product_id, options=[selectinload(ShopProduct.batches)]
+    )
+    if not product or product.hotel_id != h_id:
+        raise NotFoundException("Product not found", "SHOP_PRODUCT_NOT_FOUND")
+
+    stock = sum(b.remaining for b in product.batches)
+    diff = data.counted - stock
+    if diff == 0:
+        return {"diff": 0, "product": _product_dict(product, product.batches)}
+
+    reason = (
+        data.reason
+        or f"Inventarizatsiya: tizimda {stock} ta, sanaldi {data.counted} ta"
+    )
+    if diff < 0:
+        # Kamomad — yetishmayotgan miqdor ombordan chiqariladi
+        await _fifo_deduct(session, product_id, -diff, product.name)
+    else:
+        # Ortiqcha — oxirgi partiya narxlari bilan qoldiqqa qo'shiladi
+        ordered = sorted(
+            product.batches, key=lambda b: b.created_at or datetime.min
+        )
+        last = ordered[-1] if ordered else None
+        if not last:
+            raise ValidationException(
+                "Mahsulotda partiya yo'q — qoldiqni 'Kirim' orqali qo'shing",
+                "SHOP_NO_BATCH",
+            )
+        session.add(
+            ShopBatch(
+                hotel_id=h_id,
+                product_id=product_id,
+                quantity=diff,
+                remaining=diff,
+                cost_price=last.cost_price,
+                sale_price=last.sale_price,
+                created_by=current_user["id"],
+            )
+        )
+
+    # quantity ishorali: musbat — chiqarildi (kamomad), manfiy — qo'shildi
+    session.add(
+        ShopWriteoff(
+            hotel_id=h_id,
+            product_id=product_id,
+            kind="INVENTORY",
+            quantity=-diff,
+            reason=reason,
+            created_by=current_user["id"],
+        )
+    )
+    await session.flush()
+    await session.refresh(product, ["batches"])
+    return {"diff": diff, "product": _product_dict(product, product.batches)}
+
+
+@router.get("/warehouse/movements")
+async def warehouse_movements(
+    limit: int = Query(default=100, ge=1, le=500),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Ombor harakatlari jurnali: kirim, sotuv, spisaniye, inventarizatsiya."""
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    movements: list[dict] = []
+
+    # Kirimlar (partiyalar)
+    rows = (
+        await session.execute(
+            select(ShopBatch, ShopProduct.name, User)
+            .join(ShopProduct, ShopProduct.id == ShopBatch.product_id)
+            .join(User, User.id == ShopBatch.created_by)
+            .where(ShopBatch.hotel_id == h_id)
+            .order_by(ShopBatch.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    for b, pname, u in rows:
+        movements.append(
+            {
+                "type": "KIRIM",
+                "product_name": pname,
+                "quantity": b.quantity,
+                "amount": float(b.sale_price) * b.quantity,
+                "note": (
+                    f"Tannarx: {float(b.cost_price):,.0f}"
+                    if b.cost_price is not None
+                    else None
+                ),
+                "user_name": f"{u.first_name} {u.last_name}",
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+            }
+        )
+
+    # Sotuvlar (chek qatorlari)
+    rows = (
+        await session.execute(
+            select(ShopSaleItem, ShopSale, User)
+            .join(ShopSale, ShopSale.id == ShopSaleItem.sale_id)
+            .join(User, User.id == ShopSale.created_by)
+            .where(ShopSale.hotel_id == h_id)
+            .order_by(ShopSaleItem.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    for i, s, u in rows:
+        movements.append(
+            {
+                "type": "SOTUV",
+                "product_name": i.product_name,
+                "quantity": -i.quantity,
+                "amount": float(i.total_price),
+                "note": "Bronga yozilgan" if s.status == "PENDING" else None,
+                "user_name": f"{u.first_name} {u.last_name}",
+                "created_at": i.created_at.isoformat() if i.created_at else None,
+            }
+        )
+
+    # Spisaniye va inventarizatsiya
+    rows = (
+        await session.execute(
+            select(ShopWriteoff, ShopProduct.name, User)
+            .join(ShopProduct, ShopProduct.id == ShopWriteoff.product_id)
+            .join(User, User.id == ShopWriteoff.created_by)
+            .where(ShopWriteoff.hotel_id == h_id)
+            .order_by(ShopWriteoff.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    for w, pname, u in rows:
+        movements.append(
+            {
+                "type": "SPISANIYE" if w.kind == "WRITEOFF" else "INVENTAR",
+                "product_name": pname,
+                # Bazada musbat=chiqarilgan; jurnalda chiqim manfiy ko'rsatiladi
+                "quantity": -w.quantity,
+                "amount": None,
+                "note": w.reason,
+                "user_name": f"{u.first_name} {u.last_name}",
+                "created_at": w.created_at.isoformat() if w.created_at else None,
+            }
+        )
+
+    movements.sort(key=lambda m: m["created_at"] or "", reverse=True)
+    return movements[:limit]
