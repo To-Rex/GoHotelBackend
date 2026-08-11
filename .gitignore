@@ -2,3 +2,5 @@
 secrets/
 *.serviceaccount.json
 *-firebase-adminsdk-*.json
+
+graphify-out/
