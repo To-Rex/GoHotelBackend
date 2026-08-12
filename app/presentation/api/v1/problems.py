@@ -1,7 +1,7 @@
 from uuid import UUID
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Path
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile, File, Form, Path
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -208,3 +208,33 @@ async def _get_user_name(session: AsyncSession, user_id: UUID) -> str:
     if user:
         return f"{user.first_name} {user.last_name}"
     return ""
+
+
+@router.patch("/{problem_id}/status")
+async def update_problem_status(
+    problem_id: UUID = Path(),
+    payload: dict = Body(...),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Muammo holatini o'zgartirish — admin yoki boshqaruv ruxsatiga ega
+    xodim (menejer) uchun. Mobil boshqaruv paneli ishlatadi."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN") and (
+        "housekeeping.task.update" not in (current_user.get("permissions") or [])
+    ):
+        raise ForbiddenException(
+            "Muammo holatini faqat admin yoki menejer o'zgartira oladi"
+        )
+
+    status = str(payload.get("status", "")).upper()
+    if status not in ("OPEN", "IN_PROGRESS", "RESOLVED"):
+        raise HTTPException(status_code=422, detail="Invalid status")
+
+    h_id = _get_hotel_id(current_user)
+    if current_user["user_type"] == "SUPER_ADMIN" and hotel_id:
+        h_id = hotel_id
+
+    service = ProblemsService(session)
+    problem = await service.update_problem_status(problem_id, h_id, status)
+    return {"id": str(problem.id), "status": problem.status}

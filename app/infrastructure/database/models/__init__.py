@@ -30,6 +30,7 @@ from app.infrastructure.database.models.webauthn_challenge import WebAuthnChalle
 from app.infrastructure.database.models.shop import ShopProduct, ShopBatch, ShopSale, ShopSaleItem, ShopWriteoff
 from app.infrastructure.database.models.user_face_profile import UserFaceProfile
 from app.infrastructure.database.models.shift import ShiftSession
+from app.infrastructure.database.models.staff_message import StaffMessage
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -44,4 +45,5 @@ __all__ = [
     "ShopProduct", "ShopBatch", "ShopSale", "ShopSaleItem", "ShopWriteoff",
     "UserFaceProfile",
     "ShiftSession",
+    "StaffMessage",
 ]

@@ -26,6 +26,7 @@ from app.presentation.api.v1 import (
     shop,
     face,
     shifts,
+    messages,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -56,3 +57,4 @@ api_router.include_router(expenses.router, prefix="/expenses", tags=["Expenses"]
 api_router.include_router(shop.router, prefix="/shop", tags=["Shop"])
 api_router.include_router(face.router, prefix="/auth/face", tags=["Face Login"])
 api_router.include_router(shifts.router, prefix="/shifts", tags=["Shifts"])
+api_router.include_router(messages.router, prefix="/messages", tags=["Staff Messages"])
