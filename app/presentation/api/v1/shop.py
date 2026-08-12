@@ -28,6 +28,7 @@ from app.core.exceptions import (
     ValidationException,
 )
 from app.infrastructure.database.models.guest import Guest
+from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.shop import (
     ShopBatch,
@@ -109,6 +110,48 @@ class SalePayRequest(BaseModel):
     payment_method: Literal["CASH", "CARD", "TRANSFER"]
 
 
+# ------------------------------------------- chek dizayni (har mehmonxonaga) --
+
+RECEIPT_SETTINGS_KEY = "receipt"
+
+# Standart chek dizayni — sozlanmagan mehmonxonalar uchun shu ishlatiladi
+DEFAULT_RECEIPT_SETTINGS = {
+    "title": "",  # bo'sh -> mehmonxona nomi
+    "subtitle": "Mini-do'kon cheki",
+    "header_note": "",  # sarlavha ostidagi qator (manzil/telefon)
+    "footer_text": "Xaridingiz uchun rahmat!",
+    "footer_note": "",  # eng pastki mayda izoh (Wi-Fi, aksiya ...)
+    "show_check_no": True,
+    "show_seller": True,
+    "show_guest": True,
+    "paper": 80,  # termal qog'oz kengligi: 58 yoki 80 mm
+    "qr_url": "",  # bo'sh bo'lmasa chek oxirida QR-kod
+}
+
+
+class ReceiptSettingsRequest(BaseModel):
+    title: str = Field(default="", max_length=64)
+    subtitle: str = Field(default="", max_length=64)
+    header_note: str = Field(default="", max_length=200)
+    footer_text: str = Field(default="", max_length=120)
+    footer_note: str = Field(default="", max_length=200)
+    show_check_no: bool = True
+    show_seller: bool = True
+    show_guest: bool = True
+    paper: Literal[58, 80] = 80
+    qr_url: str = Field(default="", max_length=300)
+
+
+def _resolve_receipt(settings: dict | None) -> dict:
+    """Saqlangan dizaynni standart qiymatlar bilan to'ldiradi
+    (faqat ma'lum kalitlar olinadi — begona kalitlar o'tkazilmaydi)."""
+    saved = (settings or {}).get(RECEIPT_SETTINGS_KEY) or {}
+    return {
+        **DEFAULT_RECEIPT_SETTINGS,
+        **{k: v for k, v in saved.items() if k in DEFAULT_RECEIPT_SETTINGS},
+    }
+
+
 # ------------------------------------------------------------ helpers --
 
 
@@ -179,6 +222,44 @@ def _sale_dict(
             for i in s.items
         ],
     }
+
+
+# ------------------------------------------------------ chek dizayni --
+
+
+@router.get("/receipt-settings")
+async def get_receipt_settings(
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Chek dizayni — sotuvchi ham o'qiy oladi (chek chiqarish uchun kerak)."""
+    h_id = _get_hotel_id(current_user, hotel_id)
+    hotel = await session.get(Hotel, h_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found")
+    return _resolve_receipt(hotel.settings)
+
+
+@router.put("/receipt-settings")
+async def save_receipt_settings(
+    data: ReceiptSettingsRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Dizaynni saqlash — faqat admin/menejer (do'kon boshqaruvi ruxsati)."""
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    hotel = await session.get(Hotel, h_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found")
+    # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[RECEIPT_SETTINGS_KEY] = data.model_dump()
+    hotel.settings = new_settings
+    await session.flush()
+    return _resolve_receipt(new_settings)
 
 
 # ----------------------------------------------------------- products --
