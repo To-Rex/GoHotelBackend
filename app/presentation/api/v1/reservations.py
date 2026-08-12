@@ -23,6 +23,7 @@ from app.application.dto.reservation import (
     ReservationResponse,
     ReservationDetailResponse,
     MoveRoomRequest,
+    SettlePaymentRequest,
 )
 from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
@@ -241,6 +242,28 @@ async def move_room(
     h_id = _get_hotel_id(current_user)
     service = ReservationService(session)
     return await service.move_room(h_id, reservation_id, data.new_room_id, current_user)
+
+
+@router.post("/{reservation_id}/settle-payment", response_model=ReservationResponse)
+async def settle_payment(
+    reservation_id: UUID = Path(),
+    data: SettlePaymentRequest = ...,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("finance.payment.create")),
+):
+    """Bron balansi bo'yicha hisob-kitob: qo'shimcha to'lov (PAY, qisman ham
+    mumkin) yoki ortiqcha to'langanni qaytarish (REFUND) — asosan xona
+    almashtirishdan keyingi narx farqini yopish uchun."""
+    h_id = _get_hotel_id(current_user)
+    service = ReservationService(session)
+    return await service.settle_payment(
+        h_id,
+        reservation_id,
+        data.amount,
+        data.payment_method,
+        data.direction,
+        UUID(str(current_user["id"])),
+    )
 
 
 @router.post("/{reservation_id}/check-in", response_model=ReservationResponse)

@@ -154,6 +154,7 @@ class ReservationService:
         amount: float,
         payment_method: str,
         created_by: UUID,
+        notes: str = "Payment at reservation creation",
     ) -> Payment:
         hotel_code = await self._get_hotel_code(hotel_id)
         payment_number = generate_code("PAY", hotel_code)
@@ -165,7 +166,7 @@ class ReservationService:
             amount=amount,
             payment_method=payment_method,
             payment_date=date.today(),
-            notes="Payment at reservation creation",
+            notes=notes,
             created_by=created_by,
             created_at=datetime.now(timezone.utc),
         )
@@ -374,6 +375,135 @@ class ReservationService:
 
         await self.session.flush()
         # Javob serializatsiyasida eskirgan atributlar muammo bermasligi uchun
+        await self.session.refresh(reservation)
+        return reservation
+
+    async def settle_payment(
+        self,
+        hotel_id: UUID,
+        reservation_id: UUID,
+        amount: float,
+        payment_method: str,
+        direction: str,
+        user_id: UUID,
+    ) -> Reservation:
+        """Bron balansi bo'yicha hisob-kitob (asosan xona almashtirishdan keyin).
+
+        PAY — qo'shimcha to'lov: qisman yoki to'liq, qarzdan oshmasligi kerak.
+        Xohlasa umuman to'lamaydi — bron PARTIALLY_PAID/UNPAID (qarz) qoladi.
+        REFUND — arzonroq xonaga o'tishda ortiqcha to'langanni qaytarish:
+        MANFIY Payment yoziladi, shu tufayli kunlik tushum, kassa-smena va
+        moliya hisobotlarida qaytarim minus bilan o'z-o'zidan aks etadi.
+        """
+        reservation = await self.repo.get_by_id(reservation_id, hotel_id)
+        if not reservation:
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+        if reservation.status in ("CANCELLED", "NO_SHOW"):
+            raise ValidationException(
+                "Bekor qilingan bron bo'yicha hisob-kitob qilinmaydi", "INVALID_STATUS"
+            )
+
+        amount = float(amount)
+        total = float(reservation.total_amount or 0)
+        paid = float(reservation.paid_amount or 0)
+        invoice = await self.invoice_repo.get_by_reservation(reservation_id, hotel_id)
+
+        if direction == "PAY":
+            remaining = total - paid
+            if remaining <= 0:
+                raise ValidationException(
+                    "Bu bronda to'lanadigan qarz yo'q", "NO_BALANCE_DUE"
+                )
+            if amount > remaining + 0.01:
+                raise ValidationException(
+                    f"Summa qarzdan oshib ketdi (qarz: {remaining:.0f} So'm)",
+                    "AMOUNT_EXCEEDS_BALANCE",
+                )
+            if not invoice:
+                # To'lovsiz yaratilgan bronda hisob-faktura hali yo'q — hozir ochiladi
+                base_price = await self._get_room_base_price(reservation.room_id, hotel_id)
+                booking_type = reservation.booking_type or "DAILY"
+                duration = (
+                    1
+                    if booking_type == "HOURLY"
+                    else max(
+                        (reservation.check_out_date - reservation.check_in_date).days, 1
+                    )
+                )
+                discount_amount = float(reservation.discount_amount or 0)
+                invoice = await self._create_invoice(
+                    hotel_id=hotel_id,
+                    reservation_id=reservation.id,
+                    guest_id=reservation.guest_id,
+                    room_id=reservation.room_id,
+                    base_price=base_price,
+                    room_charge=total + discount_amount,
+                    discount_amount=discount_amount,
+                    total_amount=total,
+                    booking_type=booking_type,
+                    duration=duration,
+                    created_by=user_id,
+                    status="ISSUED",
+                )
+            await self._create_payment(
+                hotel_id=hotel_id,
+                invoice=invoice,
+                amount=amount,
+                payment_method=payment_method,
+                created_by=user_id,
+                notes="Qo'shimcha to'lov (bron balansi bo'yicha)",
+            )
+            new_paid = paid + amount
+        elif direction == "REFUND":
+            overpaid = paid - total
+            if overpaid <= 0:
+                raise ValidationException(
+                    "Qaytariladigan ortiqcha to'lov yo'q", "NO_OVERPAYMENT"
+                )
+            if amount > overpaid + 0.01:
+                raise ValidationException(
+                    f"Summa ortiqcha to'lovdan oshib ketdi (ortiqcha: {overpaid:.0f} So'm)",
+                    "AMOUNT_EXCEEDS_OVERPAYMENT",
+                )
+            if not invoice:
+                raise ValidationException(
+                    "Bron uchun hisob-faktura topilmadi", "INVOICE_NOT_FOUND"
+                )
+            hotel_code = await self._get_hotel_code(hotel_id)
+            refund = Payment(
+                hotel_id=hotel_id,
+                invoice_id=invoice.id,
+                payment_number=generate_code("PAY", hotel_code),
+                # Manfiy summa — hisobotlar va kassa kutilgan summasida
+                # qaytarim sifatida avtomatik aks etadi
+                amount=-amount,
+                payment_method=payment_method,
+                payment_date=date.today(),
+                notes="Qaytarim (xona almashtirish balansi)",
+                created_by=user_id,
+                created_at=datetime.now(timezone.utc),
+            )
+            self.session.add(refund)
+            new_paid = paid - amount
+            invoice.paid_amount = new_paid
+            if new_paid >= float(invoice.total_amount):
+                invoice.status = "PAID"
+            elif new_paid > 0:
+                invoice.status = "PARTIALLY_PAID"
+            else:
+                invoice.status = "ISSUED"
+        else:
+            raise ValidationException("Noto'g'ri yo'nalish", "INVALID_DIRECTION")
+
+        reservation.paid_amount = new_paid
+        if new_paid <= 0:
+            reservation.payment_status = "UNPAID"
+        elif new_paid >= total:
+            reservation.payment_status = "PAID"
+        else:
+            reservation.payment_status = "PARTIALLY_PAID"
+
+        await self.session.flush()
         await self.session.refresh(reservation)
         return reservation
 

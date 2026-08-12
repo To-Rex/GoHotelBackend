@@ -67,6 +67,18 @@ class MoveRoomRequest(BaseModel):
     new_room_id: UUID
 
 
+class SettlePaymentRequest(BaseModel):
+    """Bron balansi bo'yicha hisob-kitob (xona almashtirishdan keyin):
+    PAY — qo'shimcha to'lov (qisman ham mumkin), REFUND — ortiqcha
+    to'langan summani qaytarish."""
+
+    amount: float = Field(gt=0)
+    payment_method: Literal[
+        "CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"
+    ]
+    direction: Literal["PAY", "REFUND"]
+
+
 class ReservationServiceAddRequest(BaseModel):
     hotel_service_id: UUID
     quantity: int = Field(default=1, ge=1)
