@@ -26,12 +26,13 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
 
 
 # Menejer (EMPLOYEE turi, permission.assign ruxsatiga ega xodim) faqat
-# "Farrosh" roli doirasidagi ruxsatlarni bera/olib tashlay oladi.
-# ADMIN va SUPER_ADMIN uchun cheklov yo'q. Frontenddagi Farrosh shabloni
-# bilan bir xil to'plam (housekeeping.cleaning.* naqshi bilan).
+# "Farrosh" va "Texnik xizmat" rollari doirasidagi ruxsatlarni bera/olib
+# tashlay oladi. ADMIN va SUPER_ADMIN uchun cheklov yo'q. Frontenddagi
+# Farrosh + Texnik xizmat shablonlari bilan bir xil to'plam.
 MANAGER_ASSIGNABLE_PATTERNS = (
     "room.view",
     "room.status.update",
+    "housekeeping.task.create",
     "housekeeping.task.update",
     "housekeeping.cleaning.*",
 )
@@ -63,7 +64,8 @@ async def _ensure_manager_scope(
     for perm in result.scalars().all():
         if not _is_manager_assignable(perm.code):
             raise ForbiddenException(
-                "Menejer faqat Farrosh roli doirasidagi ruxsatlarni o'zgartira oladi",
+                "Menejer faqat Farrosh va Texnik xizmat rollari doirasidagi "
+                "ruxsatlarni o'zgartira oladi",
                 "MANAGER_SCOPE_LIMITED",
             )
 
