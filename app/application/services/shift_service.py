@@ -145,7 +145,13 @@ class ShiftService:
                 my_obj = s
             elif state["blocking_session"] is None:
                 # Boshqa xodimning yopilmagan sessiyasi — qattiq blok manbai
-                state["blocking_session"] = self._serialize(s, u)
+                blocked = self._serialize(s, u)
+                # Topshirilayotgan smenada sanab topshirilgan summa qabul
+                # qiluvchiga ko'rsatiladi — u qancha pul olayotganini bilishi
+                # va sanab tekshirishi kerak (bu uning boshlang'ich kassasi)
+                if s.status == "PENDING_HANDOVER" and s.counted_cash is not None:
+                    blocked["counted_cash"] = float(s.counted_cash)
+                state["blocking_session"] = blocked
 
         # Men QABUL QILIB OLGAN avvalgi smena — joriy sessiyam davomida
         # hisobot sifatida ko'rsatiladi (summalar avvalgi xodim hisobida).
@@ -341,7 +347,12 @@ class ShiftService:
 
     async def accept_shift(self, hotel_id: UUID, current: dict, password: str) -> dict:
         """Keyingi xodim topshirilgan smenani O'Z PAROLI bilan qabul qiladi
-        (to'rt ko'z tamoyili) va 0 so'mlik yangi sessiya ochiladi."""
+        (to'rt ko'z tamoyili).
+
+        Kassadagi pul JISMONAN qabul qiluvchiga o'tadi — shuning uchun avvalgi
+        xodim sanab topshirgan summa (counted_cash) yangi sessiyaning
+        BOSHLANG'ICH kassasi bo'ladi. Shunda keyingi topshirishda kutilgan
+        summa = qabul qilingan pul + o'z tushumlari bo'lib to'g'ri chiqadi."""
         user_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         user = await self.session.get(User, user_id)
         if not user or not verify_password(password, user.password_hash):
@@ -362,14 +373,14 @@ class ShiftService:
         pending.accepted_by = user_id
         pending.accepted_at = datetime.now(timezone.utc)
 
-        # Qabul qiluvchining yangi sessiyasi — 0 dan boshlanadi
+        # Qabul qiluvchining yangi sessiyasi — topshirilgan kassa bilan boshlanadi
         new_s = ShiftSession(
             hotel_id=hotel_id,
             branch_id=branch_uuid,
             user_id=user_id,
             status="ACTIVE",
             started_at=datetime.now(timezone.utc),
-            opening_cash=Decimal("0"),
+            opening_cash=_dec(pending.counted_cash or 0),
         )
         self.session.add(new_s)
         await self.session.flush()
