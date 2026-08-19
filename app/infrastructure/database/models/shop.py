@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -90,8 +91,12 @@ class ShopSale(FullMixin, Base):
         ForeignKey("reservations.id", ondelete="SET NULL"), nullable=True, index=True
     )
     total_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
-    # PAID sotuvda to'lov usuli bor; PENDING (bronga yozilgan)da hali yo'q
+    # PAID sotuvda to'lov usuli bor; PENDING (bronga yozilgan)da hali yo'q.
+    # Bo'lib to'lashda "MIXED" bo'ladi, bo'laklar payments ro'yxatida
     payment_method: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Bo'lib to'lash bo'laklari: [{"amount": 10000, "payment_method": "CASH"}, ...]
+    # Oddiy (bitta usulli) to'lovda NULL qoladi
+    payments: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="PAID", server_default="PAID"
     )

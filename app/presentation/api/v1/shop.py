@@ -100,14 +100,52 @@ class SaleItemRequest(BaseModel):
     quantity: int = Field(..., gt=0, le=10000)
 
 
+class SalePaymentPart(BaseModel):
+    """Bo'lib to'lashning bitta bo'lagi: summa + usul."""
+
+    amount: float = Field(..., gt=0)
+    payment_method: Literal["CASH", "CARD", "TRANSFER"]
+
+
 class SaleCreateRequest(BaseModel):
     items: list[SaleItemRequest] = Field(..., min_length=1)
     payment_method: Literal["CASH", "CARD", "TRANSFER"] | None = None
+    # Bo'lib to'lash: berilsa bo'laklar jami sotuv summasiga teng bo'lishi shart
+    payments: list[SalePaymentPart] | None = None
     reservation_id: UUID | None = None
 
 
 class SalePayRequest(BaseModel):
-    payment_method: Literal["CASH", "CARD", "TRANSFER"]
+    # Bitta usul YOKI bo'lib to'lash bo'laklari — kamida bittasi bo'lishi kerak
+    payment_method: Literal["CASH", "CARD", "TRANSFER"] | None = None
+    payments: list[SalePaymentPart] | None = None
+
+
+def _resolve_payments(
+    parts: list[SalePaymentPart] | None,
+    single_method: str | None,
+    total: float,
+) -> tuple[str | None, list[dict] | None]:
+    """Bo'lib to'lashni tekshirib (payment_method, payments) juftligini beradi.
+
+    Bo'laklar jami sotuv summasiga teng bo'lishi shart; usullar har xil
+    bo'lsa payment_method = "MIXED" (kassa hisobi bo'laklardan yuritiladi).
+    """
+    if not parts:
+        return single_method, None
+    parts_sum = sum(p.amount for p in parts)
+    if abs(parts_sum - total) > 0.01:
+        raise ValidationException(
+            f"To'lov bo'laklari jami ({parts_sum:.0f}) sotuv summasiga "
+            f"({total:.0f}) teng emas",
+            "SHOP_SPLIT_SUM_MISMATCH",
+        )
+    methods = {p.payment_method for p in parts}
+    method = parts[0].payment_method if len(methods) == 1 else "MIXED"
+    return method, [
+        {"amount": float(p.amount), "payment_method": p.payment_method}
+        for p in parts
+    ]
 
 
 # ------------------------------------------- chek dizayni (har mehmonxonaga) --
@@ -204,6 +242,8 @@ def _sale_dict(
         ),
         "total_amount": float(s.total_amount),
         "payment_method": s.payment_method,
+        # Bo'lib to'lash bo'laklari (bo'lmasa None) — chek va hisobotlar uchun
+        "payments": s.payments,
         "status": s.status,
         "paid_at": s.paid_at.isoformat() if s.paid_at else None,
         "created_by": str(s.created_by),
@@ -477,7 +517,7 @@ async def create_sale(
                 "Sale can be linked only to an active reservation",
                 "RESERVATION_NOT_ACTIVE",
             )
-    elif not data.payment_method:
+    elif not data.payment_method and not data.payments:
         raise ValidationException(
             "Payment method is required for a direct sale", "PAYMENT_METHOD_REQUIRED"
         )
@@ -537,11 +577,21 @@ async def create_sale(
                 )
             )
 
+    # Bo'lib to'lash faqat oddiy (darhol to'lanadigan) sotuvda ma'noli —
+    # bronga yozishda to'lov keyin olinadi
+    pay_method: str | None = None
+    pay_parts: list[dict] | None = None
+    if not data.reservation_id:
+        pay_method, pay_parts = _resolve_payments(
+            data.payments, data.payment_method, total
+        )
+
     sale = ShopSale(
         hotel_id=h_id,
         reservation_id=data.reservation_id,
         total_amount=total,
-        payment_method=data.payment_method if not data.reservation_id else None,
+        payment_method=pay_method,
+        payments=pay_parts,
         status="PENDING" if data.reservation_id else "PAID",
         paid_at=None if data.reservation_id else datetime.now(timezone.utc),
         created_by=current_user["id"],
@@ -571,9 +621,17 @@ async def pay_sale(
         raise NotFoundException("Sale not found", "SHOP_SALE_NOT_FOUND")
     if sale.status == "PAID":
         raise ConflictException("Sale is already paid", "SHOP_SALE_ALREADY_PAID")
+    if not data.payment_method and not data.payments:
+        raise ValidationException(
+            "Payment method is required", "PAYMENT_METHOD_REQUIRED"
+        )
 
+    pay_method, pay_parts = _resolve_payments(
+        data.payments, data.payment_method, float(sale.total_amount)
+    )
     sale.status = "PAID"
-    sale.payment_method = data.payment_method
+    sale.payment_method = pay_method
+    sale.payments = pay_parts
     sale.paid_at = datetime.now(timezone.utc)
     await session.flush()
 

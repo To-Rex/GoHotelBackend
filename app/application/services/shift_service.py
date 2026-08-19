@@ -250,18 +250,32 @@ class ShiftService:
         )
         cash_in = _dec(pay.scalar() or 0)
 
-        # Do'kon naqd savdolari (to'lov sessiya oynasida olingan)
-        shop = await self.session.execute(
-            select(func.coalesce(func.sum(ShopSale.total_amount), 0)).where(
-                ShopSale.hotel_id == s.hotel_id,
-                ShopSale.created_by == s.user_id,
-                ShopSale.status == "PAID",
-                ShopSale.payment_method == "CASH",
-                ShopSale.paid_at >= start,
-                ShopSale.paid_at <= end,
+        # Do'kon naqd savdolari (to'lov sessiya oynasida olingan).
+        # Bo'lib to'lashda (payments ro'yxati bor, method "MIXED") kassaga
+        # faqat NAQD bo'laklar tushadi — jami emas
+        shop_rows = (
+            await self.session.execute(
+                select(
+                    ShopSale.total_amount,
+                    ShopSale.payment_method,
+                    ShopSale.payments,
+                ).where(
+                    ShopSale.hotel_id == s.hotel_id,
+                    ShopSale.created_by == s.user_id,
+                    ShopSale.status == "PAID",
+                    ShopSale.paid_at >= start,
+                    ShopSale.paid_at <= end,
+                )
             )
-        )
-        shop_in = _dec(shop.scalar() or 0)
+        ).all()
+        shop_in = Decimal("0")
+        for sale_total, sale_method, sale_parts in shop_rows:
+            if sale_parts:
+                for part in sale_parts:
+                    if part.get("payment_method") == "CASH":
+                        shop_in += _dec(part.get("amount") or 0)
+            elif sale_method == "CASH":
+                shop_in += _dec(sale_total)
 
         # Naqd xarajatlar
         exp = await self.session.execute(
