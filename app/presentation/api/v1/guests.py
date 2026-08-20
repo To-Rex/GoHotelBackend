@@ -1,12 +1,15 @@
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.infrastructure.database.models.guest import Guest
+from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.guest_service import GuestService
 from app.application.dto.guest import GuestCreateRequest, GuestUpdateRequest, GuestResponse
 from app.application.dto.reservation import ReservationResponse
@@ -26,6 +29,62 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
     return hotel_id
+
+
+# --------------------------------------------- hujjat skaneri sozlamasi --
+
+SCAN_SETTINGS_KEY = "document_scan"
+
+# mrz    — faqat MRZ zonasi (tez, aniq: nazorat raqamlari bilan tekshiriladi)
+# visual — hujjatning old tomonidagi yozuvlar (MRZ yo'q/o'chgan hujjatlar uchun)
+# auto   — avval MRZ, topilmasa vizual (standart)
+DEFAULT_SCAN_SETTINGS = {"mode": "auto"}
+
+
+class ScanSettingsRequest(BaseModel):
+    mode: Literal["mrz", "visual", "auto"] = "auto"
+
+
+def _resolve_scan(settings: dict | None) -> dict:
+    saved = (settings or {}).get(SCAN_SETTINGS_KEY) or {}
+    mode = saved.get("mode")
+    if mode not in ("mrz", "visual", "auto"):
+        mode = DEFAULT_SCAN_SETTINGS["mode"]
+    return {"mode": mode}
+
+
+@router.get("/scan-settings")
+async def get_scan_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Skaner rejimi — har qanday xodim o'qiy oladi (skanerlash uchun kerak)."""
+    h_id = _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    return _resolve_scan(hotel.settings if hotel else None)
+
+
+@router.put("/scan-settings")
+async def save_scan_settings(
+    data: ScanSettingsRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Rejimni o'zgartirish — faqat administrator."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException(
+            "Faqat administrator skaner rejimini o'zgartira oladi", "FORBIDDEN"
+        )
+    h_id = _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[SCAN_SETTINGS_KEY] = {"mode": data.mode}
+    hotel.settings = new_settings
+    await session.flush()
+    return _resolve_scan(new_settings)
 
 
 @router.get("/", response_model=list[GuestResponse])
