@@ -220,3 +220,73 @@ class TestVisualDates:
     )
     def test_accepted_formats(self, text, expected):
         assert visual.parse_date(text) == expected
+
+
+# --------------------------------------------------------------- OCR dvigateli
+# Quyidagilar haqiqiy ONNX modellarni yuklaydi. Modellar bo'lmasa (masalan
+# yengil CI konteynerida) o'tkazib yuboriladi.
+
+engine = pytest.importorskip(
+    "app.application.services.document_ocr.engine",
+    reason="OCR dvigateli mavjud emas",
+)
+pytestmark_engine = pytest.mark.skipif(
+    not engine.engine_importable(), reason="OCR modellari topilmadi"
+)
+
+
+def _text_line(text: str, height: int = 64):
+    """Bitta matn qatorini rasmga aylantiradi (shriftsiz muhitda o'tkaziladi)."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    font = None
+    for name in ("consola.ttf", "cour.ttf", "DejaVuSansMono.ttf", "arial.ttf"):
+        for base in (r"C:\Windows\Fonts", "/usr/share/fonts/truetype/dejavu"):
+            import os
+
+            path = os.path.join(base, name)
+            if os.path.exists(path):
+                font = ImageFont.truetype(path, int(height * 0.62))
+                break
+        if font:
+            break
+    if font is None:
+        pytest.skip("Sinov uchun shrift topilmadi")
+
+    import cv2
+
+    width = max(60, int(font.getlength(text)) + 24)
+    image = Image.new("RGB", (width, height), (250, 250, 248))
+    ImageDraw.Draw(image).text((12, int(height * 0.16)), text, font=font, fill=(20, 20, 24))
+    return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+
+@pytestmark_engine
+class TestRecognitionBatching:
+    """Partiyalash natijalarni asl kirishga qaytarishi shart.
+
+    Kesimlar to'ldirishni kamaytirish uchun kengligi bo'yicha saralanadi, ya'ni
+    modelga boshqa tartibda beriladi. Agar natija asl indeksga qaytarilmasa,
+    familiya hujjat raqami maydoniga tushib ketadi va bu xato jimgina o'tadi.
+    """
+
+    TEXTS = [
+        "TOSHMATOV",
+        "JASUR",
+        "AA1234567",
+        "31503900010015",
+        "15.03.1990",
+        "AKMALOVICH",
+        "UZB",
+        "RASULOV",
+    ]
+
+    @pytest.mark.parametrize("batch_size", [1, 3, 16])
+    def test_results_stay_aligned_with_inputs(self, batch_size):
+        pytest.importorskip("PIL")
+        crops = [_text_line(text) for text in self.TEXTS]
+        results = engine.recognize(crops, batch_size=batch_size)
+        assert len(results) == len(self.TEXTS)
+        for expected, (got, _confidence) in zip(self.TEXTS, results):
+            assert got.replace(" ", "").upper() == expected.replace(" ", "").upper()
