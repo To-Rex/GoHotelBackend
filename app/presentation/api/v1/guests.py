@@ -1,13 +1,15 @@
+import logging
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Query
+import anyio
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException, NotFoundException
+from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.guest_service import GuestService
@@ -18,6 +20,8 @@ from app.core.constants import MAX_PAGE_SIZE
 from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel
 from app.infrastructure.database.repositories.reservation_repo import ReservationRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -38,11 +42,60 @@ SCAN_SETTINGS_KEY = "document_scan"
 # mrz    — faqat MRZ zonasi (tez, aniq: nazorat raqamlari bilan tekshiriladi)
 # visual — hujjatning old tomonidagi yozuvlar (MRZ yo'q/o'chgan hujjatlar uchun)
 # auto   — avval MRZ, topilmasa vizual (standart)
-DEFAULT_SCAN_SETTINGS = {"mode": "auto"}
+#
+# engine — OCR qayerda bajariladi:
+#   server — serverdagi PP-OCR (tezroq va aniqroq; brauzer zaif qurilmada
+#            ham yuklanmaydi), aloqa uzilsa qurilmadagi OCR zaxira bo'ladi
+#   device — faqat brauzerda (rasm qurilmadan chiqmaydi)
+DEFAULT_SCAN_SETTINGS = {"mode": "auto", "engine": "server"}
+
+#: Bir vaqtda nechta OCR ishlaydi. Model kichik, lekin VPS yadrolari kam —
+#: cheklovsiz qo'yilsa bir nechta parallel skan bir-birini sekinlashtiradi.
+_MAX_CONCURRENT_SCANS = 2
+_scan_limiter = anyio.Semaphore(_MAX_CONCURRENT_SCANS)
+
+#: Yuklangan rasm uchun oqilona chegara (frontend ~200-400 KB yuboradi)
+MAX_SCAN_IMAGE_BYTES = 12 * 1024 * 1024
 
 
 class ScanSettingsRequest(BaseModel):
     mode: Literal["mrz", "visual", "auto"] = "auto"
+    engine: Literal["server", "device"] = "server"
+
+
+def _server_ocr_available() -> bool:
+    try:
+        from app.application.services.document_ocr import engine as ocr_engine
+
+        return ocr_engine.engine_importable()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_ocr_warm_up_started = False
+
+
+def _start_ocr_warm_up() -> None:
+    """Modellarni fonda yuklaydi — birinchi skan model kutib turmasligi uchun.
+
+    Skaner dialogi ochilganda sozlama so'raladi, ya'ni bu chaqiruv aynan
+    skanerlashdan bir necha soniya oldin keladi — modelni yuklashning eng
+    qulay payti.
+    """
+    global _ocr_warm_up_started
+    if _ocr_warm_up_started:
+        return
+    _ocr_warm_up_started = True
+    try:
+        import asyncio
+
+        from app.application.services.document_ocr import engine as ocr_engine
+
+        asyncio.get_running_loop().create_task(
+            anyio.to_thread.run_sync(ocr_engine.warm_up)
+        )
+    except Exception:  # noqa: BLE001
+        _ocr_warm_up_started = False
 
 
 def _resolve_scan(settings: dict | None) -> dict:
@@ -50,7 +103,16 @@ def _resolve_scan(settings: dict | None) -> dict:
     mode = saved.get("mode")
     if mode not in ("mrz", "visual", "auto"):
         mode = DEFAULT_SCAN_SETTINGS["mode"]
-    return {"mode": mode}
+    engine_choice = saved.get("engine")
+    if engine_choice not in ("server", "device"):
+        engine_choice = DEFAULT_SCAN_SETTINGS["engine"]
+    return {
+        "mode": mode,
+        "engine": engine_choice,
+        # Frontend shu bayroqqa qarab serverga yuborishni tanlaydi: dvigatel
+        # o'rnatilmagan serverda u qurilmadagi OCR'da qolaveradi.
+        "serverAvailable": _server_ocr_available(),
+    }
 
 
 @router.get("/scan-settings")
@@ -61,7 +123,10 @@ async def get_scan_settings(
     """Skaner rejimi — har qanday xodim o'qiy oladi (skanerlash uchun kerak)."""
     h_id = _get_hotel_id(current_user)
     hotel = await session.get(Hotel, h_id) if h_id else None
-    return _resolve_scan(hotel.settings if hotel else None)
+    resolved = _resolve_scan(hotel.settings if hotel else None)
+    if resolved["serverAvailable"] and resolved["engine"] == "server":
+        _start_ocr_warm_up()
+    return resolved
 
 
 @router.put("/scan-settings")
@@ -81,10 +146,58 @@ async def save_scan_settings(
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
     new_settings = dict(hotel.settings or {})
-    new_settings[SCAN_SETTINGS_KEY] = {"mode": data.mode}
+    new_settings[SCAN_SETTINGS_KEY] = {"mode": data.mode, "engine": data.engine}
     hotel.settings = new_settings
     await session.flush()
     return _resolve_scan(new_settings)
+
+
+@router.post("/scan-document")
+async def scan_document(
+    file: UploadFile = File(),
+    document_type: Literal["ID_CARD", "PASSPORT"] = Form(default="ID_CARD"),
+    side: Literal["front", "back", "passport"] = Form(default="front"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Hujjat rasmini o'qib, mehmon maydonlarini qaytaradi.
+
+    Rasm SAQLANMAYDI — faqat xotirada o'qiladi va javob qaytgach yo'qoladi.
+    Javob shakli brauzerdagi mahalliy OCR bilan bir xil, shuning uchun frontend
+    server javobini alohida ishlashi shart emas.
+
+    Dvigatel serverda mavjud bo'lmasa 503 qaytadi — frontend buni ko'rib,
+    qurilmadagi OCR'ga qaytadi va foydalanuvchi hech narsa sezmaydi.
+    """
+    if not _server_ocr_available():
+        raise HTTPException(
+            status_code=503, detail="Server hujjat skaneri bu serverda mavjud emas"
+        )
+    content = await file.read()
+    if not content:
+        raise ValidationException("Rasm bo'sh", "BAD_IMAGE")
+    if len(content) > MAX_SCAN_IMAGE_BYTES:
+        raise ValidationException("Rasm juda katta", "IMAGE_TOO_LARGE")
+
+    from app.application.services.document_ocr import service as ocr_service
+
+    async with _scan_limiter:
+        try:
+            return await anyio.to_thread.run_sync(
+                ocr_service.scan, content, document_type, side
+            )
+        except ValueError as exc:
+            code = str(exc)
+            raise ValidationException(
+                {
+                    "BAD_IMAGE": "Rasm o'qilmadi",
+                    "IMAGE_TOO_SMALL": "Rasm juda kichik — hujjatni yaqinroqdan oling",
+                    "NO_TEXT": "Rasmda yozuv topilmadi — hujjatni ramkaga to'liq joylang",
+                }.get(code, "Hujjat o'qilmadi"),
+                code,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Hujjat skanerlashda kutilmagan xato")
+            raise HTTPException(status_code=500, detail="Hujjatni o'qishda xatolik")
 
 
 @router.get("/", response_model=list[GuestResponse])

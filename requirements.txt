@@ -17,3 +17,5 @@ firebase-admin>=6.5.0
 webauthn>=3.0.0
 opencv-python-headless>=4.9
 numpy>=1.26
+# Hujjat skaneri (PP-OCR ONNX modellari app/assets/ocr ichida)
+onnxruntime>=1.17
