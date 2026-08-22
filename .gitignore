@@ -4,3 +4,7 @@ secrets/
 *-firebase-adminsdk-*.json
 
 graphify-out/
+
+# Python bayt-kodi — build artefakti, repozitoriyda kerak emas
+__pycache__/
+*.pyc
