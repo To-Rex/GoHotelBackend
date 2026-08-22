@@ -18,11 +18,12 @@ bir xil shartnoma; frontend server javobini xuddi mahalliy natija kabi ko'radi.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
-from . import engine, mrz, visual
+from . import engine, mrz, verify, visual
 
 logger = logging.getLogger(__name__)
 
@@ -173,91 +174,176 @@ def read_mrz_fast(image: np.ndarray, document_type: str) -> mrz.MrzResult | None
     return best
 
 
-def _merge(
-    mrz_result: mrz.MrzResult | None,
-    visual_result: visual.VisualResult | None,
-    document_type: str,
-    side: str,
-) -> dict:
-    """MRZ va bosma tomon natijalarini birlashtiradi.
+@dataclass
+class SideReading:
+    """Bitta rasmdan o'qilgan hamma narsa."""
 
-    MRZ ustun turadi — uning nazorat raqamlari bor. Lekin MRZ'dagi TAXMINIY
-    tuzatishni faqat bosma tomondan kelgan bir xil qiymat tasdiqlay oladi:
-    ular mustaqil manba, shuning uchun ikkalasining mos kelishi tasodif emas.
+    side: str
+    mrz: mrz.MrzResult | None = None
+    printed: visual.VisualResult | None = None
+
+    @property
+    def mrz_fields(self) -> dict:
+        return {k: v for k, v in (self.mrz.fields.items() if self.mrz else []) if v}
+
+    @property
+    def printed_fields(self) -> dict:
+        return {k: v for k, v in (self.printed.fields.items() if self.printed else []) if v}
+
+
+def read_side(image_bytes: bytes, document_type: str, side: str) -> SideReading:
+    """Bitta rasmni o'qiydi: MRZ (bo'lsa) va bosma maydonlar.
+
+    ID kartaning old tomonida MRZ yo'q, orqasida esa bosma maydon deyarli yo'q;
+    passport sahifasida ikkalasi ham bor. Shuning uchun har tomonda ikkala
+    manba ham izlanadi va qaysi biri chiqsa, o'sha ishlatiladi.
     """
-    fields: dict = {}
-    confidence: dict = {}
-    warnings: list[str] = []
-    confirmed_guesses: set[str] = set()
+    image = rectify(_decode(image_bytes), document_type)
+    reading = SideReading(side=side)
 
-    visual_fields = dict(visual_result.fields) if visual_result else {}
-    mrz_fields = {k: v for k, v in (mrz_result.fields.items() if mrz_result else []) if v}
+    if side != "front":
+        # Eng tez yo'l: MRZ joyi ma'lum, deteksiya kerak emas
+        reading.mrz = read_mrz_fast(image, document_type)
 
-    for name, value in visual_fields.items():
-        if value:
-            fields[name] = value
-            confidence[name] = 0.72 if name in (visual_result.by_pattern if visual_result else set()) else 0.6
+    # Passportda bosma maydonlar ham kerak (otasining ismi, fuqarolik), ID
+    # kartaning orqasida esa MRZ tez yo'ldan chiqmasa qutilar bo'yicha izlanadi.
+    need_regions = side == "front" or document_type == "PASSPORT" or (
+        reading.mrz is None or not reading.mrz.verified
+    )
+    if need_regions:
+        regions = engine.read_regions(image)
+        if regions:
+            reading.printed = visual.parse_regions(regions)
+            if side != "front":
+                texts = [r["text"] for r in regions if mrz.looks_like_mrz(r["text"])]
+                from_regions = mrz.parse_lines(texts) if texts else None
+                if from_regions and (
+                    reading.mrz is None or from_regions.score > reading.mrz.score
+                ):
+                    reading.mrz = from_regions
+    return reading
 
-    for name, value in mrz_fields.items():
-        guessed = bool(mrz_result and name in mrz_result.guessed_fields)
-        if guessed and visual_fields.get(name) and visual_fields[name] != value:
-            # Ikki manba qarama-qarshi — hech birini ishonchli deb bo'lmaydi
-            warnings.append(f"{name}: MRZ va bosma tomon mos kelmadi")
-            confidence[name] = 0.45
-            continue
-        if guessed and visual_fields.get(name) == value:
-            confirmed_guesses.add(name)
-        fields[name] = value
-        confidence[name] = 0.99 if not guessed else (0.95 if name in confirmed_guesses else 0.7)
 
-    unconfirmed = [
-        name for name in (mrz_result.guessed_fields if mrz_result else []) if name not in confirmed_guesses
+def _confidence_for(name: str, sources: list[str], verified: bool) -> float:
+    if len(sources) > 1:
+        return 0.99
+    if sources and sources[0] == "MRZ":
+        return 0.95 if verified else 0.8
+    return 0.65
+
+
+def scan_document(images: dict[str, bytes], document_type: str = "ID_CARD") -> dict:
+    """Hujjatni to'liq o'qiydi va tekshiradi.
+
+    `images` — {"front": ..., "back": ...} (ID karta) yoki {"passport": ...}.
+    ID kartaning ikkala tomoni BIR SO'ROVDA kelgani muhim: shundagina ular
+    bir hujjatga tegishli ekanini tekshirish va bir tomondagi ma'lumotni
+    ikkinchisi bilan tasdiqlash mumkin.
+
+    Raises:
+        ValueError("BAD_IMAGE" | "IMAGE_TOO_SMALL" | "NO_TEXT")
+    """
+    readings = {side: read_side(data, document_type, side) for side, data in images.items()}
+    if not readings:
+        raise ValueError("BAD_IMAGE")
+
+    # MRZ qaysi tomonda bo'lsa — o'sha yetakchi manba
+    mrz_reading = next(
+        (r for r in readings.values() if r.mrz is not None),
+        None,
+    )
+    mrz_result = mrz_reading.mrz if mrz_reading else None
+    mrz_fields = mrz_reading.mrz_fields if mrz_reading else {}
+
+    # Bosma manba: ID kartada bu old tomon, passportda esa o'sha sahifaning o'zi
+    printed_reading = readings.get("front") or readings.get("passport") or mrz_reading
+    printed_fields = printed_reading.printed_fields if printed_reading else {}
+
+    if not mrz_fields and not printed_fields:
+        raise ValueError("NO_TEXT")
+
+    verification, fields = verify.cross_check(mrz_fields, printed_fields)
+
+    # Taxmin bilan tiklangan MRZ maydonini faqat bosma tomon tasdiqlay oladi
+    guessed = list(mrz_result.guessed_fields) if mrz_result else []
+    confirmed_guesses = [
+        name for name in guessed if len(verification.agreement.get(name, [])) > 1
     ]
+    unconfirmed_guesses = [name for name in guessed if name not in confirmed_guesses]
 
-    # JSHSHIR faqat o'z tuzilishidan o'tgan bo'lsa qoladi
-    personal = fields.get("personalNumber")
-    pinfl_verified = bool(personal and visual.valid_pinfl(personal))
-    if personal and not pinfl_verified:
-        fields.pop("personalNumber", None)
-        confidence.pop("personalNumber", None)
-
-    # JSHSHIR ichidagi tug'ilgan sana mustaqil tekshiruv beradi
-    if pinfl_verified:
-        from_pinfl = visual.pinfl_birth_date(personal)
-        if from_pinfl and fields.get("birthDate") and fields["birthDate"] != from_pinfl:
-            warnings.append("Tug‘ilgan sana JSHSHIR ichidagi sanaga mos kelmadi")
-        elif from_pinfl and not fields.get("birthDate"):
-            fields["birthDate"] = from_pinfl
-            confidence["birthDate"] = 0.9
-
-    verified = bool(mrz_result and mrz_result.checks_ok and not unconfirmed)
-    if mrz_result and mrz_result.checks_ok and unconfirmed:
-        warnings.append(
-            "MRZ'dagi " + ", ".join(unconfirmed) + " nazorat raqami bo‘yicha tiklandi — tekshiring"
+    if mrz_result:
+        if mrz_result.checks_ok:
+            verification.add(
+                "mrz.checkdigits",
+                "MRZ nazorat raqamlari to‘g‘ri",
+                verify.OK,
+                f"{mrz_result.mrz_format} · {mrz_result.checks_passed}/{mrz_result.checks_total}",
+            )
+        else:
+            verification.add(
+                "mrz.checkdigits",
+                "MRZ nazorat raqamlari mos kelmadi",
+                verify.FAIL,
+                f"{mrz_result.checks_passed}/{mrz_result.checks_total} to‘g‘ri",
+            )
+        for name in confirmed_guesses:
+            verification.add(
+                f"mrz.repaired.{name}",
+                f"{verify.FIELD_LABELS.get(name, name)}: tiklandi va bosma tomon tasdiqladi",
+                verify.OK,
+            )
+        for name in unconfirmed_guesses:
+            verification.add(
+                f"mrz.repaired.{name}",
+                f"{verify.FIELD_LABELS.get(name, name)}: nazorat raqami bo‘yicha tiklandi",
+                verify.WARN,
+                "Mustaqil manba tasdiqlamadi — qiymatni hujjat bilan solishtiring",
+            )
+    else:
+        verification.add(
+            "mrz.present",
+            "MRZ o‘qilmadi",
+            verify.WARN,
+            "Ma’lumot faqat hujjatning bosma tomonidan olindi",
         )
-    if mrz_result and not mrz_result.checks_ok:
-        warnings.append("MRZ nazorat raqamlari to‘liq mos kelmadi — ma’lumotni tekshiring")
-    if not mrz_result:
-        warnings.append("MRZ o‘qilmadi — ma’lumot hujjatning bosma tomonidan olindi")
 
-    source = "merged" if mrz_result and visual_result and visual_result.filled else ("mrz" if mrz_result else "visual")
+    pinfl_ok = verify.check_pinfl(verification, fields)
+    verify.check_dates(verification, fields)
+    verify.check_document_number(verification, fields)
+
+    if document_type == "ID_CARD" and "front" in readings and "back" in readings:
+        verify.check_sides_match(
+            verification,
+            readings["front"].printed_fields,
+            {**readings["back"].mrz_fields, **readings["back"].printed_fields},
+        )
+
+    verified = not verification.failed and bool(mrz_result) and mrz_result.checks_ok and not unconfirmed_guesses
+
+    confidence = {
+        name: _confidence_for(name, verification.agreement.get(name, []), verified)
+        for name in fields
+        if name in verify.FIELD_LABELS
+    }
+
     document: dict = {
         "documentType": document_type,
-        "source": source,
+        "source": "merged" if mrz_fields and printed_fields else ("mrz" if mrz_fields else "visual"),
         "verified": verified,
         "requiresReview": not verified,
-        "scannedSides": [side],
-        "warnings": warnings,
+        "scannedSides": list(readings.keys()),
+        "warnings": [c.detail or c.label for c in verification.failed + verification.warned],
+        "checks": verification.as_list(),
         "fieldConfidence": confidence,
         "engine": "server",
     }
     if mrz_result:
         document["mrzFormat"] = mrz_result.mrz_format
-    if pinfl_verified:
+    if pinfl_ok and fields.get("personalNumber"):
         document["pinflVerified"] = True
     for name in (
-        "firstName", "lastName", "birthDate", "documentNumber", "personalNumber",
-        "nationality", "issuingCountry", "expiryDate", "sex",
+        "firstName", "lastName", "patronymic", "birthDate", "documentNumber",
+        "personalNumber", "nationality", "issuingCountry", "expiryDate", "sex",
     ):
         value = fields.get(name)
         if value:
@@ -266,32 +352,5 @@ def _merge(
 
 
 def scan(image_bytes: bytes, document_type: str = "ID_CARD", side: str = "front") -> dict:
-    """Rasmni o'qib, `ScannedDoc` shaklidagi natija qaytaradi.
-
-    Raises:
-        ValueError("BAD_IMAGE" | "IMAGE_TOO_SMALL") — rasm yaroqsiz.
-    """
-    image = _decode(image_bytes)
-    image = rectify(image, document_type)
-
-    mrz_result: mrz.MrzResult | None = None
-    visual_result: visual.VisualResult | None = None
-
-    if side != "front":
-        mrz_result = read_mrz_fast(image, document_type)
-        if mrz_result is not None and mrz_result.verified:
-            # Eng tez yo'l: nazorat raqamlari toza, taxmin yo'q — tugadi
-            return _merge(mrz_result, None, document_type, side)
-
-    regions = engine.read_regions(image)
-    if regions:
-        visual_result = visual.parse_regions(regions)
-        if side != "front":
-            texts = [region["text"] for region in regions if mrz.looks_like_mrz(region["text"])]
-            from_regions = mrz.parse_lines(texts) if texts else None
-            if from_regions and (mrz_result is None or from_regions.score > mrz_result.score):
-                mrz_result = from_regions
-
-    if mrz_result is None and visual_result is None:
-        raise ValueError("NO_TEXT")
-    return _merge(mrz_result, visual_result, document_type, side)
+    """Bitta rasm uchun qisqa yo'l (eski chaqiruvlar bilan moslik uchun)."""
+    return scan_document({side: image_bytes}, document_type)

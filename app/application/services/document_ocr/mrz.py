@@ -117,9 +117,13 @@ def parse_date(value: str, *, future: bool) -> str | None:
         return None
     current = date.today().year
     if future:
-        # Muddat: joriy asrda, o'tmishga tushsa keyingi asrga suriladi
+        # Muddat sanasi o'tmishda ham bo'lishi mumkin — hujjat muddati tugagan
+        # bo'lsa aynan shuni ko'rsatish kerak. Uni "kelajakka" surib qo'yish
+        # muddati o'tgan hujjatni amaldagidek ko'rsatib yuboradi. Faqat
+        # haqiqatan ham mumkin bo'lmagan uzoq o'tmish keyingi asrga suriladi
+        # (hujjat muddati odatda 10 yil, 30 yil oldin tugagani MRZ emas).
         full = 2000 + year
-        if full < current - 10:
+        if full < current - 30:
             full += 100
     else:
         # Tug'ilgan sana: kelajakka tushmasligi kerak
@@ -133,8 +137,13 @@ def parse_date(value: str, *, future: bool) -> str | None:
     return f"{full:04d}-{month:02d}-{day:02d}"
 
 
-def _names(raw: str) -> tuple[str, str]:
-    """`FAMILIYA<<ISM<OTASINING<ISMI` -> (familiya, ism).
+def _names(raw: str) -> tuple[str, str, str]:
+    """`FAMILIYA<<ISM<OTASINING<ISMI` -> (familiya, ism, otasining ismi).
+
+    O'zbek hujjatlarida ism maydonida ism va otasining ismi ketma-ket yoziladi.
+    Ularni bitta satrga qo'shib yuborish mehmon kartochkasiga "Jasur
+    Akmalovich" deb yozib qo'yadi, holbuki formada ism uchun alohida maydon
+    bor — shuning uchun birinchi so'z ism, qolgani otasining ismi.
 
     Ism qatorining nazorat raqami yo'q, ya'ni uni matematik tekshirib
     bo'lmaydi. Shuning uchun bitta harfdan iborat "so'zlar" tashlanadi: ICAO
@@ -155,7 +164,11 @@ def _names(raw: str) -> tuple[str, str]:
     if not given_words and len(surname_words) > 1:
         # Ikkilangan to'ldiruvchi o'qilmagan — birinchi so'z familiya deb olinadi
         surname_words, given_words = surname_words[:1], surname_words[1:]
-    return " ".join(surname_words), " ".join(given_words)
+    return (
+        " ".join(surname_words),
+        given_words[0] if given_words else "",
+        " ".join(given_words[1:]),
+    )
 
 
 def title_case(value: str) -> str:
@@ -269,9 +282,13 @@ def _parse_td1(lines: list[str]) -> MrzResult:
     if check_digit(composite_source) == line2[29].translate(_TO_DIGIT):
         reader.passed += 1
 
-    surname, given = _names(line3)
-    # O'zbek ID kartasida JSHSHIR ixtiyoriy maydonda (14 raqam) turadi
-    personal = re.sub(r"[^0-9]", "", optional1.translate(_TO_DIGIT))
+    surname, given, patronymic = _names(line3)
+    # O'zbek ID kartasida JSHSHIR ixtiyoriy maydonda (14 raqam) turadi.
+    # Harflarni raqamga MAJBURLAMAYMIZ: chet el hujjatlarida bu maydonda
+    # harfli ma'lumot bo'ladi va uni raqamga aylantirish 14 xonali soxta
+    # JSHSHIR yasab qo'yadi.
+    personal = optional1.replace(FILLER, "").strip()
+    personal = personal if re.fullmatch(r"\d{14}", personal) else ""
     fields = {
         "documentNumber": document_number.replace(FILLER, ""),
         "birthDate": parse_date(birth, future=False),
@@ -281,7 +298,8 @@ def _parse_td1(lines: list[str]) -> MrzResult:
         "issuingCountry": line1[2:5].translate(_TO_ALPHA).replace(FILLER, ""),
         "lastName": title_case(surname),
         "firstName": title_case(given),
-        "personalNumber": personal if len(personal) == 14 else None,
+        "patronymic": title_case(patronymic) or None,
+        "personalNumber": personal or None,
     }
     return MrzResult(fields, "TD1", reader.passed, reader.total, reader.guessed, lines)
 
@@ -299,8 +317,11 @@ def _parse_td2_td3(lines: list[str], mrz_format: str) -> MrzResult:
     optional_value = line2[28:42] if mrz_format == "TD3" else line2[28:35]
     if mrz_format == "TD3" and optional_value.strip(FILLER):
         optional_value = reader.checked("personalNumber", optional_value, line2[42], numeric=False)
-        digits = re.sub(r"[^0-9]", "", optional_value.translate(_TO_DIGIT))
-        personal = digits if len(digits) == 14 else None
+        # Harflarni raqamga MAJBURLAMAYMIZ: chet el passportlarida bu maydonda
+        # harfli ma'lumot bo'ladi va uni raqamga aylantirish soxta JSHSHIR
+        # yasab qo'yadi — u tuzilish tekshiruvidan ham o'tib ketishi mumkin.
+        digits = optional_value.replace(FILLER, "").strip()
+        personal = digits if re.fullmatch(r"\d{14}", digits) else None
 
     # Yakuniy nazorat raqami TUZATILGAN maydonlar ustidan — u tuzatishning
     # to'g'riligini mustaqil ravishda tasdiqlaydi (TD1 dagi bilan bir xil sabab).
@@ -325,7 +346,7 @@ def _parse_td2_td3(lines: list[str], mrz_format: str) -> MrzResult:
     if check_digit(composite_source) == composite_digit.translate(_TO_DIGIT):
         reader.passed += 1
 
-    surname, given = _names(name_field)
+    surname, given, patronymic = _names(name_field)
     fields = {
         "documentNumber": document_number.replace(FILLER, ""),
         "birthDate": parse_date(birth, future=False),
@@ -335,6 +356,7 @@ def _parse_td2_td3(lines: list[str], mrz_format: str) -> MrzResult:
         "issuingCountry": line1[2:5].translate(_TO_ALPHA).replace(FILLER, ""),
         "lastName": title_case(surname),
         "firstName": title_case(given),
+        "patronymic": title_case(patronymic) or None,
         "personalNumber": personal,
     }
     return MrzResult(fields, mrz_format, reader.passed, reader.total, reader.guessed, lines)

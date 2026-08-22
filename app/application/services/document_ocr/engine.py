@@ -77,19 +77,30 @@ def _session(path: str):
 
 
 def _ensure_loaded():
+    """Modellarni bir marta yuklaydi.
+
+    Yuklash HAMMASI-YOKI-HECH NARSA: tanish modeli 10.7 MB va u yuklanmay
+    qolishi mumkin. Sessiyalar bittalab tayinlansa, keyingi chaqiruv "deteksiya
+    tayyor" deb o'ylab, lug'ati bo'sh tanishga kirib ketadi va har bir hujjat
+    bo'sh matn bilan qaytadi.
+    """
     global _det_session, _rec_session, _charset
-    if _det_session is not None and _rec_session is not None:
+    if _det_session is not None and _rec_session is not None and _charset:
         return _det_session, _rec_session
     with _lock:
-        if _det_session is None or _rec_session is None:
+        if _det_session is None or _rec_session is None or not _charset:
             if not models_present():
                 raise RuntimeError("OCR modellari topilmadi")
             logger.info("PP-OCR modellari yuklanmoqda…")
-            _det_session = _session(DET_PATH)
-            _rec_session = _session(REC_PATH)
-            characters = _rec_session.get_modelmeta().custom_metadata_map.get("character", "")
+            detector = _session(DET_PATH)
+            recognizer = _session(REC_PATH)
+            characters = recognizer.get_modelmeta().custom_metadata_map.get("character", "")
+            if not characters:
+                raise RuntimeError("Tanish modelida lug'at topilmadi")
             # CTC: 0-indeks — blank, oxirida bo'sh joy belgisi
             _charset = ["", *characters.splitlines(), " "]
+            _det_session = detector
+            _rec_session = recognizer
             logger.info("PP-OCR tayyor (lug'at: %d belgi)", len(_charset))
     return _det_session, _rec_session
 

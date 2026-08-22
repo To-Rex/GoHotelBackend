@@ -134,16 +134,19 @@ def labels_in(text: str) -> list[str]:
             position = key.find(label, position + 1)
         if field_name in found:
             continue
-        # Aniq moslik bo'lmasa — buzib o'qilgan yorliqni taxminiy izlash
+        # Aniq moslik bo'lmasa — buzib o'qilgan yorliqni taxminiy izlash.
+        # Matn yorliqdan qisqa bo'lsa umuman qaralmaydi: aks holda `claimed`
+        # chegarasidan chiqib ketiladi va qisqa qiymat ("UZB") uzun yorliqqa
+        # zo'rma-zo'raki moslashtiriladi.
         tolerance = allowed_typos(len(label))
-        if not tolerance:
+        if not tolerance or len(key) < len(label):
             continue
-        for start in range(0, max(1, len(key) - len(label) + 1)):
-            window = key[start : start + len(label)]
-            if any(claimed[start : start + len(label)]):
+        for start in range(0, len(key) - len(label) + 1):
+            end = start + len(label)
+            if any(claimed[start:end]):
                 continue
-            if edit_distance(label, window, tolerance) <= tolerance:
-                for index in range(start, start + len(label)):
+            if edit_distance(label, key[start:end], tolerance) <= tolerance:
+                for index in range(start, end):
                     claimed[index] = True
                 found.append(field_name)
                 break
@@ -179,7 +182,13 @@ def parse_date(raw: str) -> str | None:
             day = int(match.group(1))
             month = _MONTHS.get(match.group(2), 0)
             year = int(match.group(3))
-    if not (1 <= month <= 12 and 1 <= day <= 31 and 1900 <= year <= 2100):
+    if not (1 <= month <= 12 and 1900 <= year <= 2100):
+        return None
+    # Kun oyga mos kelishi SHART: "31.02" ni qabul qilish OCR xatosini
+    # haqiqiy sana sifatida formaga o'tkazib yuboradi.
+    from calendar import monthrange
+
+    if not 1 <= day <= monthrange(year, month)[1]:
         return None
     return f"{year:04d}-{month:02d}-{day:02d}"
 
@@ -208,13 +217,24 @@ def pinfl_birth_date(digits: str) -> str | None:
     return f"{year:04d}-{digits[3:5]}-{digits[1:3]}"
 
 
+#: Raqamlar ketma-ketligi — orasida bo'sh joy, nuqta yoki chiziqcha bo'lishi
+#: mumkin (OCR JSHSHIR'ni "3150 3900 0100 15" ko'rinishida guruhlab beradi),
+#: lekin harf uchrasa ketma-ketlik uziladi.
+_DIGIT_RUN = re.compile(r"\d[\d\s.\-]*\d|\d")
+
+
 def find_pinfl(text: str) -> str | None:
-    """Matndagi JSHSHIR — OCR raqamlarni guruhlab bersa ham topiladi."""
-    digits_only = re.sub(r"[^0-9]", "", text)
-    for start in range(0, max(1, len(digits_only) - 13)):
-        candidate = digits_only[start : start + 14]
-        if len(candidate) == 14 and valid_pinfl(candidate):
-            return candidate
+    """Matndagi JSHSHIR.
+
+    Raqamlar ketma-ketligi ANIQ 14 ta bo'lishi shart va u uzunroq oqimning
+    ichidan kesib olinmaydi. Aks holda hujjat raqami, sana va boshqa raqamlar
+    bir-biriga qo'shilib, hujjatda umuman yo'q "haqiqiy ko'rinishli" JSHSHIR
+    yasalib qolishi mumkin — u tuzilish tekshiruvidan ham o'tib ketadi.
+    """
+    for run in _DIGIT_RUN.findall(text):
+        digits = re.sub(r"\D", "", run)
+        if len(digits) == 14 and valid_pinfl(digits):
+            return digits
     return None
 
 
@@ -234,6 +254,38 @@ def find_document_number(text: str) -> str | None:
             continue
         return f"{prefix}{match.group(2)}"
     return None
+
+
+#: Bosma tomonda fuqarolik so'z bilan yoziladi, iste'molchilar esa ICAO uch
+#: harfli kodini kutadi. Mos kelmagani umuman uzatilmaydi — erkin matn
+#: formada "Boshqa" bo'lib qolishdan ko'ra yo'qligi tuzuk.
+_NATIONALITY_CODES = {
+    "OZBEKISTON": "UZB",
+    "UZBEKISTAN": "UZB",
+    "OZBEK": "UZB",
+    "UZB": "UZB",
+    "ЎЗБЕКИСТОН": "UZB",
+    "УЗБЕКИСТАН": "UZB",
+    "RUSSIA": "RUS",
+    "ROSSIYA": "RUS",
+    "RUS": "RUS",
+    "QOZOGISTON": "KAZ",
+    "KAZAKHSTAN": "KAZ",
+    "TOJIKISTON": "TJK",
+    "TAJIKISTAN": "TJK",
+    "QIRGIZISTON": "KGZ",
+    "KYRGYZSTAN": "KGZ",
+    "TURKMANISTON": "TKM",
+    "TURKMENISTAN": "TKM",
+}
+
+
+def nationality_code(value: str) -> str | None:
+    """Bosma fuqarolikni ICAO uch harfli kodiga keltiradi."""
+    key = norm(value).replace(" ", "")
+    if key in _NATIONALITY_CODES:
+        return _NATIONALITY_CODES[key]
+    return key if re.fullmatch(r"[A-Z]{3}", key) else None
 
 
 def title_case(value: str) -> str:
@@ -346,23 +398,30 @@ def parse_regions(raw_regions: list[dict]) -> VisualResult:
     # 1) Shakl bo'yicha — yorliqqa umuman bog'liq emas, shuning uchun eng
     #    ishonchli yo'l: JSHSHIR 14 raqamli va o'z tuzilishi bilan tekshiriladi,
     #    hujjat raqami esa "ikki harf + yetti raqam" shakliga ega.
-    pinfl = find_pinfl(re.sub(r"[^0-9]", "", full_text.replace("\n", "")))
+    #
+    #    Har blok ALOHIDA qaraladi: sahifadagi barcha raqamlarni birlashtirib
+    #    izlash hujjat raqami va sana raqamlaridan mavjud bo'lmagan JSHSHIR
+    #    yasab qo'yishi mumkin edi.
+    for region in regions:
+        if is_label(region.text):
+            continue
+        if "personalNumber" not in result.fields:
+            pinfl = find_pinfl(region.text)
+            if pinfl:
+                result.fields["personalNumber"] = pinfl
+                result.by_pattern.add("personalNumber")
+        if "documentNumber" not in result.fields:
+            number = find_document_number(region.text)
+            if number:
+                result.fields["documentNumber"] = number
+                result.by_pattern.add("documentNumber")
+
+    pinfl = result.fields.get("personalNumber")
     if pinfl:
-        result.fields["personalNumber"] = pinfl
-        result.by_pattern.add("personalNumber")
         birth = pinfl_birth_date(pinfl)
         if birth:
             result.fields["birthDate"] = birth
             result.by_pattern.add("birthDate")
-
-    for region in regions:
-        if is_label(region.text):
-            continue
-        number = find_document_number(region.text)
-        if number:
-            result.fields["documentNumber"] = number
-            result.by_pattern.add("documentNumber")
-            break
 
     # 2) Yorliq bo'yicha — ism, familiya va yorliqsiz topilmagan qolgan maydonlar
     for region in regions:
@@ -393,15 +452,13 @@ def parse_regions(raw_regions: list[dict]) -> VisualResult:
                 elif upper.startswith(("F", "A", "Ж")):
                     result.fields.setdefault("sex", "F")
             elif field_name == "nationality":
-                upper = norm(value).replace(" ", "")
-                if 2 <= len(upper) <= 12:
-                    result.fields.setdefault("nationality", upper)
+                code = nationality_code(value)
+                if code:
+                    result.fields.setdefault("nationality", code)
 
-    # 3) Zaxira: sana yorlig'i o'qilmagan bo'lsa ham, matnda bitta sana bo'lsa
-    if "birthDate" not in result.fields:
-        dates = [parse_date(region.text) for region in regions]
-        found = sorted({d for d in dates if d})
-        if len(found) == 1:
-            result.fields["birthDate"] = found[0]
-
+    # Sana yorlig'i o'qilmagan holat uchun zaxira YO'Q: hujjatda bir nechta
+    # sana bor (tug'ilgan, berilgan, amal qilish muddati) va ularning birini
+    # tavakkaliga tug'ilgan sana deb olish mehmonga notog'ri yosh yozib qo'yadi.
+    # JSHSHIR ichidagi sana bundan mustasno — u yuqorida olingan va tuzilish
+    # bo'yicha tekshirilgan.
     return result

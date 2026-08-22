@@ -152,18 +152,35 @@ async def save_scan_settings(
     return _resolve_scan(new_settings)
 
 
+async def _read_scan_image(file, label: str) -> bytes | None:
+    if file is None:
+        return None
+    content = await file.read()
+    if not content:
+        raise ValidationException(f"{label}: rasm bo'sh", "BAD_IMAGE")
+    if len(content) > MAX_SCAN_IMAGE_BYTES:
+        raise ValidationException(f"{label}: rasm juda katta", "IMAGE_TOO_LARGE")
+    return content
+
+
 @router.post("/scan-document")
 async def scan_document(
-    file: UploadFile = File(),
     document_type: Literal["ID_CARD", "PASSPORT"] = Form(default="ID_CARD"),
+    front: UploadFile | None = File(default=None),
+    back: UploadFile | None = File(default=None),
+    file: UploadFile | None = File(default=None),
     side: Literal["front", "back", "passport"] = Form(default="front"),
     current_user: dict = Depends(get_current_user),
 ):
-    """Hujjat rasmini o'qib, mehmon maydonlarini qaytaradi.
+    """Hujjat rasm(lar)ini o'qib, maydonlarni va tekshiruvlar ro'yxatini qaytaradi.
+
+    ID karta uchun IKKALA tomon bitta so'rovda yuboriladi. Bu shunchaki qulaylik
+    emas: faqat shundagina old tomondagi bosma ma'lumotni orqa tomondagi MRZ
+    bilan solishtirish, ikkala tomon bitta hujjatga tegishli ekanini tekshirish
+    va nazorat raqami bo'yicha tiklangan belgini mustaqil tasdiqlash mumkin.
+    Passport uchun bitta sahifa yetarli — unda MRZ ham, bosma maydonlar ham bor.
 
     Rasm SAQLANMAYDI — faqat xotirada o'qiladi va javob qaytgach yo'qoladi.
-    Javob shakli brauzerdagi mahalliy OCR bilan bir xil, shuning uchun frontend
-    server javobini alohida ishlashi shart emas.
 
     Dvigatel serverda mavjud bo'lmasa 503 qaytadi — frontend buni ko'rib,
     qurilmadagi OCR'ga qaytadi va foydalanuvchi hech narsa sezmaydi.
@@ -172,18 +189,28 @@ async def scan_document(
         raise HTTPException(
             status_code=503, detail="Server hujjat skaneri bu serverda mavjud emas"
         )
-    content = await file.read()
-    if not content:
-        raise ValidationException("Rasm bo'sh", "BAD_IMAGE")
-    if len(content) > MAX_SCAN_IMAGE_BYTES:
-        raise ValidationException("Rasm juda katta", "IMAGE_TOO_LARGE")
+
+    images: dict[str, bytes] = {}
+    front_bytes = await _read_scan_image(front, "Old tomon")
+    back_bytes = await _read_scan_image(back, "Orqa tomon")
+    single_bytes = await _read_scan_image(file, "Rasm")
+
+    if front_bytes:
+        images["passport" if document_type == "PASSPORT" else "front"] = front_bytes
+    if back_bytes:
+        images["back"] = back_bytes
+    if single_bytes and not images:
+        # Eski chaqiruv shakli: bitta `file` va `side`
+        images[side] = single_bytes
+    if not images:
+        raise ValidationException("Hujjat rasmi yuborilmadi", "BAD_IMAGE")
 
     from app.application.services.document_ocr import service as ocr_service
 
     async with _scan_limiter:
         try:
             return await anyio.to_thread.run_sync(
-                ocr_service.scan, content, document_type, side
+                ocr_service.scan_document, images, document_type
             )
         except ValueError as exc:
             code = str(exc)

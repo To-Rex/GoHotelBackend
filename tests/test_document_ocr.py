@@ -68,7 +68,9 @@ class TestTd1:
         assert result.fields["birthDate"] == "1990-03-15"
         assert result.fields["expiryDate"] == "2030-01-01"
         assert result.fields["lastName"] == "Toshmatov"
-        assert result.fields["firstName"] == "Jasur Akmalovich"
+        # Ism va otasining ismi alohida: formada ular uchun alohida maydon bor
+        assert result.fields["firstName"] == "Jasur"
+        assert result.fields["patronymic"] == "Akmalovich"
         assert result.fields["nationality"] == "UZB"
 
     def test_ocr_spaces_and_stray_characters_are_tolerated(self):
