@@ -1,4 +1,5 @@
 import logging
+from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
@@ -63,7 +64,14 @@ class ScanSettingsRequest(BaseModel):
     engine: Literal["server", "device"] = "server"
 
 
+@lru_cache(maxsize=1)
 def _server_ocr_available() -> bool:
+    """Serverda OCR dvigateli bormi.
+
+    Natija keshlanadi: modul importi va model fayllarini tekshirish jarayon
+    ishlagan davomida o'zgarmaydi, bu funksiya esa skaner sozlamasi har
+    so'ralganda chaqiriladi.
+    """
     try:
         from app.application.services.document_ocr import engine as ocr_engine
 
