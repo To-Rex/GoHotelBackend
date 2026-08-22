@@ -134,10 +134,22 @@ def parse_date(value: str, *, future: bool) -> str | None:
 
 
 def _names(raw: str) -> tuple[str, str]:
-    """`FAMILIYA<<ISM<OTASINING<ISMI` -> (familiya, ism)."""
+    """`FAMILIYA<<ISM<OTASINING<ISMI` -> (familiya, ism).
+
+    Ism qatorining nazorat raqami yo'q, ya'ni uni matematik tekshirib
+    bo'lmaydi. Shuning uchun bitta harfdan iborat "so'zlar" tashlanadi: ICAO
+    ismlarni to'liq yozadi, bosh harf bilan qisqartirmaydi, demak yakka harf
+    deyarli har doim to'ldiruvchi "<" ning noto'g'ri o'qilishi ("BEKZOD<K").
+    """
     cleaned = raw.rstrip(FILLER)
     surname, _, given = cleaned.partition(FILLER * 2)
-    to_words = lambda part: [w for w in part.split(FILLER) if w]  # noqa: E731
+
+    def to_words(part: str) -> list[str]:
+        words = [word for word in part.split(FILLER) if word]
+        meaningful = [word for word in words if len(word) > 1]
+        # Butun bo'lak yakka harflardan iborat bo'lsa, uni yo'qotib qo'ymaymiz
+        return meaningful or words
+
     surname_words = to_words(surname)
     given_words = to_words(given)
     if not given_words and len(surname_words) > 1:
@@ -328,22 +340,35 @@ def _parse_td2_td3(lines: list[str], mrz_format: str) -> MrzResult:
     return MrzResult(fields, mrz_format, reader.passed, reader.total, reader.guessed, lines)
 
 
+def _compact_length(line: str) -> int:
+    return len(re.sub(r"[^A-Z0-9<]", "", line.upper().replace(" ", "")))
+
+
 def parse_lines(raw_lines: list[str]) -> MrzResult | None:
     """OCR bergan qatorlardan MRZ'ni ajratadi.
 
-    Qatorlar soni va uzunligiga qarab format tanlanadi; bir nechta variant
-    mos kelsa, nazorat raqamlari eng ko'p to'g'ri chiqqani yutadi.
+    Format tanlashda QATOR UZUNLIGI hal qiluvchi ahamiyatga ega, chunki TD2 va
+    TD3 ning dastlabki 28 belgisi bir xil joylashgan: hujjat raqami, fuqarolik,
+    sana va muddat maydonlari aynan bir xil o'rinda turadi. Shu sababli TD3
+    qatori TD2 sifatida ham nazorat raqamlaridan o'tib ketishi mumkin — va
+    o'tsa, passportning JSHSHIR'i yo'qoladi, chunki u faqat TD3'da bor.
+    Uzunlik esa ularni aniq ajratadi: 44 va 36.
     """
     candidates = [line for line in (l.strip() for l in raw_lines) if line]
     if not candidates:
         return None
 
     best: MrzResult | None = None
+    best_rank: tuple = ()
     for mrz_format, (count, width) in FORMAT_SHAPES.items():
         if len(candidates) < count:
             continue
         # MRZ hujjatning pastida — oxirgi `count` qator olinadi
         selected = candidates[-count:]
+        # OCR oxirgi to'ldiruvchilarni tushirib qoldirishi mumkin, shuning uchun
+        # eng uzun qator olinadi: u odatda raqam bilan tugaydi va to'liq chiqadi.
+        observed = max(_compact_length(line) for line in selected)
+        length_fit = 1 if abs(observed - width) <= 2 else 0
         normalized = [normalize_line(line, width) for line in selected]
         try:
             if mrz_format == "TD1":
@@ -352,13 +377,11 @@ def parse_lines(raw_lines: list[str]) -> MrzResult | None:
                 result = _parse_td2_td3(normalized, mrz_format)
         except (IndexError, ValueError):
             continue
-        if not result.fields.get("birthDate"):
-            # Tug'ilgan sanasiz natija hech qachon foydali emas
-            if best is None:
-                best = result
-            continue
-        if best is None or result.score > best.score:
+        has_birth = 1 if result.fields.get("birthDate") else 0
+        rank = (has_birth, length_fit, result.score, result.checks_total)
+        if best is None or rank > best_rank:
             best = result
+            best_rank = rank
     return best
 
 

@@ -115,6 +115,22 @@ class TestTd3:
         assert result.fields["lastName"] == "Toshmatov"
         assert result.fields["firstName"] == "Jasur"
 
+    def test_td3_is_not_mistaken_for_td2(self):
+        """TD2 va TD3 ning dastlabki 28 belgisi bir xil o'rinda turadi, ya'ni
+        passport qatori TD2 sifatida ham nazorat raqamlaridan o'tib ketadi —
+        va o'tsa JSHSHIR yo'qoladi, chunki u faqat TD3'da bor."""
+        result = mrz.parse_lines(build_td3())
+        assert result.mrz_format == "TD3"
+        assert result.fields["personalNumber"] == "31503900010015"
+
+    def test_stray_letter_from_a_misread_filler_is_dropped(self):
+        """Ism qatorining nazorat raqami yo'q, shuning uchun "<" ning harf
+        bo'lib o'qilishini faqat shakl bo'yicha ushlash mumkin."""
+        lines = build_td3()
+        lines[0] = lines[0].replace("JASUR<<<", "JASUR<K<", 1)
+        result = mrz.parse_lines(lines)
+        assert result.fields["firstName"] == "Jasur"
+
     def test_empty_optional_field_yields_no_personal_number(self):
         result = mrz.parse_lines(build_td3(pinfl=""))
         assert result.verified
