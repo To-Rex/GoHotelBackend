@@ -4,9 +4,9 @@
 Barcha o'chirishlar BITTA mehmonxona doirasida (hotel_id bo'yicha) bajariladi —
 boshqa mehmonxonalar ma'lumotlariga tegilmaydi. Ikki rejim:
 
-- operational: bronlar, moliya, mehmonlar, xo'jalik vazifalari, tarix va
-  bildirishnomalar o'chiriladi. Xodimlar, ruxsatlar va mehmonxona tuzilmasi
-  (filial/qavat/xona/turlar/xizmatlar) saqlanadi.
+- operational: bronlar, moliya, mehmonlar, xo'jalik vazifalari, smenalar va
+  kassa sessiyalari, tarix va bildirishnomalar o'chiriladi. Xodimlar, ruxsatlar
+  va mehmonxona tuzilmasi (filial/qavat/xona/turlar/xizmatlar) saqlanadi.
 - full: yuqoridagilarga qo'shimcha barcha EMPLOYEE xodimlar (ruxsat
   biriktiruvlari va sessiyalari bilan) ham o'chiriladi. ADMIN/SUPER_ADMIN
   hisoblari hech qachon o'chirilmaydi — tizimga kirish saqlanib qoladi.
@@ -34,6 +34,11 @@ HOTEL_SCOPED_TABLES = [
     "reports",
     "room_status_history",
     "expenses",
+    # Smenalar va kassa sessiyalari — operatsion tarixning bir qismi. Ular
+    # xodimlarga RESTRICT bilan bog'langan, shuning uchun bu qatorsiz "to'liq
+    # tozalash" xodimlarni o'chirishga yetganda tashqi kalit xatosi bilan
+    # to'xtardi: kassali rejimda ishlagan har qanday xodimning sessiyasi bor.
+    "shift_sessions",
 ]
 
 # Faqat operatsion fayllar; mehmonxonaning o'z fayllari ('Hotel') saqlanadi
