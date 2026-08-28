@@ -47,6 +47,25 @@ def resolve_shift_settings(hotel_settings: dict | None) -> dict:
     }
 
 
+def pick_open_session(sessions, *, active_only: bool = False):
+    """Xodimning "joriy" sessiyasini tanlaydi: faol ustun, teng holatda eng yangi.
+
+    Bu qoida ATAYLAB bitta joyda turadi. Ilgari u ikki marta — kassa holatini
+    ko'rsatishda va topshirish summasini hisoblashda — alohida yozilgan edi va
+    ikkalasi boshqa-boshqa sessiyani tanlashi mumkin edi: ekranda boshlang'ich
+    kassa bir sessiyadan, topshiriladigan summa esa boshqasidan olinib,
+    xodimning tushumi yo'qolgandek ko'rinardi.
+
+    `active_only` — faqat ishlayotgan sessiya kerak bo'lgan joylar uchun
+    (topshirilgan smenani qayta yopib bo'lmaydi).
+    """
+    active = [s for s in sessions if s.status == "ACTIVE"]
+    pool = active if (active or active_only) else [
+        s for s in sessions if s.status == "PENDING_HANDOVER"
+    ]
+    return max(pool, key=lambda s: s.started_at) if pool else None
+
+
 def _dec(v) -> Decimal:
     return v if isinstance(v, Decimal) else Decimal(str(v or 0))
 
@@ -137,13 +156,15 @@ class ShiftService:
         branch_id = current.get("branch_id")
         branch_uuid = UUID(branch_id) if isinstance(branch_id, str) else branch_id
 
-        my_obj: ShiftSession | None = None
         sessions = await self._open_sessions(hotel_id, branch_uuid)
+        users = {s.id: u for s, u in sessions}
+        # Kassa holatini ko'rsatishda va topshirish summasini hisoblashda
+        # AYNAN bir sessiya tanlanishi shart — shuning uchun qoida umumiy.
+        my_obj = pick_open_session([s for s, _ in sessions if s.user_id == user_id])
         for s, u in sessions:
             if s.user_id == user_id:
-                state["my_session"] = self._serialize(s, u)
-                my_obj = s
-            elif state["blocking_session"] is None:
+                continue
+            if state["blocking_session"] is None:
                 # Boshqa xodimning yopilmagan sessiyasi — qattiq blok manbai
                 blocked = self._serialize(s, u)
                 # Topshirilayotgan smenada sanab topshirilgan summa qabul
@@ -152,6 +173,9 @@ class ShiftService:
                 if s.status == "PENDING_HANDOVER" and s.counted_cash is not None:
                     blocked["counted_cash"] = float(s.counted_cash)
                 state["blocking_session"] = blocked
+
+        if my_obj is not None:
+            state["my_session"] = self._serialize(my_obj, users.get(my_obj.id))
 
         # Men QABUL QILIB OLGAN avvalgi smena — joriy sessiyam davomida
         # hisobot sifatida ko'rsatiladi (summalar avvalgi xodim hisobida).
@@ -210,10 +234,22 @@ class ShiftService:
         return self._serialize(s)
 
     async def _my_active(self, hotel_id: UUID, user_id: UUID) -> ShiftSession:
-        stmt = select(ShiftSession).where(
-            ShiftSession.hotel_id == hotel_id,
-            ShiftSession.user_id == user_id,
-            ShiftSession.status == "ACTIVE",
+        """Xodimning faol sessiyasi — HAR DOIM eng oxirgisi.
+
+        Tartib berilmasa baza istalgan qatorni qaytarishi mumkin edi. Xodimda
+        (nosozlik tufayli) ikkita faol sessiya paydo bo'lsa, kassa ekrani bir
+        sessiyani, topshirish summasi esa boshqasini ko'rsatardi: boshlang'ich
+        to'g'ri, topshiriladigan summa esa bir sessiya orqadagi qiymat bo'lib
+        qolardi. Eng yangisini tanlash ikkala hisobni bitta sessiyaga bog'laydi.
+        """
+        stmt = (
+            select(ShiftSession)
+            .where(
+                ShiftSession.hotel_id == hotel_id,
+                ShiftSession.user_id == user_id,
+                ShiftSession.status == "ACTIVE",
+            )
+            .order_by(ShiftSession.started_at.desc())
         )
         result = await self.session.execute(stmt)
         s = result.scalars().first()
@@ -330,6 +366,10 @@ class ShiftService:
         continue_flag = s.continue_after_end
         await self._close_with_count(s, counted_cash, notes, user_id)
         s.status = "CLOSED"
+        # Yopilish YANGI sessiyadan OLDIN yozilishi shart: "bir xodim — bitta
+        # faol sessiya" cheklovi bazada indeks bilan qo'riqlanadi, SQLAlchemy
+        # esa odatda qo'shishni yangilashdan oldin yuboradi.
+        await self.session.flush()
 
         # Yangi sessiya — xodim ishlashda davom etadi, kassa 0 dan
         new_s = ShiftSession(
@@ -375,6 +415,18 @@ class ShiftService:
         branch_id = current.get("branch_id")
         branch_uuid = UUID(branch_id) if isinstance(branch_id, str) else branch_id
         sessions = await self._open_sessions(hotel_id, branch_uuid)
+
+        # Qabul qiluvchida ochiq sessiya BO'LMASLIGI shart. `open_session` buni
+        # tekshiradi, bu yerda esa tekshirilmagani uchun bitta xodimda ikkita
+        # faol sessiya paydo bo'lishi mumkin edi — o'shanda kassa ko'rsatkichi
+        # bir sessiyadan, topshiriladigan summa boshqasidan olinib, tushum
+        # yo'qolgandek ko'rinardi.
+        mine = next((s for s, _ in sessions if s.user_id == user_id), None)
+        if mine is not None:
+            raise ConflictException(
+                "Sizda ochiq smena bor — avval uni yakunlang",
+                "SHIFT_ALREADY_OPEN",
+            )
 
         pending = next(
             (s for s, _ in sessions if s.status == "PENDING_HANDOVER" and s.user_id != user_id),

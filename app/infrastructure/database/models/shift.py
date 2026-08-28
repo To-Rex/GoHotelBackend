@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,22 @@ class ShiftSession(FullMixin, Base):
     """
 
     __tablename__ = "shift_sessions"
+
+    __table_args__ = (
+        # Bir xodimda bir vaqtda faqat BITTA ochiq sessiya bo'lishi mumkin.
+        # Ikkitasi paydo bo'lganda kassa ko'rsatkichi bir sessiyadan, topshirish
+        # summasi esa boshqasidan olinib, xodimning tushumi yo'qolgandek
+        # ko'rinardi. Xizmat qatlamidagi tekshiruv yetarli emas: bu yerdagi
+        # cheklov parallel so'rovlarda ham, kelajakdagi yangi yo'llarda ham
+        # buziladi.
+        Index(
+            "uq_shift_sessions_one_open_per_user",
+            "hotel_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status IN ('ACTIVE', 'PENDING_HANDOVER')"),
+        ),
+    )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True
