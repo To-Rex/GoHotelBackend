@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
+from app.application.services.personal_report_service import PersonalReportService
 from app.application.services.reporting_service import ReportingService
 from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel
@@ -20,6 +21,35 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
     return hotel_id
+
+
+@router.get("/my-summary")
+async def my_summary(
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Joriy xodimning tanlangan kunlardagi shaxsiy hisoboti.
+
+    Ruxsat talab qilinmaydi — har kim FAQAT o'zining ma'lumotini oladi
+    (`user_id` tokendan olinadi, so'rovdan emas).
+
+    Pul har doim to'lovning o'zidan olinadi (kim qabul qilgan), bronlar esa
+    mualliflik ko'rsatkichi sifatida alohida turadi. Sabab uchun
+    `personal_report_service` modulining izohiga qarang.
+    """
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+    # Oqilona chegara: hisobot sahifasi eng ko'pi bilan bir yilni so'raydi
+    if (date_to - date_from).days > 366:
+        raise ForbiddenException("Oraliq bir yildan oshmasligi kerak", "RANGE_TOO_WIDE")
+
+    user_id = current_user["id"]
+    if isinstance(user_id, str):
+        user_id = UUID(user_id)
+    service = PersonalReportService(session)
+    return await service.summary(_get_hotel_id(current_user), user_id, date_from, date_to)
 
 
 @router.get("/")
