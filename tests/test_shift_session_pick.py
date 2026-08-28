@@ -82,3 +82,52 @@ def test_result_does_not_depend_on_input_order(order):
     ]
     picked = pick_open_session([items[i] for i in order])
     assert picked.name == "yangi-faol"
+
+
+# ---------------------------------------------------- ochiq smena talabi
+
+from app.presentation.api.v1._deps import _is_cash_staff  # noqa: E402
+
+
+class TestCashStaffRule:
+    """Smena talabi KIMGA tegishli.
+
+    Cheklov noto'g'ri odamga tushsa, u ishni to'xtatib qo'yadi: administrator
+    tuzatish kirita olmaydi yoki farrosh vazifasini yopa olmaydi. Shuning uchun
+    qoida shu yerda aniq qulflanadi.
+    """
+
+    def test_reception_needs_a_shift(self):
+        assert _is_cash_staff(
+            {"user_type": "EMPLOYEE", "permissions": ["reservation.create"]}
+        )
+
+    def test_cashier_needs_a_shift(self):
+        assert _is_cash_staff(
+            {"user_type": "EMPLOYEE", "permissions": ["finance.payment.create"]}
+        )
+
+    def test_manager_is_exempt(self):
+        """Menejer smena ochmasdan tuzatish kiritishi kerak bo'ladi."""
+        assert not _is_cash_staff(
+            {
+                "user_type": "EMPLOYEE",
+                "permissions": ["reservation.create", "shift.force_close"],
+            }
+        )
+
+    @pytest.mark.parametrize("user_type", ["ADMIN", "SUPER_ADMIN"])
+    def test_administrators_are_exempt(self, user_type):
+        assert not _is_cash_staff(
+            {"user_type": user_type, "permissions": ["reservation.create"]}
+        )
+
+    def test_housekeeper_is_exempt(self):
+        """Farroshning ishi kassaga bog'liq emas."""
+        assert not _is_cash_staff(
+            {"user_type": "EMPLOYEE", "permissions": ["task.view", "task.update"]}
+        )
+
+    def test_no_permissions_is_exempt(self):
+        assert not _is_cash_staff({"user_type": "EMPLOYEE", "permissions": []})
+        assert not _is_cash_staff({"user_type": "EMPLOYEE"})

@@ -39,7 +39,7 @@ from app.infrastructure.database.models.shop import (
 )
 from app.infrastructure.database.models.user import User
 from app.presentation.middleware.auth import get_current_user
-from app.presentation.api.v1._deps import require_active_hotel
+from app.presentation.api.v1._deps import require_active_hotel, require_open_shift
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -500,6 +500,7 @@ async def create_sale(
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _shift: None = Depends(require_open_shift),
 ):
     h_id = _get_hotel_id(current_user, hotel_id)
 
@@ -614,6 +615,7 @@ async def pay_sale(
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _shift: None = Depends(require_open_shift),
 ):
     h_id = _get_hotel_id(current_user, hotel_id)
     sale = await session.get(ShopSale, sale_id, options=[selectinload(ShopSale.items)])

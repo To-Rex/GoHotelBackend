@@ -27,7 +27,7 @@ from app.application.dto.reservation import (
 )
 from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
-from app.presentation.api.v1._deps import require_active_hotel
+from app.presentation.api.v1._deps import require_active_hotel, require_open_shift
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -118,6 +118,7 @@ async def create_reservation(
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("reservation.create")),
+    _shift: None = Depends(require_open_shift),
 ):
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -250,6 +251,7 @@ async def settle_payment(
     data: SettlePaymentRequest = ...,
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("finance.payment.create")),
+    _shift: None = Depends(require_open_shift),
 ):
     """Bron balansi bo'yicha hisob-kitob: qo'shimcha to'lov (PAY, qisman ham
     mumkin) yoki ortiqcha to'langanni qaytarish (REFUND) — asosan xona
