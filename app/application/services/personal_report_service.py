@@ -35,8 +35,29 @@ from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.shop import ShopSale
 
-#: Hisobotda alohida ko'rsatiladigan to'lov turlari
-METHODS = ("CASH", "CARD", "TRANSFER")
+#: To'lov turlarini hisobot ustunlariga guruhlash.
+#:
+#: Bazada haqiqiy kodlar ishlatiladi (CREDIT_CARD, BANK_TRANSFER, ONLINE...),
+#: hisobotda esa xodim tushunadigan bir necha ustun kerak. Ilgari bu jadval
+#: yo'q edi va faqat "CASH" tanilardi — karta va o'tkazma bilan olingan pul
+#: "boshqa" ustuniga tushib, hisobotda ko'rinmay qolardi.
+METHOD_BUCKETS = {
+    "CASH": "cash",
+    "CREDIT_CARD": "card",
+    "DEBIT_CARD": "card",
+    "BANK_TRANSFER": "transfer",
+    "MOBILE_PAYMENT": "online",
+    "ONLINE": "online",
+}
+
+#: Hisobotdagi ustunlar tartibi. "other" — jadvalda yo'q yoki ko'rsatilmagan
+#: to'lov turi: u yo'qolib ketmasligi uchun alohida ustunda yig'iladi.
+METHODS = ("cash", "card", "transfer", "online", "other")
+
+
+def bucket_of(method) -> str:
+    """To'lov turini hisobot ustuniga o'girish."""
+    return METHOD_BUCKETS.get(str(method or "").strip().upper(), "other")
 
 
 def _dec(value) -> Decimal:
@@ -57,7 +78,7 @@ def local_day_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime
 
 
 def _empty_methods() -> dict:
-    return {method.lower(): Decimal("0") for method in METHODS}
+    return {method: Decimal("0") for method in METHODS}
 
 
 def _money(bucket: dict) -> dict:
@@ -82,12 +103,23 @@ class PersonalReportService:
         shop = await self._shop(hotel_id, user_id, start, end)
         expenses = await self._expenses(hotel_id, user_id, date_from, date_to)
 
+        # Jami tushum: bron to'lovlari + do'kon savdosi, har bir to'lov turi
+        # bo'yicha. Qaytarimlar manfiy Payment bo'lgani uchun ular allaqachon
+        # shu yig'indini kamaytirgan — ikkinchi marta ayirilmaydi.
+        income_by_method = {
+            method: _dec(payments["by_method"][method]) + _dec(shop["by_method"][method])
+            for method in METHODS
+        }
+        income_total = _dec(payments["total"]) + _dec(shop["total"])
+        expense_total = _dec(expenses["total"])
+
+        # Sof natija: musbat bo'lsa foyda, manfiy bo'lsa zarar. Bu XODIM
+        # bo'yicha natija — u qabul qilgan puldan o'zi kiritgan xarajat
+        # ayirilgan; mehmonxonaning umumiy foydasi emas.
+        net = income_total - expense_total
+
         # Kassaga tushgan sof naqd — kassa hisobidagi mantiq bilan bir xil
-        net_cash = (
-            _dec(payments["by_method"]["cash"])
-            + _dec(shop["by_method"]["cash"])
-            - _dec(expenses["by_method"]["cash"])
-        )
+        net_cash = income_by_method["cash"] - _dec(expenses["by_method"]["cash"])
 
         return {
             "date_from": date_from.isoformat(),
@@ -96,6 +128,22 @@ class PersonalReportService:
             "payments": payments,
             "shop": shop,
             "expenses": expenses,
+            "income": {
+                "total": float(income_total),
+                "by_method": _money(income_by_method),
+            },
+            "net": {
+                "total": float(net),
+                "profit": float(net) if net > 0 else 0.0,
+                "loss": float(-net) if net < 0 else 0.0,
+                "by_method": _money(
+                    {
+                        method: income_by_method[method]
+                        - _dec(expenses["by_method"][method])
+                        for method in METHODS
+                    }
+                ),
+            },
             "net_cash": float(net_cash),
         }
 
@@ -178,7 +226,6 @@ class PersonalReportService:
 
         rows = (await self.session.execute(stmt)).scalars().all()
         by_method = _empty_methods()
-        other = Decimal("0")
         total = Decimal("0")
         refunds = Decimal("0")
         for payment in rows:
@@ -186,16 +233,12 @@ class PersonalReportService:
             total += amount
             if amount < 0:
                 refunds += -amount
-            key = (payment.payment_method or "").lower()
-            if key in by_method:
-                by_method[key] += amount
-            else:
-                other += amount
+            by_method[bucket_of(payment.payment_method)] += amount
         return {
             "count": len(rows),
             "total": float(total),
             "refunds": float(refunds),
-            "by_method": _money({**by_method, "other": other}),
+            "by_method": _money(by_method),
         }
 
     # --------------------------------------------------------------- do'kon
@@ -220,25 +263,17 @@ class PersonalReportService:
         paid_rows = (await self.session.execute(paid_stmt)).scalars().all()
 
         by_method = _empty_methods()
-        other = Decimal("0")
         total = Decimal("0")
         for sale in paid_rows:
             total += _dec(sale.total_amount)
             # Bo'lib to'langan savdoda har bo'lak o'z turiga yoziladi
             if sale.payments:
                 for part in sale.payments:
-                    key = str(part.get("payment_method") or "").lower()
-                    amount = _dec(part.get("amount"))
-                    if key in by_method:
-                        by_method[key] += amount
-                    else:
-                        other += amount
+                    by_method[bucket_of(part.get("payment_method"))] += _dec(
+                        part.get("amount")
+                    )
             else:
-                key = (sale.payment_method or "").lower()
-                if key in by_method:
-                    by_method[key] += _dec(sale.total_amount)
-                else:
-                    other += _dec(sale.total_amount)
+                by_method[bucket_of(sale.payment_method)] += _dec(sale.total_amount)
 
         unpaid_stmt = stmt.where(
             ShopSale.status != "PAID",
@@ -250,7 +285,7 @@ class PersonalReportService:
         return {
             "count": len(paid_rows),
             "total": float(total),
-            "by_method": _money({**by_method, "other": other}),
+            "by_method": _money(by_method),
             "unpaid_count": len(unpaid_rows),
             "unpaid_total": float(sum((_dec(s.total_amount) for s in unpaid_rows), Decimal("0"))),
         }
@@ -274,17 +309,12 @@ class PersonalReportService:
 
         rows = (await self.session.execute(stmt)).scalars().all()
         by_method = _empty_methods()
-        other = Decimal("0")
         total = Decimal("0")
         items = []
         for expense in rows:
             amount = _dec(expense.amount)
             total += amount
-            key = (expense.payment_method or "").lower()
-            if key in by_method:
-                by_method[key] += amount
-            else:
-                other += amount
+            by_method[bucket_of(expense.payment_method)] += amount
             items.append(
                 {
                     "id": str(expense.id),
@@ -302,6 +332,6 @@ class PersonalReportService:
         return {
             "count": len(items),
             "total": float(total),
-            "by_method": _money({**by_method, "other": other}),
+            "by_method": _money(by_method),
             "items": items,
         }

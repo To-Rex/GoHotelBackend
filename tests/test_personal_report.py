@@ -11,7 +11,9 @@ import pytest
 
 from app.core.config import settings
 from app.application.services.personal_report_service import (
+    METHOD_BUCKETS,
     METHODS,
+    bucket_of,
     local_day_bounds,
 )
 
@@ -60,21 +62,60 @@ class TestLocalDayBounds:
 
 
 class TestMethodBuckets:
-    def test_reported_methods_match_what_the_till_counts(self):
-        """Kassa hisobi naqdni alohida ajratadi — hisobot ham shu turlarni
-        bilishi kerak, aks holda ikkisini solishtirib bo'lmaydi."""
-        assert "CASH" in METHODS
-        assert set(METHODS) == {"CASH", "CARD", "TRANSFER"}
+    def test_cash_is_a_column_of_its_own(self):
+        """Kassa hisobi naqdni alohida ajratadi — hisobot ham shunday
+        qilishi kerak, aks holda ikkisini solishtirib bo'lmaydi."""
+        assert "cash" in METHODS
+        assert bucket_of("CASH") == "cash"
+
+    def test_real_payment_codes_land_in_a_visible_column(self):
+        """Bazadagi haqiqiy kodlar "boshqa"ga tushib qolmasligi kerak.
+
+        Ilgari faqat "CASH" tanilardi: karta va o'tkazma bilan olingan pul
+        hisobotda ko'rinmay, "boshqa" ustunida yig'ilib qolardi.
+        """
+        assert bucket_of("CREDIT_CARD") == "card"
+        assert bucket_of("DEBIT_CARD") == "card"
+        assert bucket_of("BANK_TRANSFER") == "transfer"
+        assert bucket_of("MOBILE_PAYMENT") == "online"
+        assert bucket_of("ONLINE") == "online"
+
+    def test_every_bucket_is_a_reported_column(self):
+        for bucket in METHOD_BUCKETS.values():
+            assert bucket in METHODS
+
+    def test_unknown_and_missing_methods_are_not_lost(self):
+        """Notanish yoki ko'rsatilmagan tur — yo'qolmaydi, "boshqa"da qoladi."""
+        assert bucket_of(None) == "other"
+        assert bucket_of("") == "other"
+        assert bucket_of("BITCOIN") == "other"
+        assert "other" in METHODS
+
+    def test_matching_is_case_and_space_tolerant(self):
+        assert bucket_of(" cash ") == "cash"
+        assert bucket_of("credit_card") == "card"
 
 
 class TestEndpointShape:
     @pytest.mark.parametrize(
-        "field", ["reservations", "payments", "shop", "expenses", "net_cash"]
+        "field",
+        [
+            "reservations",
+            "payments",
+            "shop",
+            "expenses",
+            "income",
+            "net",
+            "net_cash",
+        ],
     )
     def test_summary_contract_is_documented(self, field):
-        """Frontend shu kalitlarga tayanadi — nomlari o'zgarsa sahifa jim
-        qoladi, shuning uchun ular shu yerda qulflanadi."""
+        """Frontend shu kalitlarga tayanadi — nomi o'zgarsa sahifa jim
+        qoladi (ko'rsatkich shunchaki nol bo'lib qoladi), shuning uchun
+        javobning kalitlari shu yerda qulflanadi."""
+        import inspect
+
         from app.application.services.personal_report_service import PersonalReportService
 
-        assert hasattr(PersonalReportService, "summary")
-        assert field in {"reservations", "payments", "shop", "expenses", "net_cash"}
+        source = inspect.getsource(PersonalReportService.summary)
+        assert f'"{field}":' in source
