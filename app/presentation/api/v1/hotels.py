@@ -40,7 +40,9 @@ def _resolve_nav(settings: dict | None) -> dict:
     yon menyudan yo'qolib qolmasligi kerak — u shunchaki o'z guruhining
     oxirida ko'rinadi.
     """
-    saved = (settings or {}).get(NAV_SETTINGS_KEY) or {}
+    saved = (settings or {}).get(NAV_SETTINGS_KEY)
+    if not isinstance(saved, dict):
+        return {"order": []}
     order = saved.get("order")
     if not isinstance(order, list):
         return {"order": []}
@@ -100,6 +102,73 @@ async def save_nav_settings(
     hotel.settings = new_settings
     await session.flush()
     return _resolve_nav(new_settings)
+
+
+# ------------------------------------------- yangi bandlov sozlamalari --
+
+BOOKING_SETTINGS_KEY = "booking"
+
+BOOKING_TYPES = ("DAILY", "HOURLY")
+
+
+def _resolve_booking(settings: dict | None) -> dict:
+    """Yangi bandlov dialogi qaysi tur bilan ochiladi.
+
+    Bu faqat STANDART tanlov: xodim dialogda turni avvalgidek almashtira
+    oladi. Notanish qiymat "DAILY" ga qaytadi — buzuq yozuv butun
+    mehmonxonaning bron oynasini ishlamas holga keltirmasligi kerak.
+    """
+    saved = (settings or {}).get(BOOKING_SETTINGS_KEY)
+    if not isinstance(saved, dict):
+        return {"default_type": "DAILY"}
+    default_type = saved.get("default_type")
+    if default_type not in BOOKING_TYPES:
+        default_type = "DAILY"
+    return {"default_type": default_type}
+
+
+class BookingSettingsRequest(BaseModel):
+    default_type: str = Field(default="DAILY")
+
+
+@router.get("/booking-settings")
+async def get_booking_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Standart bron turi — HAR QANDAY xodim o'qiydi (dialog hammada ochiladi)."""
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        return _resolve_booking(None)
+    hotel = await session.get(Hotel, hotel_id)
+    return _resolve_booking(hotel.settings if hotel else None)
+
+
+@router.put("/booking-settings")
+async def save_booking_settings(
+    data: BookingSettingsRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Standart bron turini saqlash — faqat administrator."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException(
+            "Faqat administrator standart bron turini o'zgartira oladi", "FORBIDDEN"
+        )
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        raise ForbiddenException("Hotel context required")
+    hotel = await session.get(Hotel, hotel_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[BOOKING_SETTINGS_KEY] = _resolve_booking(
+        {BOOKING_SETTINGS_KEY: data.model_dump()}
+    )
+    hotel.settings = new_settings
+    await session.flush()
+    return _resolve_booking(new_settings)
 
 
 def _get_hotel_id(current_user: dict) -> UUID | None:
