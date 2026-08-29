@@ -29,6 +29,8 @@ def _hotel_id(current_user: dict) -> UUID:
 class ShiftSettingsRequest(BaseModel):
     mode: str = Field(..., pattern=r"^(simple|cash)$")
     day_close: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    # Kesim vaqtida kassa topshirish majburiymi (False — faqat eslatma)
+    day_close_required: bool = True
 
 
 class OpenShiftRequest(BaseModel):
@@ -76,7 +78,7 @@ async def save_settings(
     if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
         raise ForbiddenException("Faqat administrator rejimni o'zgartira oladi")
     return await ShiftService(session).save_settings(
-        _hotel_id(current_user), data.mode, data.day_close
+        _hotel_id(current_user), data.mode, data.day_close, data.day_close_required
     )
 
 

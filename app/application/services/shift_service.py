@@ -33,7 +33,11 @@ from app.infrastructure.database.models.user import User
 
 # hotels.settings JSONB ichidagi kalit va standart qiymatlar
 SHIFT_SETTINGS_KEY = "shift"
-SHIFT_DEFAULTS = {"mode": "simple", "day_close": "00:00"}
+# day_close_required — kunlik kassa kesimi MAJBURIYmi:
+#   True  — kesim vaqti kelgach kassa topshirilmaguncha ishlab bo'lmaydi
+#   False — faqat eslatiladi, xodim ishlashda davom etaveradi
+# Standart True: mavjud mehmonxonalarda xatti-harakat o'zgarmasin.
+SHIFT_DEFAULTS = {"mode": "simple", "day_close": "00:00", "day_close_required": True}
 
 
 def resolve_shift_settings(hotel_settings: dict | None) -> dict:
@@ -41,9 +45,13 @@ def resolve_shift_settings(hotel_settings: dict | None) -> dict:
     raw = (hotel_settings or {}).get(SHIFT_SETTINGS_KEY) or {}
     mode = raw.get("mode")
     day_close = raw.get("day_close")
+    required = raw.get("day_close_required")
     return {
         "mode": mode if mode in ("simple", "cash") else SHIFT_DEFAULTS["mode"],
         "day_close": day_close if isinstance(day_close, str) and len(day_close) == 5 else SHIFT_DEFAULTS["day_close"],
+        "day_close_required": (
+            required if isinstance(required, bool) else SHIFT_DEFAULTS["day_close_required"]
+        ),
     }
 
 
@@ -86,11 +94,21 @@ class ShiftService:
         hotel = await self._get_hotel(hotel_id)
         return resolve_shift_settings(hotel.settings)
 
-    async def save_settings(self, hotel_id: UUID, mode: str, day_close: str) -> dict:
+    async def save_settings(
+        self,
+        hotel_id: UUID,
+        mode: str,
+        day_close: str,
+        day_close_required: bool = True,
+    ) -> dict:
         hotel = await self._get_hotel(hotel_id)
         # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
         new_settings = dict(hotel.settings or {})
-        new_settings[SHIFT_SETTINGS_KEY] = {"mode": mode, "day_close": day_close}
+        new_settings[SHIFT_SETTINGS_KEY] = {
+            "mode": mode,
+            "day_close": day_close,
+            "day_close_required": day_close_required,
+        }
         hotel.settings = new_settings
         await self.session.flush()
         return resolve_shift_settings(new_settings)

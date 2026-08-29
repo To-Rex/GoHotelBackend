@@ -181,3 +181,41 @@ class TestForceCloseHandover:
         xuddi oddiy topshirishdagidek.
         """
         assert ("PENDING_HANDOVER" if hand_over else "CLOSED") == expected_status
+
+
+# ------------------------------------------- kunlik kesim majburiyligi sozlamasi
+
+from app.application.services.shift_service import resolve_shift_settings  # noqa: E402
+
+
+class TestDayCloseRequirement:
+    """Kesim vaqtida kassa topshirish majburiymi.
+
+    Sozlama yoqilganda kassa topshirilmaguncha ishlab bo'lmaydi; o'chirilganda
+    faqat eslatiladi. Standart qiymat MUHIM: u mavjud mehmonxonalarning
+    xatti-harakatini o'zgartirmasligi kerak.
+    """
+
+    def test_enforced_by_default(self):
+        assert resolve_shift_settings(None)["day_close_required"] is True
+
+    def test_existing_hotels_keep_the_old_behaviour(self):
+        """Sozlamada bu maydon yo'q — ular ilgari majburiy rejimda ishlagan."""
+        saved = {"shift": {"mode": "cash", "day_close": "00:05"}}
+        assert resolve_shift_settings(saved)["day_close_required"] is True
+
+    def test_can_be_switched_off(self):
+        saved = {"shift": {"mode": "cash", "day_close": "00:05", "day_close_required": False}}
+        assert resolve_shift_settings(saved)["day_close_required"] is False
+
+    @pytest.mark.parametrize("bad", ["yes", 1, 0, None, "false"])
+    def test_non_boolean_falls_back_to_enforced(self, bad):
+        """Buzilgan qiymat cheklovni jimgina o'chirib qo'ymasligi kerak."""
+        saved = {"shift": {"mode": "cash", "day_close": "00:05", "day_close_required": bad}}
+        assert resolve_shift_settings(saved)["day_close_required"] is True
+
+    def test_other_settings_are_untouched(self):
+        saved = {"shift": {"mode": "cash", "day_close": "06:00", "day_close_required": False}}
+        resolved = resolve_shift_settings(saved)
+        assert resolved["mode"] == "cash"
+        assert resolved["day_close"] == "06:00"
