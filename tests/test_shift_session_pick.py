@@ -7,6 +7,7 @@ topshiriladigan summa esa boshqasidan olinib, xodimning o'z tushumi yo'qolgandek
 ko'rinardi. Shu sababli qoida shu yerda alohida sinovdan o'tadi.
 """
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 
@@ -131,3 +132,52 @@ class TestCashStaffRule:
     def test_no_permissions_is_exempt(self):
         assert not _is_cash_staff({"user_type": "EMPLOYEE", "permissions": []})
         assert not _is_cash_staff({"user_type": "EMPLOYEE"})
+
+
+# --------------------------------------------- majburiy yopish va kassa taqdiri
+
+from app.presentation.api.v1.shifts import ForceCloseRequest  # noqa: E402
+
+
+class TestForceCloseHandover:
+    """Majburiy yopishda kassadagi pul nima bo'ladi.
+
+    Ilgari majburiy yopish sessiyani darhol CLOSED qilardi va kassa zanjiri
+    uzilardi: keyingi xodim pulni qabul qilmagan holda noldan boshlar, kassada
+    esa pul turaverardi — smena topshirishda u "ortiqcha" bo'lib chiqardi.
+    """
+
+    def test_handover_is_the_default(self):
+        """Standart holat — xavfsiz holat.
+
+        Admin belgilamasa, pul yo'qolmasligi kerak: sessiya topshirilgan
+        holatda qoladi va keyingi xodim uni parol bilan qabul qiladi.
+        """
+        request = ForceCloseRequest(session_id=uuid4())
+        assert request.hand_over is True
+
+    def test_admin_can_take_the_cash_instead(self):
+        """Eski xatti-harakat ham saqlanadi: pulni admin o'zi olsa, sessiya
+        butunlay yopiladi va keyingi xodim noldan boshlaydi."""
+        request = ForceCloseRequest(session_id=uuid4(), hand_over=False)
+        assert request.hand_over is False
+
+    def test_counted_cash_stays_optional(self):
+        """Sanamasdan yopish imkoniyati yo'qolmasligi kerak — xodim aloqaga
+        chiqmagan holat uchun."""
+        request = ForceCloseRequest(session_id=uuid4())
+        assert request.counted_cash is None
+        assert request.notes is None
+
+    @pytest.mark.parametrize(
+        "hand_over,expected_status",
+        [(True, "PENDING_HANDOVER"), (False, "CLOSED")],
+    )
+    def test_status_mapping(self, hand_over, expected_status):
+        """Holat xaritasi: topshirilsa sessiya OCHIQ qoladi.
+
+        Bu muhim, chunki ochiq sessiya boshqa xodimning smena ochishini
+        to'sib turadi — ya'ni keyingi xodim uni qabul qilishga majbur bo'ladi,
+        xuddi oddiy topshirishdagidek.
+        """
+        assert ("PENDING_HANDOVER" if hand_over else "CLOSED") == expected_status

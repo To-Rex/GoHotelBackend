@@ -459,9 +459,26 @@ class ShiftService:
         session_id: UUID,
         counted_cash: float | None = None,
         notes: str | None = None,
+        hand_over: bool = True,
     ) -> dict:
-        """Admin/menejer majburiy yopishi. counted_cash berilmasa kutilgan
-        summa bo'yicha yopiladi (farq 0). Farq bo'lsa sessiya egasiga yoziladi."""
+        """Admin/menejer majburiy yopishi.
+
+        counted_cash berilmasa kutilgan summa bo'yicha yopiladi (farq 0).
+        Farq bo'lsa sessiya egasiga yoziladi.
+
+        `hand_over` — kassadagi pul nima bo'ladi:
+
+          True (asosiy holat) — sessiya TOPSHIRILGAN holatga o'tadi va keyingi
+            xodim uni xuddi oddiy topshirishdagidek, O'Z PAROLI bilan qabul
+            qiladi. Pul zanjiri uzilmaydi: sanalgan summa qabul qiluvchining
+            boshlang'ich kassasi bo'ladi.
+          False — pulni admin o'zi olgan; sessiya butunlay yopiladi va keyingi
+            xodim kassani noldan boshlaydi.
+
+        Ilgari faqat ikkinchi yo'l bor edi, ya'ni majburiy yopishdan keyin
+        kassadagi pul hisobdan chiqib ketardi — keyingi xodim uni qabul
+        qilmagan holda ish boshlar va smena topshirishda ortiqcha pul
+        chiqardi."""
         is_admin = current["user_type"] in ("ADMIN", "SUPER_ADMIN")
         has_perm = "shift.force_close" in (current.get("permissions") or [])
         if not (is_admin or has_perm):
@@ -481,10 +498,15 @@ class ShiftService:
             # Sanamasdan yopish — kutilgan bo'yicha, farq 0
             s.counted_cash = s.expected_cash
         s.cash_diff = _dec(s.counted_cash) - _dec(s.expected_cash)
-        s.status = "CLOSED"
+        # Topshirishda sessiya OCHIQ qoladi (qabul kutilmoqda), shuning uchun
+        # u boshqa xodimning smena ochishini ham to'sib turadi — aynan oddiy
+        # topshirishdagi kabi.
+        s.status = "PENDING_HANDOVER" if hand_over else "CLOSED"
         s.force_closed = True
         s.closed_by = closer_id
         note = f"Majburiy yopildi ({current.get('user_type', '')})"
+        if hand_over:
+            note += " — kassa keyingi xodim qabul qilishini kutmoqda"
         s.notes = f"{s.notes}\n{note}" if s.notes else note
         if notes:
             s.notes += f": {notes}"

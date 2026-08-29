@@ -48,6 +48,9 @@ class ForceCloseRequest(BaseModel):
     session_id: UUID
     counted_cash: float | None = Field(default=None, ge=0)
     notes: str | None = Field(default=None, max_length=1000)
+    # Kassa keyingi xodim qabul qilishini kutsinmi (asosiy holat) yoki
+    # pulni admin o'zi olib, sessiya butunlay yopilsinmi
+    hand_over: bool = True
 
 
 class CorrectShiftRequest(BaseModel):
@@ -160,6 +163,7 @@ async def force_close(
         data.session_id,
         data.counted_cash,
         data.notes,
+        data.hand_over,
     )
 
 
