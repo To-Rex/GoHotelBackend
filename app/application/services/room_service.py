@@ -459,6 +459,7 @@ class RoomService:
                     "discount_amount": float(reservation.discount_amount or 0),
                     "notes": reservation.notes,
                     "cancelled_reason": reservation.cancelled_reason,
+                    "companions": reservation.companions,
                     "created_at": reservation.created_at,
                 }
             )

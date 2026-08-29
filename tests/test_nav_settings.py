@@ -64,21 +64,21 @@ class TestBookingDefaults:
     def test_unset_hotel_keeps_the_daily_default(self):
         from app.presentation.api.v1.hotels import _resolve_booking
 
-        assert _resolve_booking(None) == {"default_type": "DAILY"}
-        assert _resolve_booking({}) == {"default_type": "DAILY"}
+        assert _resolve_booking(None)["default_type"] == "DAILY"
+        assert _resolve_booking({})["default_type"] == "DAILY"
 
     def test_hourly_is_stored_and_returned(self):
         from app.presentation.api.v1.hotels import BOOKING_SETTINGS_KEY, _resolve_booking
 
         saved = {BOOKING_SETTINGS_KEY: {"default_type": "HOURLY"}}
-        assert _resolve_booking(saved) == {"default_type": "HOURLY"}
+        assert _resolve_booking(saved)["default_type"] == "HOURLY"
 
     def test_an_unknown_type_falls_back_instead_of_breaking(self):
         from app.presentation.api.v1.hotels import BOOKING_SETTINGS_KEY, _resolve_booking
 
         for broken in ("WEEKLY", "", None, 5, ["HOURLY"]):
             saved = {BOOKING_SETTINGS_KEY: {"default_type": broken}}
-            assert _resolve_booking(saved) == {"default_type": "DAILY"}
+            assert _resolve_booking(saved)["default_type"] == "DAILY"
 
     def test_a_wrong_shape_does_not_raise(self):
         """Bazaga qo'lda yozilgan noto'g'ri shakl 500 bermasligi kerak."""
@@ -89,7 +89,7 @@ class TestBookingDefaults:
             _resolve_nav,
         )
 
-        assert _resolve_booking({BOOKING_SETTINGS_KEY: "HOURLY"}) == {"default_type": "DAILY"}
+        assert _resolve_booking({BOOKING_SETTINGS_KEY: "HOURLY"})["default_type"] == "DAILY"
         assert _resolve_nav({NAV_SETTINGS_KEY: "/rooms"}) == {"order": []}
 
     def test_other_settings_are_untouched(self):
@@ -102,3 +102,19 @@ class TestBookingDefaults:
         )
         assert new_settings["shift"] == {"mode": "cash"}
         assert new_settings["nav"] == {"order": ["/rooms"]}
+
+
+    def test_the_all_guests_switch_defaults_to_off(self):
+        """Hamrohlarni ro'yxatga olish talabi standart holda o'chirilgan."""
+        from app.presentation.api.v1.hotels import BOOKING_SETTINGS_KEY, _resolve_booking
+
+        assert _resolve_booking(None)["require_all_guests"] is False
+        # Eski yozuvda bu maydon yo'q — u ham o'chirilgan deb qaraladi
+        saved = {BOOKING_SETTINGS_KEY: {"default_type": "HOURLY"}}
+        assert _resolve_booking(saved)["require_all_guests"] is False
+
+    def test_the_all_guests_switch_survives_a_round_trip(self):
+        from app.presentation.api.v1.hotels import BOOKING_SETTINGS_KEY, _resolve_booking
+
+        saved = {BOOKING_SETTINGS_KEY: {"default_type": "DAILY", "require_all_guests": True}}
+        assert _resolve_booking(saved)["require_all_guests"] is True

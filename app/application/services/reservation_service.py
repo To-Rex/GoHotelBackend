@@ -22,6 +22,7 @@ from app.infrastructure.database.repositories.guest_repo import GuestRepository
 from app.infrastructure.database.repositories.finance_repo import InvoiceRepository
 from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
+from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.notification_service import NotificationService
 from app.shared.utils import generate_code
 from sqlalchemy import func, select
@@ -31,6 +32,23 @@ from sqlalchemy import func, select
 # hotels.settings JSONB ichida saqlanadi. 0 — cheklovsiz.
 RESERVATION_EDIT_KEY = "reservation_edit"
 DEFAULT_EDIT_WINDOW_MINUTES = 10
+
+
+# Yangi bandlov sozlamalari (hotels.settings["booking"]) — hamrohlarni
+# ro'yxatga olish majburiymi. Standart: majburiy emas (avvalgi xatti-harakat).
+BOOKING_SETTINGS_KEY = "booking"
+
+
+def require_all_guests(hotel_settings: dict | None) -> bool:
+    """Xonadagi HAR BIR kishi mehmon sifatida kiritilishi shartmi.
+
+    Yoqilgan bo'lsa: mehmonlar soni nechta bo'lsa, shuncha mehmon
+    (asosiy + hamrohlar) ko'rsatilishi kerak.
+    """
+    raw = (hotel_settings or {}).get(BOOKING_SETTINGS_KEY)
+    if not isinstance(raw, dict):
+        return False
+    return raw.get("require_all_guests") is True
 
 
 def resolve_edit_window_minutes(hotel_settings: dict | None) -> int:
@@ -612,6 +630,16 @@ class ReservationService:
             paid = 0
             payment_status = "UNPAID"
 
+        # --- Hamrohlar ---
+        # Har bir hamroh bazadagi haqiqiy mehmon bo'lishi shart: bu yerda
+        # faqat ID keladi, mehmonning o'zi frontendda oldin yaratiladi.
+        companions = await self._resolve_companions(
+            data.get("companion_guest_ids") or [],
+            main_guest_id=data["guest_id"],
+            adults=int(data.get("adults", 1) or 1),
+            hotel_id=hotel_id,
+        )
+
         reservation = Reservation(
             hotel_id=hotel_id,
             branch_id=branch_id,
@@ -633,6 +661,7 @@ class ReservationService:
             payment_status=payment_status,
             status="CONFIRMED",
             created_by=created_by,
+            companions=companions or None,
         )
         reservation = await self.repo.create(reservation)
 
@@ -722,6 +751,66 @@ class ReservationService:
         ]
         update_data = {k: v for k, v in data.items() if k in updatable and v is not None}
         return await self.repo.update(reservation, **update_data)
+
+    async def _resolve_companions(
+        self,
+        raw_ids: list,
+        *,
+        main_guest_id: UUID,
+        adults: int,
+        hotel_id: UUID,
+    ) -> list[dict]:
+        """Hamrohlar ro'yxatini tayyorlash va tekshirish.
+
+        Takrorlar va asosiy mehmon tashlanadi — bir odam ikki marta
+        sanalmasligi kerak. Soni mehmonlar sonidan oshsa xato: xonaga
+        sig'maydigan ro'yxat jimgina saqlanib qolmasin.
+        """
+        seen: set[UUID] = set()
+        ids: list[UUID] = []
+        for raw in raw_ids:
+            try:
+                gid = raw if isinstance(raw, UUID) else UUID(str(raw))
+            except (ValueError, AttributeError, TypeError):
+                raise ValidationException(
+                    "Hamroh mehmon ID'si noto'g'ri", "INVALID_COMPANION"
+                )
+            if gid == main_guest_id or gid in seen:
+                continue
+            seen.add(gid)
+            ids.append(gid)
+
+        if len(ids) + 1 > max(adults, 1):
+            raise ValidationException(
+                f"Hamrohlar soni mehmonlar sonidan ko'p: {len(ids) + 1} > {adults}",
+                "TOO_MANY_COMPANIONS",
+            )
+
+        companions: list[dict] = []
+        for gid in ids:
+            # Mehmonlar bazasi global — boshqa mehmonxonada ro'yxatga olingan
+            # hamroh ham qabul qilinadi (asosiy mehmon bilan bir xil qoida)
+            guest = await self.guest_repo.get_by_id_unscoped(gid)
+            if not guest:
+                raise NotFoundException(
+                    "Hamroh mehmon topilmadi", "COMPANION_NOT_FOUND"
+                )
+            name = " ".join(
+                part for part in (guest.first_name, guest.last_name) if part
+            ).strip()
+            companions.append({"guest_id": str(gid), "name": name or None})
+
+        # Majburiy rejim: xonadagi har bir kishi ro'yxatga olinishi shart
+        hotel = await self.session.get(Hotel, hotel_id)
+        if require_all_guests(hotel.settings if hotel else None):
+            total = len(companions) + 1
+            if total < max(adults, 1):
+                raise ValidationException(
+                    f"Xonadagi har bir mehmon ro'yxatga olinishi kerak: "
+                    f"{adults} kishidan {total} tasi kiritilgan",
+                    "GUESTS_REQUIRED",
+                )
+        return companions
 
     async def get_reservations(
         self,

@@ -178,7 +178,11 @@ class MobileTasksService:
             "guest_status": guest_status,
             "status": _MOBILE_STATUS_MAP.get(task.status, task.status.lower()),
             "progress": task.progress,
-            "deadline": "14:00" if task.scheduled_date else None,
+            # `scheduled_date` faqat sanani saqlaydi, aniq vaqtni emas.
+            # Soxta "14:00" ko'rsatish o'rniga mobil ilova bu maydonni
+            # belgilanmagan deb ko'rsatadi; haqiqiy deadline maydoni paydo
+            # bo'lganda shu yerda uzatiladi.
+            "deadline": None,
             "note": task.notes,
             "is_urgent": task.priority in ("HIGH", "URGENT"),
             "checklist": [

@@ -120,15 +120,22 @@ def _resolve_booking(settings: dict | None) -> dict:
     """
     saved = (settings or {}).get(BOOKING_SETTINGS_KEY)
     if not isinstance(saved, dict):
-        return {"default_type": "DAILY"}
+        return {"default_type": "DAILY", "require_all_guests": False}
     default_type = saved.get("default_type")
     if default_type not in BOOKING_TYPES:
         default_type = "DAILY"
-    return {"default_type": default_type}
+    return {
+        "default_type": default_type,
+        # Standart — majburiy emas: avvalgi bronlar bitta mehmon bilan
+        # yaratilgan, sozlama yoqilmaguncha shunday qolishi kerak
+        "require_all_guests": saved.get("require_all_guests") is True,
+    }
 
 
 class BookingSettingsRequest(BaseModel):
     default_type: str = Field(default="DAILY")
+    # Xonadagi har bir kishi mehmon sifatida ro'yxatga olinishi shartmi
+    require_all_guests: bool = Field(default=False)
 
 
 @router.get("/booking-settings")
@@ -136,7 +143,11 @@ async def get_booking_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Standart bron turi — HAR QANDAY xodim o'qiydi (dialog hammada ochiladi)."""
+    """Yangi bandlov sozlamalari — HAR QANDAY xodim o'qiydi.
+
+    Dialog hammada ochiladi, shuning uchun standart tur ham, hamrohlarni
+    ro'yxatga olish talabi ham har bir xodimga kerak.
+    """
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         return _resolve_booking(None)
@@ -150,10 +161,10 @@ async def save_booking_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Standart bron turini saqlash — faqat administrator."""
+    """Bandlov sozlamalarini saqlash — faqat administrator."""
     if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
         raise ForbiddenException(
-            "Faqat administrator standart bron turini o'zgartira oladi", "FORBIDDEN"
+            "Faqat administrator bandlov sozlamalarini o'zgartira oladi", "FORBIDDEN"
         )
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:

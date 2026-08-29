@@ -95,6 +95,12 @@ class Reservation(FullMixin, SoftDeleteMixin, Base):
     # Xona ko'chirishlar auditi: [{qaysi xonadan/xonaga, kim, qachon, narx}, ...]
     room_moves: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
+    # Hamrohlar: bir xonaga bir necha kishi joylashganda qolganlari ham
+    # mehmon sifatida ro'yxatga olinadi — [{"guest_id": ..., "name": ...}, ...].
+    # Ism ham saqlanadi: ro'yxatni ko'rsatish uchun mehmonlar jadvaliga
+    # qayta borish shart bo'lmaydi
+    companions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+
     hotel: Mapped["Hotel"] = relationship("Hotel", back_populates="reservations")
     branch: Mapped["Branch"] = relationship("Branch", back_populates="reservations")
     guest: Mapped["Guest"] = relationship("Guest", back_populates="reservations")

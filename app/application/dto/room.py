@@ -147,6 +147,8 @@ class RoomReservationResponse(BaseModel):
     discount_amount: float
     notes: str | None = None
     cancelled_reason: str | None = None
+    # Hamrohlar: [{"guest_id": ..., "name": ...}, ...] — xonada kim turgani
+    companions: list | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

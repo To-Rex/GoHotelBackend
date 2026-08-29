@@ -32,6 +32,9 @@ class ReservationCreateRequest(BaseModel):
     # payment_method o'rniga shu ro'yxat ishlatiladi (eski klientlar uchun eski
     # maydonlar o'zgarishsiz qoladi).
     payments: list[ReservationPaymentItem] = Field(default_factory=list)
+    # Hamrohlar: shu xonada turadigan qolgan mehmonlarning ID'lari.
+    # Asosiy mehmon bu ro'yxatga kirmaydi, ya'ni jami = 1 + len(ro'yxat)
+    companion_guest_ids: list[UUID] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def validate_hourly_booking(self):
@@ -113,6 +116,8 @@ class ReservationResponse(BaseModel):
     checkout_requested_at: datetime | None = None
     # Xona ko'chirishlar auditi (kim, qachon, qaysi xonadan qaysinisiga)
     room_moves: list | None = None
+    # Hamrohlar: [{"guest_id": ..., "name": ...}, ...]
+    companions: list | None = None
     created_by: UUID
     created_at: datetime
     updated_at: datetime
