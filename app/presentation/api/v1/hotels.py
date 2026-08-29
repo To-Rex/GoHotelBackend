@@ -5,7 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException
+from pydantic import BaseModel, Field
+
+from app.core.exceptions import ForbiddenException, NotFoundException
 from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.hotel_service import HotelService
 from app.application.services.amenity_service import AmenityService
@@ -23,6 +25,81 @@ from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
 
 router = APIRouter()
+
+
+# ------------------------------------------------ yon menyu tartibi --
+
+NAV_SETTINGS_KEY = "nav"
+
+
+def _resolve_nav(settings: dict | None) -> dict:
+    """Saqlangan tartib. Ro'yxatda yo'q sahifalar o'z joyida qoladi.
+
+    Tartib manzillar ro'yxati sifatida saqlanadi, sahifalar ro'yxati emas:
+    yangi versiyada qo'shilgan sahifa saqlangan tartibda bo'lmasa ham
+    yon menyudan yo'qolib qolmasligi kerak — u shunchaki o'z guruhining
+    oxirida ko'rinadi.
+    """
+    saved = (settings or {}).get(NAV_SETTINGS_KEY) or {}
+    order = saved.get("order")
+    if not isinstance(order, list):
+        return {"order": []}
+    # Faqat matnlar va takrorlanmasin
+    seen: set[str] = set()
+    clean: list[str] = []
+    for item in order:
+        if isinstance(item, str) and item.startswith("/") and item not in seen:
+            seen.add(item)
+            clean.append(item)
+    return {"order": clean[:100]}
+
+
+class NavSettingsRequest(BaseModel):
+    order: list[str] = Field(default_factory=list, max_length=100)
+
+
+@router.get("/nav-settings")
+async def get_nav_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Yon menyu tartibi — HAR QANDAY xodim o'qiydi.
+
+    Tartib mehmonxona bo'yicha bitta: admin o'zgartirsa, uni o'sha
+    mehmonxonaning barcha xodimlari ko'radi.
+    """
+    # Mehmonxona konteksti bo'lmasa (mehmonxona tanlamagan super admin) —
+    # xatolik emas, standart tartib. Yon menyu har doim chizilishi kerak.
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        return {"order": []}
+    hotel = await session.get(Hotel, hotel_id)
+    return _resolve_nav(hotel.settings if hotel else None)
+
+
+@router.put("/nav-settings")
+async def save_nav_settings(
+    data: NavSettingsRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Tartibni saqlash — faqat administrator."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException(
+            "Faqat administrator menyu tartibini o'zgartira oladi", "FORBIDDEN"
+        )
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        raise ForbiddenException("Hotel context required")
+    hotel = await session.get(Hotel, hotel_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[NAV_SETTINGS_KEY] = _resolve_nav({NAV_SETTINGS_KEY: data.model_dump()})
+    hotel.settings = new_settings
+    await session.flush()
+    return _resolve_nav(new_settings)
 
 
 def _get_hotel_id(current_user: dict) -> UUID | None:
