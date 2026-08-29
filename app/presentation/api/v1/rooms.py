@@ -18,6 +18,7 @@ from app.application.dto.room import (
     RoomResponse,
     RoomDetailResponse,
     RoomStatusHistoryResponse,
+    RoomReservationResponse,
 )
 from app.application.dto.amenity import RoomAmenityRequest
 from app.application.dto.common import MessageResponse
@@ -185,6 +186,30 @@ async def get_room_status_history(
         h_id = _get_hotel_id(current_user)
     service = RoomService(session)
     return await service.get_status_history(room_id, h_id, limit=limit)
+
+
+@router.get("/{room_id}/reservations", response_model=list[RoomReservationResponse])
+async def get_room_reservations(
+    room_id: UUID = Path(),
+    limit: int = Query(default=100, ge=1, le=500),
+    skip: int = Query(default=0, ge=0),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.view")),
+):
+    """Shu xonaga tegishli bandlovlar — eng yangisidan boshlab.
+
+    Mehmon ismi va telefoni javobning o'zida keladi: aks holda ro'yxatni
+    ko'rsatish uchun mehmonlar bazasini to'liq yuklash kerak bo'lardi va
+    eski bronning mehmoni o'sha ro'yxatning chegarasidan tashqarida qolib
+    ketishi mumkin edi.
+    """
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    service = RoomService(session)
+    return await service.get_room_reservations(room_id, h_id, skip=skip, limit=limit)
 
 
 @router.delete("/{room_id}", response_model=MessageResponse)

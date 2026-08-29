@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictException, NotFoundException, ValidationException
 from app.infrastructure.database.models.floor import Floor
+from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.reservation import Reservation
@@ -398,6 +399,70 @@ class RoomService:
             result = await self.session.execute(stmt)
             return list(result.scalars().all())
         return await self.room_repo.get_status_history(room_id, hotel_id, limit)
+
+    async def get_room_reservations(
+        self,
+        room_id: UUID,
+        hotel_id: UUID | None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Xonaning bandlovlari — eng yangisidan boshlab, mehmon ismi bilan.
+
+        Xona boshqa mehmonxonaniki bo'lsa hech narsa qaytmaydi: xona
+        tekshiruvi so'rovning o'zida, ya'ni begona xonaning ID'sini
+        yozib qo'yish bilan uning tarixini ko'rib bo'lmaydi.
+        """
+        room_check = select(Room.id).where(Room.id == room_id)
+        if hotel_id is not None:
+            room_check = room_check.where(Room.hotel_id == hotel_id)
+        if not (await self.session.execute(room_check)).scalar_one_or_none():
+            raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
+
+        stmt = (
+            select(Reservation, Guest.first_name, Guest.last_name, Guest.phone)
+            .join(Guest, Guest.id == Reservation.guest_id, isouter=True)
+            .where(
+                Reservation.room_id == room_id,
+                Reservation.is_deleted.is_(False),
+            )
+            .order_by(Reservation.check_in_date.desc(), Reservation.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        if hotel_id is not None:
+            stmt = stmt.where(Reservation.hotel_id == hotel_id)
+
+        rows = (await self.session.execute(stmt)).all()
+        items: list[dict] = []
+        for reservation, first_name, last_name, phone in rows:
+            name = " ".join(part for part in (first_name, last_name) if part).strip()
+            items.append(
+                {
+                    "id": reservation.id,
+                    "reservation_number": reservation.reservation_number,
+                    "guest_id": reservation.guest_id,
+                    "guest_name": name or None,
+                    "guest_phone": phone,
+                    "room_id": reservation.room_id,
+                    "booking_type": reservation.booking_type,
+                    "check_in_date": reservation.check_in_date,
+                    "check_out_date": reservation.check_out_date,
+                    "check_in_datetime": reservation.check_in_datetime,
+                    "check_out_datetime": reservation.check_out_datetime,
+                    "adults": reservation.adults,
+                    "children": reservation.children,
+                    "status": reservation.status,
+                    "total_amount": float(reservation.total_amount or 0),
+                    "paid_amount": float(reservation.paid_amount or 0),
+                    "payment_status": reservation.payment_status,
+                    "discount_amount": float(reservation.discount_amount or 0),
+                    "notes": reservation.notes,
+                    "cancelled_reason": reservation.cancelled_reason,
+                    "created_at": reservation.created_at,
+                }
+            )
+        return items
 
     async def soft_delete_room(self, room_id: UUID, hotel_id: UUID) -> Room:
         room = await self.get_room(room_id, hotel_id)

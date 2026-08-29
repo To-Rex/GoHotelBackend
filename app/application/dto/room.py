@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -115,6 +115,38 @@ class RoomStatusHistoryResponse(BaseModel):
     status: str
     changed_by: UUID | None
     notes: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RoomReservationResponse(BaseModel):
+    """Xona kartochkasidagi "Bandlovlar" ro'yxati uchun.
+
+    Mehmon ismi shu yerda keladi — ro'yxatni ko'rsatish uchun mehmonlar
+    bazasini alohida yuklash shart emas.
+    """
+
+    id: UUID
+    reservation_number: str
+    guest_id: UUID
+    guest_name: str | None = None
+    guest_phone: str | None = None
+    room_id: UUID
+    booking_type: str
+    check_in_date: date
+    check_out_date: date
+    check_in_datetime: datetime | None = None
+    check_out_datetime: datetime | None = None
+    adults: int
+    children: int
+    status: str
+    total_amount: float
+    paid_amount: float
+    payment_status: str
+    discount_amount: float
+    notes: str | None = None
+    cancelled_reason: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
