@@ -11,7 +11,6 @@ import pytest
 
 from app.core.config import settings
 from app.application.services.personal_report_service import (
-    METHOD_BUCKETS,
     METHODS,
     bucket_of,
     local_day_bounds,
@@ -68,21 +67,38 @@ class TestMethodBuckets:
         assert "cash" in METHODS
         assert bucket_of("CASH") == "cash"
 
-    def test_real_payment_codes_land_in_a_visible_column(self):
-        """Bazadagi haqiqiy kodlar "boshqa"ga tushib qolmasligi kerak.
+    def test_each_method_keeps_its_own_column(self):
+        """Xodim tanlagan usul hisobotda AYNAN o'sha bo'lib ko'rinsin.
 
-        Ilgari faqat "CASH" tanilardi: karta va o'tkazma bilan olingan pul
-        hisobotda ko'rinmay, "boshqa" ustunida yig'ilib qolardi.
+        Ilgari ular guruhlanardi: "Mobil to'lov" tanlangan bron hisobotda
+        "Onlayn" deb ko'rinardi — hisobot xodim tanlagan narsani emas,
+        boshqa narsani aytardi.
         """
-        assert bucket_of("CREDIT_CARD") == "card"
-        assert bucket_of("DEBIT_CARD") == "card"
-        assert bucket_of("BANK_TRANSFER") == "transfer"
-        assert bucket_of("MOBILE_PAYMENT") == "online"
+        assert bucket_of("CREDIT_CARD") == "credit_card"
+        assert bucket_of("DEBIT_CARD") == "debit_card"
+        assert bucket_of("BANK_TRANSFER") == "bank_transfer"
+        assert bucket_of("MOBILE_PAYMENT") == "mobile_payment"
         assert bucket_of("ONLINE") == "online"
 
-    def test_every_bucket_is_a_reported_column(self):
-        for bucket in METHOD_BUCKETS.values():
-            assert bucket in METHODS
+    def test_two_methods_are_never_merged(self):
+        """Har bir kod boshqasidan ajralib turishi kerak."""
+        codes = [
+            "CASH",
+            "CARD",
+            "CREDIT_CARD",
+            "DEBIT_CARD",
+            "TRANSFER",
+            "BANK_TRANSFER",
+            "MOBILE_PAYMENT",
+            "ONLINE",
+        ]
+        buckets = [bucket_of(c) for c in codes]
+        assert len(set(buckets)) == len(codes)
+
+    def test_shop_short_codes_are_known_too(self):
+        """Do'kon qisqa kodlarni ishlatadi — ular ham o'z ustunida."""
+        assert bucket_of("CARD") == "card"
+        assert bucket_of("TRANSFER") == "transfer"
 
     def test_unknown_and_missing_methods_are_not_lost(self):
         """Notanish yoki ko'rsatilmagan tur — yo'qolmaydi, "boshqa"da qoladi."""
@@ -93,7 +109,7 @@ class TestMethodBuckets:
 
     def test_matching_is_case_and_space_tolerant(self):
         assert bucket_of(" cash ") == "cash"
-        assert bucket_of("credit_card") == "card"
+        assert bucket_of("credit_card") == "credit_card"
 
 
 class TestEndpointShape:

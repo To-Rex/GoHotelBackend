@@ -35,29 +35,37 @@ from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.shop import ShopSale
 
-#: To'lov turlarini hisobot ustunlariga guruhlash.
+#: Hisobot ustunlari — bazadagi to'lov kodlarining O'ZI.
 #:
-#: Bazada haqiqiy kodlar ishlatiladi (CREDIT_CARD, BANK_TRANSFER, ONLINE...),
-#: hisobotda esa xodim tushunadigan bir necha ustun kerak. Ilgari bu jadval
-#: yo'q edi va faqat "CASH" tanilardi — karta va o'tkazma bilan olingan pul
-#: "boshqa" ustuniga tushib, hisobotda ko'rinmay qolardi.
-METHOD_BUCKETS = {
-    "CASH": "cash",
-    "CREDIT_CARD": "card",
-    "DEBIT_CARD": "card",
-    "BANK_TRANSFER": "transfer",
-    "MOBILE_PAYMENT": "online",
-    "ONLINE": "online",
-}
-
-#: Hisobotdagi ustunlar tartibi. "other" — jadvalda yo'q yoki ko'rsatilmagan
-#: to'lov turi: u yo'qolib ketmasligi uchun alohida ustunda yig'iladi.
-METHODS = ("cash", "card", "transfer", "online", "other")
+#: Ilgari bu yerda guruhlash jadvali bor edi: CREDIT_CARD va DEBIT_CARD
+#: "karta"ga, MOBILE_PAYMENT va ONLINE esa "onlayn"ga qo'shilardi. Natijada
+#: xodim "Mobil to'lov" tanlasa, hisobotda "Onlayn" deb ko'rinardi — ya'ni
+#: hisobot xodim tanlagan narsani emas, boshqa narsani aytardi.
+#:
+#: Endi har bir usul o'z ustunida. Ro'yxatda ikki xil kod bor, chunki
+#: ilovada ham shunday: bron to'lovi va xarajat uzun kodlarni ishlatadi
+#: (CREDIT_CARD...), do'kon esa qisqasini (CARD, TRANSFER).
+METHODS = (
+    "cash",
+    "card",
+    "credit_card",
+    "debit_card",
+    "transfer",
+    "bank_transfer",
+    "mobile_payment",
+    "online",
+    "other",
+)
 
 
 def bucket_of(method) -> str:
-    """To'lov turini hisobot ustuniga o'girish."""
-    return METHOD_BUCKETS.get(str(method or "").strip().upper(), "other")
+    """To'lov kodini hisobot ustuniga o'girish.
+
+    Notanish yoki ko'rsatilmagan kod "other" da qoladi — yo'qolib
+    ketmasligi uchun.
+    """
+    key = str(method or "").strip().lower()
+    return key if key in METHODS else "other"
 
 
 def _dec(value) -> Decimal:
