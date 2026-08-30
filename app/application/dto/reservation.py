@@ -9,7 +9,13 @@ class ReservationPaymentItem(BaseModel):
     """Qisman (bo'lib) to'lovning bitta bo'lagi: summa + to'lov usuli."""
 
     amount: float = Field(gt=0)
-    payment_method: Literal["CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"]
+    payment_method: Literal[
+        # Kanonik to'rtlik — ilova shularni yuboradi
+        "CASH", "CARD", "ONLINE", "BANK_TRANSFER",
+        # Eski kodlar: mobil ilova va eski klientlar hali ham
+        # yuborishi mumkin, shuning uchun qabul qilinadi
+        "CREDIT_CARD", "DEBIT_CARD", "MOBILE_PAYMENT", "TRANSFER",
+    ]
 
 
 class ReservationCreateRequest(BaseModel):
@@ -27,7 +33,13 @@ class ReservationCreateRequest(BaseModel):
     discount_percent: float = Field(default=0, ge=0, le=100)
     notes: str | None = None
     payment_amount: float = Field(default=0, ge=0)
-    payment_method: Literal["CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"] | None = None
+    payment_method: Literal[
+        # Kanonik to'rtlik — ilova shularni yuboradi
+        "CASH", "CARD", "ONLINE", "BANK_TRANSFER",
+        # Eski kodlar: mobil ilova va eski klientlar hali ham
+        # yuborishi mumkin, shuning uchun qabul qilinadi
+        "CREDIT_CARD", "DEBIT_CARD", "MOBILE_PAYMENT", "TRANSFER",
+    ] | None = None
     # Qisman to'lov: bir nechta usul bilan bo'lib to'lash. Berilsa payment_amount /
     # payment_method o'rniga shu ro'yxat ishlatiladi (eski klientlar uchun eski
     # maydonlar o'zgarishsiz qoladi).

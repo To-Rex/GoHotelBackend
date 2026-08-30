@@ -35,37 +35,33 @@ from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.shop import ShopSale
 
-#: Hisobot ustunlari — bazadagi to'lov kodlarining O'ZI.
+#: Hisobot ustunlari — ilovadagi to'rtta to'lov usuli.
 #:
-#: Ilgari bu yerda guruhlash jadvali bor edi: CREDIT_CARD va DEBIT_CARD
-#: "karta"ga, MOBILE_PAYMENT va ONLINE esa "onlayn"ga qo'shilardi. Natijada
-#: xodim "Mobil to'lov" tanlasa, hisobotda "Onlayn" deb ko'rinardi — ya'ni
-#: hisobot xodim tanlagan narsani emas, boshqa narsani aytardi.
+#: Xodim shu to'rttadan birini tanlaydi, shuning uchun hisobot ham aynan
+#: shularni ko'rsatadi: tanlangan usul va hisobotdagi ustun bir xil bo'ladi.
 #:
-#: Endi har bir usul o'z ustunida. Ro'yxatda ikki xil kod bor, chunki
-#: ilovada ham shunday: bron to'lovi va xarajat uzun kodlarni ishlatadi
-#: (CREDIT_CARD...), do'kon esa qisqasini (CARD, TRANSFER).
-METHODS = (
-    "cash",
-    "card",
-    "credit_card",
-    "debit_card",
-    "transfer",
-    "bank_transfer",
-    "mobile_payment",
-    "online",
-    "other",
-)
+#: Bazada eski kodlar ham bor (CREDIT_CARD, DEBIT_CARD, MOBILE_PAYMENT,
+#: TRANSFER) — ular ilgari tanlanardi. Eski yozuvlar yo'qolmasligi kerak,
+#: shuning uchun ular o'z kanonik ustuniga yig'iladi.
+METHOD_ALIASES = {
+    "CASH": "cash",
+    "CARD": "card",
+    "CREDIT_CARD": "card",
+    "DEBIT_CARD": "card",
+    "ONLINE": "online",
+    "MOBILE_PAYMENT": "online",
+    "BANK_TRANSFER": "bank_transfer",
+    "TRANSFER": "bank_transfer",
+}
+
+#: Ustunlar tartibi. "other" — notanish yoki ko'rsatilmagan kod: u
+#: yo'qolmasligi uchun alohida ustunda yig'iladi.
+METHODS = ("cash", "card", "online", "bank_transfer", "other")
 
 
 def bucket_of(method) -> str:
-    """To'lov kodini hisobot ustuniga o'girish.
-
-    Notanish yoki ko'rsatilmagan kod "other" da qoladi — yo'qolib
-    ketmasligi uchun.
-    """
-    key = str(method or "").strip().lower()
-    return key if key in METHODS else "other"
+    """To'lov kodini hisobot ustuniga o'girish."""
+    return METHOD_ALIASES.get(str(method or "").strip().upper(), "other")
 
 
 def _dec(value) -> Decimal:

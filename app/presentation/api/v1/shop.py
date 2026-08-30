@@ -104,12 +104,12 @@ class SalePaymentPart(BaseModel):
     """Bo'lib to'lashning bitta bo'lagi: summa + usul."""
 
     amount: float = Field(..., gt=0)
-    payment_method: Literal["CASH", "CARD", "TRANSFER"]
+    payment_method: Literal["CASH", "CARD", "ONLINE", "BANK_TRANSFER", "TRANSFER"]
 
 
 class SaleCreateRequest(BaseModel):
     items: list[SaleItemRequest] = Field(..., min_length=1)
-    payment_method: Literal["CASH", "CARD", "TRANSFER"] | None = None
+    payment_method: Literal["CASH", "CARD", "ONLINE", "BANK_TRANSFER", "TRANSFER"] | None = None
     # Bo'lib to'lash: berilsa bo'laklar jami sotuv summasiga teng bo'lishi shart
     payments: list[SalePaymentPart] | None = None
     reservation_id: UUID | None = None
@@ -117,7 +117,7 @@ class SaleCreateRequest(BaseModel):
 
 class SalePayRequest(BaseModel):
     # Bitta usul YOKI bo'lib to'lash bo'laklari — kamida bittasi bo'lishi kerak
-    payment_method: Literal["CASH", "CARD", "TRANSFER"] | None = None
+    payment_method: Literal["CASH", "CARD", "ONLINE", "BANK_TRANSFER", "TRANSFER"] | None = None
     payments: list[SalePaymentPart] | None = None
 
 
