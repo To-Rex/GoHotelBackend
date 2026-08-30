@@ -23,6 +23,10 @@ from app.application.dto.amenity import HotelAmenityRequest, AmenityResponse
 from app.application.dto.room import HotelRoomTypeRequest, RoomTypeResponse
 from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
+from app.application.services.discount_policy import (
+    DISCOUNT_SETTINGS_KEY,
+    resolve_discount_rules,
+)
 
 router = APIRouter()
 
@@ -180,6 +184,69 @@ async def save_booking_settings(
     hotel.settings = new_settings
     await session.flush()
     return _resolve_booking(new_settings)
+
+
+# ------------------------------------------------ chegirma qoidalari --
+
+
+class DiscountRuleRequest(BaseModel):
+    """Bitta bron turi uchun qoida. 0 — cheklov yo'q."""
+
+    enabled: bool = Field(default=True)
+    max_percent: float = Field(default=0, ge=0, le=100)
+    max_amount: float = Field(default=0, ge=0)
+    min_duration: float = Field(default=0, ge=0)
+    max_duration: float = Field(default=0, ge=0)
+
+
+class DiscountSettingsRequest(BaseModel):
+    daily: DiscountRuleRequest = Field(default_factory=DiscountRuleRequest)
+    hourly: DiscountRuleRequest = Field(default_factory=DiscountRuleRequest)
+
+
+@router.get("/discount-settings")
+async def get_discount_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Chegirma qoidalari — HAR QANDAY xodim o'qiydi.
+
+    Qoidani administrator belgilaydi, qolganlar undan foydalanadi: bron
+    oynasi chegarani ko'rsatishi va undan oshirishga yo'l qo'ymasligi uchun
+    qoidani bilishi shart.
+    """
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        return resolve_discount_rules(None)
+    hotel = await session.get(Hotel, hotel_id)
+    return resolve_discount_rules(hotel.settings if hotel else None)
+
+
+@router.put("/discount-settings")
+async def save_discount_settings(
+    data: DiscountSettingsRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qoidalarni saqlash — faqat administrator."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException(
+            "Faqat administrator chegirma qoidalarini o'zgartira oladi", "FORBIDDEN"
+        )
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        raise ForbiddenException("Hotel context required")
+    hotel = await session.get(Hotel, hotel_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[DISCOUNT_SETTINGS_KEY] = resolve_discount_rules(
+        {DISCOUNT_SETTINGS_KEY: data.model_dump()}
+    )
+    hotel.settings = new_settings
+    await session.flush()
+    return resolve_discount_rules(new_settings)
 
 
 def _get_hotel_id(current_user: dict) -> UUID | None:

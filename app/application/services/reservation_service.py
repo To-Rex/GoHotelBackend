@@ -23,6 +23,7 @@ from app.infrastructure.database.repositories.finance_repo import InvoiceReposit
 from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
 from app.infrastructure.database.models.hotel import Hotel
+from app.application.services.discount_policy import check_discount
 from app.application.services.notification_service import NotificationService
 from app.shared.utils import generate_code
 from sqlalchemy import func, select
@@ -590,6 +591,18 @@ class ReservationService:
         base_price = await self._get_room_base_price(data["room_id"], hotel_id)
         room_charge, duration = await self._calculate_price(
             base_price, booking_type, check_in, check_out, check_in_dt, check_out_dt
+        )
+
+        # Chegirma qoidasi — mehmonxona sozlamasidan. Tekshiruv shu yerda,
+        # ya'ni brauzerni chetlab o'tib qoidadan oshirib bo'lmaydi
+        policy_hotel = await self.session.get(Hotel, hotel_id)
+        check_discount(
+            policy_hotel.settings if policy_hotel else None,
+            booking_type,
+            duration,
+            room_charge,
+            data.get("discount_amount", 0),
+            data.get("discount_percent", 0),
         )
 
         discount_amount, discount_percent = await self._compute_discount(
