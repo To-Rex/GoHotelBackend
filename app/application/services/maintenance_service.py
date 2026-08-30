@@ -34,6 +34,20 @@ HOTEL_SCOPED_TABLES = [
     "reports",
     "room_status_history",
     "expenses",
+    # Do'kon: sotuvlar, hisobdan chiqarishlar, partiyalar va mahsulotlar.
+    #
+    # Tartib muhim, chunki tashqi kalitlar RESTRICT:
+    #   shop_sale_items.product_id -> shop_products  (sotuv qatorlari avval)
+    #   shop_batches/writeoffs.product_id -> shop_products (CASCADE, lekin
+    #   sonini alohida ko'rsatish uchun ataylab o'zimiz o'chiramiz)
+    #
+    # Mahsulotlar ham o'chiriladi: sotuvlar o'chib, partiyalar qolsa
+    # ombordagi qoldiq o'chirilgan sotuvlar bilan kamaytirilgan holda
+    # qolib ketardi — ya'ni "yangidek" holat emas, buzuq holat bo'lardi.
+    "shop_sales",
+    "shop_writeoffs",
+    "shop_batches",
+    "shop_products",
     # Smenalar va kassa sessiyalari — operatsion tarixning bir qismi. Ular
     # xodimlarga RESTRICT bilan bog'langan, shuning uchun bu qatorsiz "to'liq
     # tozalash" xodimlarni o'chirishga yetganda tashqi kalit xatosi bilan
@@ -65,6 +79,17 @@ class MaintenanceService:
             h,
         )
         deleted["checklist_items"] = result.rowcount or 0
+
+        # shop_sale_items da hotel_id yo'q — sotuv orqali o'chiriladi.
+        # (FK CASCADE ham o'chirardi, lekin unda soni hisobotda ko'rinmasdi)
+        result = await s.execute(
+            text(
+                "DELETE FROM shop_sale_items WHERE sale_id IN "
+                "(SELECT id FROM shop_sales WHERE hotel_id = :h)"
+            ),
+            h,
+        )
+        deleted["shop_sale_items"] = result.rowcount or 0
 
         # invoice_items ham hisob-faktura orqali (hotel_id ustuni kafolatlanmagan)
         result = await s.execute(

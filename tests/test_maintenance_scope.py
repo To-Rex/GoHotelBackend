@@ -46,3 +46,51 @@ def test_reset_reports_a_count_for_every_scoped_table():
     nomlar bilan mos bo'lishi uchun ular o'zgarmasligi kerak."""
     assert all(isinstance(name, str) and name.islower() for name in HOTEL_SCOPED_TABLES)
     assert hasattr(MaintenanceService, "reset_data")
+
+
+class TestShopIsCleared:
+    """Do'kon ma'lumotlari ham operatsion tarixning bir qismi.
+
+    Sotuvlar o'chib mahsulot va partiyalar qolsa, ombordagi qoldiq
+    o'chirilgan sotuvlar bilan kamaytirilgan holda qolib ketardi — ya'ni
+    "yangidek" emas, buzuq holat.
+    """
+
+    def test_every_shop_table_is_cleared(self):
+        for table in ("shop_sales", "shop_writeoffs", "shop_batches", "shop_products"):
+            assert table in HOTEL_SCOPED_TABLES
+
+    def test_sales_are_removed_before_products(self):
+        """`shop_sale_items.product_id` RESTRICT bilan bog'langan: mahsulot
+        avval o'chirilsa tashqi kalit xatosi bilan to'xtardi."""
+        order = HOTEL_SCOPED_TABLES
+        assert order.index("shop_sales") < order.index("shop_products")
+        assert order.index("shop_batches") < order.index("shop_products")
+        assert order.index("shop_writeoffs") < order.index("shop_products")
+
+    def test_sale_items_are_removed_explicitly(self):
+        """`shop_sale_items` da hotel_id yo'q — u sotuv orqali o'chiriladi.
+
+        FK CASCADE ham o'chirardi, lekin unda soni natija jadvalida
+        ko'rinmasdi.
+        """
+        import inspect
+
+        source = inspect.getsource(MaintenanceService.reset_data)
+        assert "shop_sale_items" in source
+        assert 'deleted["shop_sale_items"]' in source
+
+    def test_shop_tables_come_before_employees(self):
+        """`shop_sales.created_by` xodimga RESTRICT bilan bog'langan.
+
+        Ilgari do'kon jadvallari umuman o'chirilmasdi va do'konda savdo
+        qilgan xodim bo'lsa "to'liq tozalash" tashqi kalit xatosi bilan
+        to'xtardi.
+        """
+        assert "users" not in HOTEL_SCOPED_TABLES
+        assert "shop_sales" in HOTEL_SCOPED_TABLES
+
+    def test_hotel_structure_still_survives(self):
+        """Do'kon qo'shilgani bilan mehmonxona tuzilmasi tegilmaydi."""
+        protected = {"hotels", "rooms", "room_types", "services", "users"}
+        assert protected.isdisjoint(HOTEL_SCOPED_TABLES)
