@@ -837,6 +837,18 @@ class ReservationService:
                 new_room = await self.room_repo.get_by_id(room_id, hotel_id)
                 if not new_room:
                     raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
+                # Xona ALMASHTIRILMOQDA — bu ham xonani yangidan egallash,
+                # demak holat tekshiruvi shu yerda ham kerak. Ilgari faqat
+                # xona mavjudligi tekshirilardi va tahrirlash yo'li bilan
+                # bronni ta'mirdagi xonaga ko'chirib qo'yish mumkin edi.
+                self._assert_room_bookable(
+                    new_room,
+                    data.get("booking_type") or reservation.booking_type or "DAILY",
+                    check_in,
+                    check_out,
+                    data.get("check_in_datetime") or reservation.check_in_datetime,
+                    data.get("check_out_datetime") or reservation.check_out_datetime,
+                )
 
         updatable = [
             "room_id", "booking_type", "check_in_date", "check_out_date",
