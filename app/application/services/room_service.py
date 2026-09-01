@@ -295,6 +295,47 @@ class RoomService:
         )
         return await self.room_repo.create(room)
 
+    async def _attach_status_changed_at(self, rooms: list[Room]) -> list[Room]:
+        """Har bir xonaga joriy holatga o'tgan vaqtini biriktiradi.
+
+        Alohida ustun sifatida saqlanmaydi — buning uchun migratsiya va har
+        bir holat o'zgarishida yozuv kerak bo'lardi, holbuki ma'lumot
+        `room_status_history` da allaqachon bor. Bu yerda butun ro'yxat uchun
+        BITTA so'rov qilinadi: har bir xonaning eng oxirgi tarix yozuvi.
+
+        Yozuvdagi holat xonaning joriy holatiga mos kelmasa (tarix va xona
+        biror sababdan ajralib qolgan) qiymat qo'yilmaydi — noto'g'ri vaqt
+        ko'rsatgandan ko'ra hech narsa ko'rsatmagan ma'qul.
+        """
+        if not rooms:
+            return rooms
+
+        room_ids = [r.id for r in rooms]
+        # DISTINCT ON — har bir xona uchun eng so'nggi yozuv
+        stmt = (
+            select(
+                RoomStatusHistory.room_id,
+                RoomStatusHistory.status,
+                RoomStatusHistory.created_at,
+            )
+            .where(RoomStatusHistory.room_id.in_(room_ids))
+            .distinct(RoomStatusHistory.room_id)
+            .order_by(
+                RoomStatusHistory.room_id,
+                RoomStatusHistory.created_at.desc(),
+            )
+        )
+        latest = {
+            row.room_id: (row.status, row.created_at)
+            for row in (await self.session.execute(stmt)).all()
+        }
+        for room in rooms:
+            entry = latest.get(room.id)
+            room.status_changed_at = (
+                entry[1] if entry is not None and entry[0] == room.current_status else None
+            )
+        return rooms
+
     async def get_rooms(
         self,
         hotel_id: UUID | None,
@@ -318,9 +359,13 @@ class RoomService:
             # O'chirilgan (soft-delete) xonalar ro'yxatga chiqmasligi kerak —
             # aks holda o'chirish UI'da "ishlamagandek" ko'rinadi
             filters["is_deleted"] = False
-            return await self.room_repo.get_all_unscoped(skip, limit, **filters)
+            return await self._attach_status_changed_at(
+                await self.room_repo.get_all_unscoped(skip, limit, **filters)
+            )
         if status:
-            return await self.room_repo.get_rooms_by_status(hotel_id, status, skip, limit)
+            return await self._attach_status_changed_at(
+                await self.room_repo.get_rooms_by_status(hotel_id, status, skip, limit)
+            )
 
         filters: dict = {}
         if branch_id:
@@ -331,7 +376,9 @@ class RoomService:
             filters["room_type_id"] = room_type_id
         # O'chirilgan xonalar ro'yxatdan yashiriladi
         filters["is_deleted"] = False
-        return await self.room_repo.get_all(hotel_id, skip, limit, **filters)
+        return await self._attach_status_changed_at(
+            await self.room_repo.get_all(hotel_id, skip, limit, **filters)
+        )
 
     async def get_room(self, room_id: UUID, hotel_id: UUID | None) -> Room:
         if hotel_id is None:

@@ -100,6 +100,10 @@ class RoomResponse(BaseModel):
     is_deleted: bool
     created_at: datetime
     updated_at: datetime
+    # Xona joriy holatga qachon o'tgani. `updated_at` bu ish uchun yaramaydi —
+    # u narx yoki izoh tahrirlansa ham yangilanadi. Tarix yozuvi topilmasa
+    # None (masalan holati hech qachon o'zgarmagan eski xona).
+    status_changed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
