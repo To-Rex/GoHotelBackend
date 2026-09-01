@@ -151,8 +151,28 @@ class RoomReservationResponse(BaseModel):
     discount_amount: float
     notes: str | None = None
     cancelled_reason: str | None = None
+    discount_percent: float = 0
     # Hamrohlar: [{"guest_id": ..., "name": ...}, ...] — xonada kim turgani
     companions: list | None = None
     created_at: datetime
+
+    # --- Tafsilot oynasi uchun: kim, qachon, qayerda ---
+    #
+    # Ro'yxatning o'zi bu maydonlarsiz ham ishlaydi; ular bron ustiga
+    # bosilganda ochiladigan to'liq ma'lumot oynasi uchun. Alohida endpoint
+    # qilinmadi: ma'lumot bir xil so'rovdan keladi va bosilganda yana bir
+    # bor kutib turishning hojati yo'q.
+    updated_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    checkout_requested_at: datetime | None = None
+    created_by_name: str | None = None
+    cancelled_by_name: str | None = None
+    branch_name: str | None = None
+    room_number: str | None = None
+    room_type_name: str | None = None
+    floor_number: int | None = None
+    floor_name: str | None = None
+    # Xona ko'chirishlar tarixi: [{from, to, by, at, ...}, ...]
+    room_moves: list | None = None
 
     model_config = {"from_attributes": True}

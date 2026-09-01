@@ -2,9 +2,11 @@ from uuid import UUID
 from datetime import date, datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictException, NotFoundException, ValidationException
+from app.infrastructure.database.models.branch import Branch
 from app.infrastructure.database.models.floor import Floor
 from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.hotel import Hotel
@@ -13,6 +15,7 @@ from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.room_status_history import RoomStatusHistory
 from app.infrastructure.database.models.room_type import RoomType, HotelRoomType
+from app.infrastructure.database.models.user import User
 from app.infrastructure.database.repositories.room_repo import (
     FloorRepository,
     RoomRepository,
@@ -466,9 +469,33 @@ class RoomService:
         if not (await self.session.execute(room_check)).scalar_one_or_none():
             raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
 
+        # Yaratgan va bekor qilgan xodim — bitta jadval, ikki rol
+        creator = aliased(User)
+        canceller = aliased(User)
+
         stmt = (
-            select(Reservation, Guest.first_name, Guest.last_name, Guest.phone)
+            select(
+                Reservation,
+                Guest.first_name,
+                Guest.last_name,
+                Guest.phone,
+                creator.first_name.label("creator_first"),
+                creator.last_name.label("creator_last"),
+                canceller.first_name.label("canceller_first"),
+                canceller.last_name.label("canceller_last"),
+                Branch.name.label("branch_name"),
+                Room.room_number.label("room_number"),
+                RoomType.name.label("room_type_name"),
+                Floor.floor_number.label("floor_number"),
+                Floor.name.label("floor_name"),
+            )
             .join(Guest, Guest.id == Reservation.guest_id, isouter=True)
+            .join(creator, creator.id == Reservation.created_by, isouter=True)
+            .join(canceller, canceller.id == Reservation.cancelled_by, isouter=True)
+            .join(Branch, Branch.id == Reservation.branch_id, isouter=True)
+            .join(Room, Room.id == Reservation.room_id, isouter=True)
+            .join(RoomType, RoomType.id == Room.room_type_id, isouter=True)
+            .join(Floor, Floor.id == Room.floor_id, isouter=True)
             .where(
                 Reservation.room_id == room_id,
                 Reservation.is_deleted.is_(False),
@@ -490,8 +517,14 @@ class RoomService:
 
         rows = (await self.session.execute(stmt)).all()
         items: list[dict] = []
-        for reservation, first_name, last_name, phone in rows:
-            name = " ".join(part for part in (first_name, last_name) if part).strip()
+
+        def full_name(first: str | None, last: str | None) -> str | None:
+            return " ".join(p for p in (first, last) if p).strip() or None
+
+        for row in rows:
+            reservation = row[0]
+            name = full_name(row.first_name, row.last_name)
+            phone = row.phone
             items.append(
                 {
                     "id": reservation.id,
@@ -512,10 +545,24 @@ class RoomService:
                     "paid_amount": float(reservation.paid_amount or 0),
                     "payment_status": reservation.payment_status,
                     "discount_amount": float(reservation.discount_amount or 0),
+                    "discount_percent": float(reservation.discount_percent or 0),
                     "notes": reservation.notes,
                     "cancelled_reason": reservation.cancelled_reason,
                     "companions": reservation.companions,
                     "created_at": reservation.created_at,
+                    "updated_at": getattr(reservation, "updated_at", None),
+                    "cancelled_at": reservation.cancelled_at,
+                    "checkout_requested_at": reservation.checkout_requested_at,
+                    "created_by_name": full_name(row.creator_first, row.creator_last),
+                    "cancelled_by_name": full_name(
+                        row.canceller_first, row.canceller_last
+                    ),
+                    "branch_name": row.branch_name,
+                    "room_number": row.room_number,
+                    "room_type_name": row.room_type_name,
+                    "floor_number": row.floor_number,
+                    "floor_name": row.floor_name,
+                    "room_moves": reservation.room_moves,
                 }
             )
         return items
