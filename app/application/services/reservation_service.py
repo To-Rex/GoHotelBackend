@@ -60,6 +60,25 @@ def resolve_edit_window_minutes(hotel_settings: dict | None) -> int:
     return DEFAULT_EDIT_WINDOW_MINUTES
 
 
+# Xona holatiga qarab bron qilish taqiqlari.
+#
+# Ikki daraja bor, chunki ikki holat bir xil emas. Ta'mir, tekshiruv va
+# xizmatdan chiqarish — xona umuman ishlatilmaydi va bu qachon tugashi
+# noma'lum; shuning uchun kelgusi sanalarga ham bron qilinmaydi, avval holat
+# almashtirilishi kerak. Tozalash esa qisqa va o'z-o'zidan tugaydi, kelgusi
+# sanalarga to'sqinlik qilmaydi — faqat mehmon AYNAN HOZIR kirmoqchi bo'lsa
+# to'sadi.
+ROOM_STATUS_BLOCKED_ALWAYS = ("MAINTENANCE", "INSPECTION", "OUT_OF_SERVICE")
+ROOM_STATUS_BLOCKED_NOW = ("CLEANING",)
+
+ROOM_STATUS_LABELS_UZ = {
+    "CLEANING": "tozalanmoqda",
+    "MAINTENANCE": "ta'mirda",
+    "INSPECTION": "tekshiruvda",
+    "OUT_OF_SERVICE": "xizmatdan tashqari",
+}
+
+
 class ReservationService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -268,18 +287,23 @@ class ReservationService:
         new_room = await self.room_repo.get_by_id(new_room_id, hotel_id)
         if not new_room:
             raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
-        if new_room.current_status in ("MAINTENANCE", "INSPECTION", "OUT_OF_SERVICE"):
-            raise ConflictException(
-                f"{new_room.room_number}-xona hozir band emas holatda "
-                f"({new_room.current_status})",
-                "ROOM_NOT_AVAILABLE",
-            )
-
         booking_type = reservation.booking_type or "DAILY"
         now_utc = datetime.now(timezone.utc)
         local_today = (
             now_utc + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
         ).date()
+
+        # Yangi xona holati bu bronni qabul qila oladimi. Ko'chirishda
+        # mehmon odatda darhol kiradi, shuning uchun tozalanayotgan xona ham
+        # to'siladi — agar bron davri hozirni qamrasa.
+        self._assert_room_bookable(
+            new_room,
+            booking_type,
+            reservation.check_in_date,
+            reservation.check_out_date,
+            reservation.check_in_datetime,
+            reservation.check_out_datetime,
+        )
 
         # Qolgan davr uchun bandlik tekshiruvi
         eff_check_in = reservation.check_in_date
@@ -526,6 +550,63 @@ class ReservationService:
         await self.session.refresh(reservation)
         return reservation
 
+    def _assert_room_bookable(
+        self,
+        room: Room,
+        booking_type: str,
+        check_in: date,
+        check_out: date,
+        check_in_dt: datetime | None = None,
+        check_out_dt: datetime | None = None,
+    ) -> None:
+        """Xona holati bu bronga yo'l qo'yadimi.
+
+        Ilgari faqat "har qanday vaqt uchun taqiqlangan" holatlar
+        tekshirilardi. Tozalanayotgan xonaga esa hozirning o'zi uchun bron
+        qilish mumkin edi: mehmon kalitni olib, hali tozalanmagan xonaga
+        kirardi.
+
+        Vaqtlar mahalliy devor soati bo'yicha solishtiriladi. `check_in_dt`
+        bazaga foydalanuvchi kiritgan devor soati sifatida tushadi (mintaqa
+        siljishisiz), shuning uchun "hozir" ham xuddi shunday olinadi —
+        `local_today` allaqachon shu usulda hisoblanadi.
+        """
+        status = room.current_status
+        label = ROOM_STATUS_LABELS_UZ.get(status, status)
+
+        if status in ROOM_STATUS_BLOCKED_ALWAYS:
+            raise ConflictException(
+                f"{room.room_number}-xona {label} — holat o'zgartirilmaguncha "
+                "hech qanday sanaga bron qilib bo'lmaydi",
+                "ROOM_NOT_AVAILABLE",
+            )
+
+        if status not in ROOM_STATUS_BLOCKED_NOW:
+            return
+
+        # Bron davri hozirgi paytni qamrab oladimi
+        now_wall = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.APP_TZ_OFFSET_MINUTES
+        )
+        if booking_type == "HOURLY" and check_in_dt and check_out_dt:
+            start, end = check_in_dt, check_out_dt
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+            covers_now = start <= now_wall < end
+        else:
+            today = now_wall.date()
+            covers_now = check_in <= today < check_out
+
+        if covers_now:
+            raise ConflictException(
+                f"{room.room_number}-xona hozir {label} — tozalash "
+                "yakunlangach bron qilish mumkin. Kelgusi sanalarga hozir ham "
+                "bron qilsa bo'ladi.",
+                "ROOM_NOT_AVAILABLE",
+            )
+
     async def create_reservation(
         self, hotel_id: UUID, branch_id: UUID, data: dict, created_by: UUID
     ) -> Reservation:
@@ -539,17 +620,17 @@ class ReservationService:
         if not room:
             raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
 
-        if room.current_status in ("MAINTENANCE", "INSPECTION", "OUT_OF_SERVICE"):
-            raise ConflictException(
-                f"Room {room.room_number} is not available (status: {room.current_status})",
-                "ROOM_NOT_AVAILABLE",
-            )
-
         booking_type = data.get("booking_type", "DAILY")
         check_in = data["check_in_date"]
         check_out = data["check_out_date"]
         check_in_dt = data.get("check_in_datetime")
         check_out_dt = data.get("check_out_datetime")
+
+        # Holat tekshiruvi sanalar o'qilgandan keyin: tozalanayotgan xona
+        # kelgusi sanalarga ochiq, faqat hozirgi payt uchun yopiq
+        self._assert_room_bookable(
+            room, booking_type, check_in, check_out, check_in_dt, check_out_dt
+        )
 
         # O'tgan sanaga bron qilib bo'lmaydi (bugun mumkin). Sana mahalliy
         # vaqt bo'yicha aniqlanadi — server UTC da ishlaydi, tungi soatlarda
