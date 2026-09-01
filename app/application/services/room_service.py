@@ -476,6 +476,7 @@ class RoomService:
         stmt = (
             select(
                 Reservation,
+                Guest,
                 Guest.first_name,
                 Guest.last_name,
                 Guest.phone,
@@ -521,10 +522,68 @@ class RoomService:
         def full_name(first: str | None, last: str | None) -> str | None:
             return " ".join(p for p in (first, last) if p).strip() or None
 
+        # Hamrohlarning kartochkasi — butun ro'yxat uchun BITTA so'rov.
+        # Har bir bron uchun alohida so'rash ro'yxatni o'nlab so'rovga
+        # bo'lib yuborardi.
+        companion_ids: set[UUID] = set()
+        for row in rows:
+            for companion in row[0].companions or []:
+                raw = (companion or {}).get("guest_id")
+                if not raw:
+                    continue
+                try:
+                    companion_ids.add(UUID(str(raw)))
+                except (ValueError, AttributeError, TypeError):
+                    continue  # buzuq yozuv butun ro'yxatni yiqitmasin
+
+        guest_cards: dict[UUID, Guest] = {}
+        if companion_ids:
+            found = (
+                await self.session.execute(
+                    select(Guest).where(Guest.id.in_(companion_ids))
+                )
+            ).scalars().all()
+            guest_cards = {g.id: g for g in found}
+
+        # Bitta turuvchining kartochkasi. Mehmon bazadan topilmasa bronda
+        # saqlangan ism qoladi — yozuv yo'qolmaydi.
+        def occupant(guest: Guest | None, *, name: str | None, primary: bool) -> dict:
+            if guest is None:
+                return {"name": name, "is_primary": primary}
+            return {
+                "guest_id": guest.id,
+                "name": full_name(guest.first_name, guest.last_name) or name,
+                "is_primary": primary,
+                "phone": guest.phone,
+                "email": guest.email,
+                "passport_number": guest.passport_number,
+                "id_document_type": guest.id_document_type,
+                "id_document_number": guest.id_document_number,
+                "nationality": guest.nationality,
+                "birth_date": guest.birth_date,
+                "address": guest.address,
+                "notes": guest.notes,
+                "has_face": guest.face_consent_at is not None,
+            }
+
         for row in rows:
             reservation = row[0]
+            guest_row = row[1]
             name = full_name(row.first_name, row.last_name)
             phone = row.phone
+
+            occupants = [occupant(guest_row, name=name, primary=True)]
+            for companion in reservation.companions or []:
+                raw = (companion or {}).get("guest_id")
+                saved_name = (companion or {}).get("name")
+                card = None
+                if raw:
+                    try:
+                        card = guest_cards.get(UUID(str(raw)))
+                    except (ValueError, AttributeError, TypeError):
+                        card = None
+                occupants.append(occupant(card, name=saved_name, primary=False))
+
             items.append(
                 {
                     "id": reservation.id,
@@ -563,6 +622,7 @@ class RoomService:
                     "floor_number": row.floor_number,
                     "floor_name": row.floor_name,
                     "room_moves": reservation.room_moves,
+                    "occupants": occupants,
                 }
             )
         return items

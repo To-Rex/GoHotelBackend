@@ -124,6 +124,34 @@ class RoomStatusHistoryResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ReservationOccupant(BaseModel):
+    """Xonada turgan bir kishi — asosiy mehmon yoki hamroh.
+
+    Hamrohlar bronda faqat ID va ism bilan saqlanadi (o'sha paytdagi holat
+    qotib qolishi uchun). Bu yerda esa ularning kartochkasi ham qo'shiladi:
+    tafsilot oynasida xodim hujjat raqamini yoki telefonini ko'rishi kerak
+    bo'ladi, mehmonlar sahifasiga o'tib qidirmasdan.
+
+    Mehmon bazadan topilmasa (o'chirilgan bo'lsa) faqat bronda saqlangan
+    ism qoladi — yozuv yo'qolmaydi.
+    """
+
+    guest_id: UUID | None = None
+    name: str | None = None
+    is_primary: bool = False
+    phone: str | None = None
+    email: str | None = None
+    passport_number: str | None = None
+    id_document_type: str | None = None
+    id_document_number: str | None = None
+    nationality: str | None = None
+    birth_date: date | None = None
+    address: str | None = None
+    notes: str | None = None
+    #: Yuz biriktirilgan mehmon — kamera uni taniydi
+    has_face: bool = False
+
+
 class RoomReservationResponse(BaseModel):
     """Xona kartochkasidagi "Bandlovlar" ro'yxati uchun.
 
@@ -174,5 +202,8 @@ class RoomReservationResponse(BaseModel):
     floor_name: str | None = None
     # Xona ko'chirishlar tarixi: [{from, to, by, at, ...}, ...]
     room_moves: list | None = None
+    # Xonada turganlar — asosiy mehmon va hamrohlar, kartochkalari bilan.
+    # `companions` maydoni o'z holicha qoladi: u bronda saqlangan xom yozuv.
+    occupants: list[ReservationOccupant] | None = None
 
     model_config = {"from_attributes": True}
