@@ -6,12 +6,12 @@ deb so'rashi mumkin), hamma ko'radi, istalgan xodim "Bajarildi" deb yopadi.
 Yangi xabar mehmonxona xodimlariga push (FCM) bilan ham boradi — mobil
 ilovadagilar darhol ko'radi.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -74,9 +74,21 @@ async def _name_maps(session: AsyncSession, messages: list[StaffMessage]) -> tup
     return users, rooms
 
 
+#: Taxta standart holatda shuncha kunlik yozuvni ko'rsatadi. Xabarlar
+#: qisqa umrli — "104-xonani tekshiring" ertasiga ahamiyatsiz bo'lib qoladi
+#: — va bir necha oylik tarix taxtani o'qib bo'lmaydigan qiladi.
+DEFAULT_DAYS = 2
+
+
 @router.get("/")
 async def list_messages(
     status: str | None = Query(default=None),
+    days: int = Query(
+        default=DEFAULT_DAYS,
+        ge=0,
+        le=365,
+        description="Oxirgi shuncha kunlik xabarlar. 0 — hammasi.",
+    ),
     limit: int = Query(default=200, ge=1, le=500),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -90,6 +102,14 @@ async def list_messages(
     )
     if status in ("OPEN", "DONE"):
         stmt = stmt.where(StaffMessage.status == status)
+    if days > 0:
+        # OCHIQ xabar muddatidan qat'i nazar qoladi. Aks holda uch kun oldin
+        # yozilgan va hali bajarilmagan so'rov taxtadan jimgina yo'qolardi —
+        # taxtaning butun ma'nosi esa aynan shunday yo'qolmasligida.
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        stmt = stmt.where(
+            or_(StaffMessage.created_at >= cutoff, StaffMessage.status == "OPEN")
+        )
     messages = list((await session.execute(stmt)).scalars().all())
     users, rooms = await _name_maps(session, messages)
     return [_msg_dict(m, users, rooms) for m in messages]
