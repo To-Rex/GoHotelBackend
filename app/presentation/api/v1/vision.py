@@ -640,13 +640,22 @@ async def list_sightings(
 
     guest_ids = {row.guest_id for row in rows if row.guest_id}
     visits: dict[UUID, tuple[int, datetime | None]] = {}
+    active: set[UUID] = set()
     if guest_ids:
+        # Bitta so'rovda ikkalasi ham: jami tashriflar va ochiq bron bormi.
+        # Har qator uchun alohida so'rov panelni sekinlashtirardi — u har
+        # necha soniyada qayta so'raladi.
         stats = (
             await session.execute(
                 select(
                     Reservation.guest_id,
                     func.count(Reservation.id),
                     func.max(Reservation.created_at),
+                    func.count(Reservation.id).filter(
+                        Reservation.status.in_(
+                            ("CONFIRMED", "CHECKED_IN", "PENDING")
+                        )
+                    ),
                 )
                 .where(
                     Reservation.guest_id.in_(guest_ids),
@@ -655,7 +664,10 @@ async def list_sightings(
                 .group_by(Reservation.guest_id)
             )
         ).all()
-        visits = {gid: (int(count), last) for gid, count, last in stats}
+        for gid, count, last, open_count in stats:
+            visits[gid] = (int(count), last)
+            if int(open_count or 0) > 0:
+                active.add(gid)
 
     items = []
     for row in rows:
@@ -679,6 +691,7 @@ async def list_sightings(
                 guest_phone=row.phone,
                 last_stay_at=last,
                 visits=count,
+                has_active_reservation=row.guest_id in active,
                 branch_id=row.branch_id,
                 has_thumbnail=bool(row.has_thumbnail),
                 # Biriktirish faqat vektori saqlangan, tanilmagan ko'rinish

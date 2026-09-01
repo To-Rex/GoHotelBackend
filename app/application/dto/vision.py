@@ -107,6 +107,10 @@ class SightingResponse(BaseModel):
     #: Mehmonning oxirgi tashrifi — qabulxonaga darhol kontekst beradi.
     last_stay_at: Optional[datetime] = None
     visits: int = 0
+    #: Ochiq yoki kutilayotgan broni bormi. Bu javob paneldagi TUGMANI
+    #: belgilaydi: broni bo'lgan mehmonni kutib olish kerak, yangi bron
+    #: yaratish emas.
+    has_active_reservation: bool = False
     has_thumbnail: bool = False
     can_enroll: bool = False
     acknowledged: bool = False
