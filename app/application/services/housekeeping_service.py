@@ -50,6 +50,29 @@ HK_AUTO_COMPLETE_DEFAULTS: dict[str, int] = {
 
 HK_SETTINGS_KEY = "hk_auto_complete"
 
+# Vazifa turi -> xona qanday holatga o'tishi.
+#
+# Vazifa ochilishi xona bilan nima bo'layotganini bildiradi, shuning uchun
+# xona holati ham shuni ko'rsatishi kerak. Ilgari vazifa yaratilsa ham xona
+# "Bo'sh" bo'lib turaverardi va ta'mirdagi xonaga bron qilish mumkin edi:
+# bron tekshiruvi xona holatiga qaraydi, vazifaga emas.
+#
+# TURN_DOWN ro'yxatda yo'q — u mehmon ichkarida turganda bajariladi va
+# xonani band qilmaydi.
+TASK_ROOM_STATUS: dict[str, str] = {
+    "CLEANING": "CLEANING",
+    "DEEP_CLEANING": "CLEANING",
+    "MAINTENANCE": "MAINTENANCE",
+    "INSPECTION": "INSPECTION",
+}
+
+# Vazifa faqat shu holatlardagi xonani "egallay" oladi.
+#
+# OCCUPIED va RESERVED yo'q: u yerda mehmon bor va uni xo'jalik vazifasi
+# quvib chiqarmasligi kerak. OUT_OF_SERVICE ham yo'q — u ataylab qo'yilgan
+# qaror, vazifa uni yumshatib yubormasin.
+ROOM_STATUS_TAKEABLE = ("AVAILABLE", "CLEANING", "MAINTENANCE", "INSPECTION")
+
 
 def resolve_auto_complete_minutes(
     hotel_settings: dict | None, task_type: str
@@ -192,6 +215,106 @@ class HousekeepingService:
         for task in tasks:
             task.photo_count = counts.get(task.id, 0)
 
+    async def _set_room_status(
+        self,
+        room: Room,
+        status: str,
+        hotel_id: UUID,
+        user_id: UUID,
+        note: str,
+    ) -> None:
+        """Xona holatini o'zgartiradi va tarixga yozadi."""
+        room.current_status = status
+        await self.room_repo.update(room, current_status=status)
+        self.session.add(
+            RoomStatusHistory(
+                hotel_id=hotel_id,
+                room_id=room.id,
+                status=status,
+                changed_by=user_id,
+                notes=note,
+            )
+        )
+        await self.session.flush()
+
+    async def _apply_task_room_status(
+        self, task: HousekeepingTask, hotel_id: UUID, user_id: UUID
+    ) -> None:
+        """Yangi vazifa xonani o'z holatiga o'tkazadi.
+
+        Kelgusi kunga rejalashtirilgan vazifa xonani hozir band qilmaydi —
+        aks holda keyingi haftaga qo'yilgan ta'mir bugundan xonani yopib
+        qo'yardi.
+        """
+        target = TASK_ROOM_STATUS.get(task.task_type)
+        if target is None:
+            return
+
+        if task.scheduled_date is not None:
+            local_today = (
+                datetime.now(timezone.utc)
+                + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
+            ).date()
+            if task.scheduled_date > local_today:
+                return
+
+        room = await self.room_repo.get_by_id(task.room_id, hotel_id)
+        if room is None or room.current_status == target:
+            return
+        if room.current_status not in ROOM_STATUS_TAKEABLE:
+            # Mehmon ichkarida yoki xona ataylab yopilgan — tegmaymiz.
+            # Vazifa baribir yaratiladi va ro'yxatda ko'rinadi.
+            return
+
+        await self._set_room_status(
+            room,
+            target,
+            hotel_id,
+            user_id,
+            f"{task.task_type} task {task.id} opened",
+        )
+
+    async def _release_task_room_status(
+        self, task: HousekeepingTask, hotel_id: UUID, user_id: UUID
+    ) -> None:
+        """Vazifa yopilgach xona bo'shaydi — boshqa ochiq vazifa qolmagan bo'lsa.
+
+        Ikkinchi shart muhim: bitta xonada ikki ta'mir vazifasi bo'lsa,
+        birini yopish xonani ochib yuborsa, ikkinchisi e'tibordan qolardi.
+        """
+        target = TASK_ROOM_STATUS.get(task.task_type)
+        if target is None:
+            return
+
+        room = await self.room_repo.get_by_id(task.room_id, hotel_id)
+        if room is None or room.current_status != target:
+            return
+
+        # Shu holatni talab qiladigan boshqa faol vazifa bormi
+        same_status_types = [t for t, st in TASK_ROOM_STATUS.items() if st == target]
+        other = (
+            await self.session.execute(
+                sa_select(HousekeepingTask.id)
+                .where(
+                    HousekeepingTask.room_id == task.room_id,
+                    HousekeepingTask.id != task.id,
+                    HousekeepingTask.task_type.in_(same_status_types),
+                    HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
+                )
+                .limit(1)
+            )
+        ).first()
+        if other:
+            return
+
+        await self._set_room_status(
+            room,
+            "AVAILABLE",
+            hotel_id,
+            user_id,
+            f"{task.task_type} task {task.id} {task.status.lower()}",
+        )
+
     async def create_task(self, hotel_id: UUID, data: dict, created_by: UUID) -> HousekeepingTask:
         room = await self.room_repo.get_by_id(data["room_id"], hotel_id)
         if not room:
@@ -209,6 +332,9 @@ class HousekeepingService:
             created_by=created_by,
         )
         task = await self.repo.create(task)
+        # Xona holati vazifaga mos kelsin — aks holda ta'mirdagi xona
+        # "Bo'sh" bo'lib turaverardi va unga bron qilish mumkin edi
+        await self._apply_task_room_status(task, hotel_id, created_by)
         full_task = await self.get_task(task.id, hotel_id)
         # Yaratishda darhol farroshga biriktirilgan bo'lsa — notification yuboramiz
         await self._notify_assignment(full_task, full_task.assigned_to)
@@ -318,22 +444,17 @@ class HousekeepingService:
             task.notes = (task.notes or "") + f"\n[{status}] {notes}"
             await self.session.flush()
 
+        # Vazifa yopildi yoki bekor qilindi — xona holatini bo'shatamiz.
+        # Bekor qilish ham shu yerda: vazifasiz qolgan xona CLEANING da
+        # tiqilib qolardi va fon vazifasi unga yangi vazifa yasab yurardi.
+        if status in ("COMPLETED", "CANCELLED"):
+            await self._release_task_room_status(task, hotel_id, user_id)
+
+        # Qayta ochilgan vazifa xonani yana o'z holatiga qaytaradi
+        if status in ("OPEN", "IN_PROGRESS"):
+            await self._apply_task_room_status(task, hotel_id, user_id)
+
         if status == "COMPLETED" and task.task_type in ("CLEANING", "DEEP_CLEANING"):
-            room = await self.room_repo.get_by_id(task.room_id, hotel_id)
-            if room and room.current_status == "CLEANING":
-                room.current_status = "AVAILABLE"
-                await self.room_repo.update(room, current_status="AVAILABLE")
-
-                history = RoomStatusHistory(
-                    hotel_id=hotel_id,
-                    room_id=room.id,
-                    status="AVAILABLE",
-                    changed_by=user_id,
-                    notes=f"Cleaning task {task.id} completed",
-                )
-                self.session.add(history)
-                await self.session.flush()
-
             # Resepsiya "mehmon chiqmoqda" deb belgilagan bron: farrosh
             # tozalashni yakunladi — bron avtomatik CHECKED_OUT qilinadi.
             # (Oddiy rejadagi tozalash vazifalarida checkout_requested_at bo'sh
