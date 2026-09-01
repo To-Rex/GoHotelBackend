@@ -149,6 +149,16 @@ class AutomationService:
             await self.session.rollback()
             logger.exception("Auto-complete tasks tick failed")
 
+        # Vazifasiz qolgan CLEANING xonalarni tiklash. Avto-yakunlashdan
+        # KEYIN turadi: u avval bajarilishi kerak bo'lgan vazifalarni yopadi,
+        # shundan keyin haqiqatan yetim qolgan xonalar qoladi.
+        try:
+            await self._repair_orphan_cleaning_rooms()
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            logger.exception("Orphan CLEANING repair tick failed")
+
     async def _auto_complete_tasks(self) -> None:
         """Belgilangan vaqtdan oshib ketgan OPEN/IN_PROGRESS vazifalarni yopadi.
 
@@ -220,6 +230,179 @@ class AutomationService:
                 )
             except Exception:
                 logger.exception("Auto-complete failed for task %s", task.id)
+
+    async def _repair_orphan_cleaning_rooms(self) -> None:
+        """CLEANING da qolib ketgan, lekin ochiq tozalash vazifasi yo'q xonalar.
+
+        Xonani CLEANING dan chiqaradigan yagona narsa — tozalash vazifasining
+        yakunlanishi (housekeeping_service.update_task_status). Vazifa yo'q
+        bo'lsa xonani hech narsa qimirlatmaydi va u abadiy o'sha holatda
+        qoladi: bandlov taxtasida band ko'rinadi, lekin xo'jalik ishlari
+        sahifasida uni yopadigan hech nima yo'q.
+
+        Bunga bir necha yo'l olib kelardi. Eng ochig'i — vazifa xona CLEANING
+        ga o'tishidan OLDIN yopilib ketishi: yakunlash xonani faqat o'sha
+        lahzada CLEANING da bo'lsa AVAILABLE ga qaytaradi, aks holda jimgina
+        o'tib ketadi. Keyin xona CLEANING ga o'tsa, uni yopadigan vazifa
+        qolmaydi.
+
+        Bu yerda holat kuzatiladi va invariant tiklanadi: xona CLEANING da
+        bo'lsa, unga tegishli ochiq vazifa ham bo'lishi kerak. Xona holati bu
+        yerda O'ZGARTIRILMAYDI — dastur xona haqiqatan tozalanganini bilmaydi,
+        shuning uchun uni "toza" deb e'lon qilish noto'g'ri bo'lardi. O'rniga
+        vazifa qaytariladi: farrosh uni ko'radi va yopganda xona odatdagi yo'l
+        bilan bo'shaydi.
+        """
+        grace_minutes = settings.CLEANING_REPAIR_GRACE_MINUTES
+        if grace_minutes <= 0:
+            return  # tekshiruv o'chirilgan
+
+        now_utc = datetime.now(timezone.utc)
+        cutoff = now_utc - timedelta(minutes=grace_minutes)
+
+        rooms = (
+            (
+                await self.session.execute(
+                    select(Room).where(
+                        Room.current_status == "CLEANING",
+                        Room.is_deleted.is_(False),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for room in rooms:
+            try:
+                active = (
+                    await self.session.execute(
+                        select(HousekeepingTask.id)
+                        .where(
+                            HousekeepingTask.room_id == room.id,
+                            HousekeepingTask.task_type.in_(
+                                ["CLEANING", "DEEP_CLEANING"]
+                            ),
+                            HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
+                        )
+                        .limit(1)
+                    )
+                ).first()
+                if active:
+                    continue  # hammasi joyida — farrosh ko'radi
+
+                # Xona qachondan beri CLEANING da. Grace davri odatdagi oqimga
+                # xalaqit bermaslik uchun: chiqish yo'llari xonani CLEANING ga
+                # o'tkazib, o'sha yerning o'zida vazifani ham yaratadi.
+                since = (
+                    await self.session.execute(
+                        select(RoomStatusHistory.created_at)
+                        .where(
+                            RoomStatusHistory.room_id == room.id,
+                            RoomStatusHistory.status == "CLEANING",
+                        )
+                        .order_by(RoomStatusHistory.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if since is None:
+                    # Tarixsiz xona — qachon o'tganini bilmaymiz, tegmaymiz
+                    continue
+                if since.tzinfo is None:
+                    since = since.replace(tzinfo=timezone.utc)
+                if since > cutoff:
+                    continue
+
+                # Chiqish so'ralgan, lekin yopilmay qolgan bron bo'lsa vazifani
+                # unga bog'laymiz — yakunlanganda bron ham odatdagidek
+                # CHECKED_OUT bo'ladi. Bo'lmasa bog'lanmagan vazifa yaratamiz:
+                # u hech qaysi bronning holatiga tegmaydi.
+                reservation = (
+                    (
+                        await self.session.execute(
+                            select(Reservation)
+                            .where(
+                                Reservation.room_id == room.id,
+                                Reservation.is_deleted.is_(False),
+                                Reservation.status.in_(["CHECKED_IN", "CONFIRMED"]),
+                                Reservation.checkout_requested_at.isnot(None),
+                            )
+                            .order_by(Reservation.checkout_requested_at.desc())
+                            .limit(1)
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+
+                cleaner_id = await self._find_cleaner(room.hotel_id, room.branch_id)
+                # created_by NOT NULL — tizim amali uchun mavjud odamni olamiz
+                created_by = (
+                    (reservation.created_by if reservation is not None else None)
+                    or cleaner_id
+                    or (
+                        await self.session.execute(
+                            select(User.id)
+                            .where(User.hotel_id == room.hotel_id)
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+                )
+                if created_by is None:
+                    logger.warning(
+                        "Room %s CLEANING da vazifasiz, lekin mehmonxonada "
+                        "foydalanuvchi topilmadi — vazifa yaratilmadi",
+                        room.id,
+                    )
+                    continue
+
+                task = HousekeepingTask(
+                    hotel_id=room.hotel_id,
+                    branch_id=room.branch_id,
+                    room_id=room.id,
+                    reservation_id=reservation.id if reservation is not None else None,
+                    task_type="CLEANING",
+                    status="OPEN",
+                    priority="HIGH",
+                    assigned_to=cleaner_id,
+                    notes=(
+                        "Xona tozalash holatida vazifasiz qolgan — "
+                        "vazifa avtomatik tiklandi"
+                    ),
+                    scheduled_date=now_utc.date(),
+                    created_by=created_by,
+                )
+                self.session.add(task)
+                await self.session.flush()
+                logger.info(
+                    "Room %s CLEANING da vazifasiz edi — vazifa tiklandi "
+                    "(task=%s, cleaner=%s)",
+                    room.id,
+                    task.id,
+                    cleaner_id,
+                )
+
+                if cleaner_id is not None:
+                    try:
+                        await NotificationService(self.session).notify(
+                            hotel_id=room.hotel_id,
+                            user_id=cleaner_id,
+                            title="Tozalanmagan xona",
+                            body=(
+                                f"{room.room_number}-xona tozalash holatida "
+                                f"turibdi — tozalab, vazifani yakunlang"
+                            ),
+                            entity_type="task",
+                            entity_id=task.id,
+                            send_push=True,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Tiklangan vazifa uchun notification yuborilmadi "
+                            "(room=%s)",
+                            room.id,
+                        )
+            except Exception:
+                logger.exception("Orphan CLEANING repair failed for room %s", room.id)
 
     async def _process(self, reservation: Reservation, now: datetime) -> None:
         moment = self._checkout_moment(reservation)

@@ -1217,9 +1217,17 @@ class ReservationService:
             )
             self.session.add(history)
 
-        # Tozalash tuni — mavjud bo'lmasa yaratiladi (idempotent).
+        # Tozalash tuni — FAOL vazifa bo'lmasa yaratiladi (idempotent).
+        #
+        # active_only=True muhim: aks holda filtr "CANCELLED emas" bo'lib,
+        # allaqachon YAKUNLANGAN vazifa yangisining yaratilishiga to'sqinlik
+        # qilardi. Yuqorida xona endigina CLEANING ga o'tkazildi, ya'ni uni
+        # o'sha holatdan chiqaradigan ochiq vazifa kerak — vazifa yaratilmasa
+        # xona yetim qolib, CLEANING da abadiy tiqilib qolardi.
         if create_cleaning_task:
-            await self._ensure_cleaning_task(reservation, hotel_id, room, user_id)
+            await self._ensure_cleaning_task(
+                reservation, hotel_id, room, user_id, active_only=True
+            )
 
         await self.session.flush()
 

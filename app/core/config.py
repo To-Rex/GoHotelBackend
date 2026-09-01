@@ -126,6 +126,12 @@ class AutomationSettings(BaseSettings):
     # 0 — vaqt tugashi bilanoq (keyingi tekshiruv siklida) chiqariladi;
     # tozalash vazifasi bunga bog'liq emas, o'z holicha davom etadi
     AUTO_CHECKOUT_GRACE_MINUTES: int = 0
+    # Xona CLEANING da turib, unga ochiq tozalash vazifasi bo'lmasa — necha
+    # daqiqadan keyin vazifa qayta yaratiladi. Bunday xona "yetim" qoladi:
+    # xonani CLEANING dan chiqaradigan yagona narsa — tozalash vazifasining
+    # yakunlanishi, vazifa yo'q bo'lsa esa xona abadiy o'sha holatda qoladi.
+    # 0 — tekshiruvni butunlay o'chiradi.
+    CLEANING_REPAIR_GRACE_MINUTES: int = 10
     # Kunlik (soatsiz) bronlar uchun standart chiqish soati (mahalliy vaqt, 0-23)
     DEFAULT_CHECKOUT_HOUR: int = 12
     # Soatlik bronlar orasidagi majburiy tanaffus (daqiqalarda) — mijoz chiqib
