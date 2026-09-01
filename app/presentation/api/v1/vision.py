@@ -44,6 +44,8 @@ from app.application.dto.vision import (
     FaceEventResponse,
     FaceProfileStatus,
     MatchedGuest,
+    SightingGroupListResponse,
+    SightingGroupResponse,
     SightingListResponse,
     SightingResponse,
     VisionCameraResponse,
@@ -705,6 +707,108 @@ async def list_sightings(
     return SightingListResponse(items=items, unacknowledged=int(pending))
 
 
+@router.get("/sightings/groups", response_model=SightingGroupListResponse)
+async def list_sighting_groups(
+    minutes: int = Query(default=PANEL_WINDOW_MINUTES, ge=1, le=720),
+    limit: int = Query(default=24, ge=1, le=100),
+    branch_id: Optional[UUID] = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("guest.view")),
+):
+    """Tanilmagan ko'rinishlarni odamlar bo'yicha guruhlab qaytaradi.
+
+    Bir odam kamera oldidan uch marta o'tsa uchta epizod yoziladi. Ularni
+    alohida ko'rsatish ikki xato tug'diradi: xodim "qaysi biri?" deb
+    o'ylaydi, va biriktirilmagan qolgan ikkitasi ro'yxatda abadiy qoladi.
+    Guruhlangani esa aniqroq ham — biriktirishda uchala vektor birga
+    o'rtachalanadi.
+
+    Guruhlash har so'rovda qaytadan hisoblanadi va saqlanmaydi. Oyna kichik
+    (odatda o'nlab ko'rinish), hisob esa arzon; saqlansa esa har yangi
+    ko'rinish kelganda eskilarini qayta ko'rib chiqish kerak bo'lardi.
+    """
+    hotel_id = _hotel_id(current_user)
+    since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    conditions = [
+        FaceSighting.hotel_id == hotel_id,
+        FaceSighting.seen_at >= since,
+        # Faqat hali hech kimga tegishli bo'lmaganlar: biriktirilgan yuzni
+        # ikkinchi marta biriktirish bitta odamni ikki mehmon qilib qo'yardi.
+        FaceSighting.guest_id.is_(None),
+        FaceSighting.embedding.is_not(None),
+    ]
+    if branch_id is not None:
+        conditions.append(FaceSighting.branch_id == branch_id)
+
+    rows = (
+        await session.execute(
+            select(
+                FaceSighting.id,
+                FaceSighting.embedding,
+                FaceSighting.camera_id,
+                FaceSighting.camera_name,
+                FaceSighting.location,
+                FaceSighting.branch_id,
+                FaceSighting.seen_at,
+                FaceSighting.quality_score,
+                FaceSighting.thumbnail.is_not(None).label("has_thumbnail"),
+            )
+            .where(*conditions)
+            # Guruhlash uchun hammasi kerak, shuning uchun oyna ichidagi
+            # barchasi olinadi; `limit` guruhlarga qo'llanadi, qatorlarga emas.
+            .order_by(FaceSighting.seen_at.desc())
+            .limit(500)
+        )
+    ).all()
+
+    vectors: list = []
+    kept: list = []
+    ungrouped = 0
+    for row in rows:
+        vector = gfs.unpack_embedding(row.embedding)
+        if vector is None:
+            ungrouped += 1
+            continue
+        vectors.append(vector)
+        kept.append(row)
+
+    if not vectors:
+        return SightingGroupListResponse(items=[], ungrouped=ungrouped)
+
+    # Eng sifatlisi birinchi: birinchi a'zo guruhning boshlang'ich markazi
+    # bo'ladi, va sifatsiz kadrdan boshlangan guruh keyingilarini noto'g'ri
+    # tortadi.
+    order = sorted(range(len(kept)), key=lambda i: -float(kept[i].quality_score or 0))
+    groups = gfs.group_embeddings(vectors, order=order)
+
+    items: list[SightingGroupResponse] = []
+    for members in groups:
+        best = max(members, key=lambda i: float(kept[i].quality_score or 0))
+        seen = [kept[i].seen_at for i in members]
+        items.append(
+            SightingGroupResponse(
+                sighting_ids=[kept[i].id for i in members],
+                best_sighting_id=kept[best].id,
+                count=len(members),
+                camera_id=kept[best].camera_id,
+                camera_name=kept[best].camera_name,
+                location=kept[best].location,
+                branch_id=kept[best].branch_id,
+                first_seen_at=min(seen),
+                last_seen_at=max(seen),
+                quality_score=float(kept[best].quality_score or 0),
+                cohesion=gfs.group_cohesion(vectors, members),
+                has_thumbnail=bool(kept[best].has_thumbnail),
+            )
+        )
+
+    # Eng yaqinda ko'ringan odam tepada: qabulxonaga hozir kelgan mehmon
+    # kerak, ikki soat oldin o'tgani emas.
+    items.sort(key=lambda g: g.last_seen_at, reverse=True)
+    return SightingGroupListResponse(items=items[:limit], ungrouped=ungrouped)
+
+
 @router.get("/sightings/{sighting_id}/image")
 async def sighting_image(
     sighting_id: UUID,
@@ -781,16 +885,42 @@ async def enroll_sighting(
             "CONSENT_REQUIRED",
         )
 
-    vector = gfs.unpack_embedding(sighting.embedding)
-    if vector is None:
+    # Guruhning qolgan a'zolari. Bir odamning uch epizodi bo'lsa uchalasi
+    # ham shu mehmonga yoziladi — aks holda qolgan ikkitasi "tanilmagan"
+    # bo'lib ro'yxatda qolaverardi va xodim ularni qayta ko'rardi.
+    extra_ids = [sid for sid in payload.sighting_ids if sid != sighting_id]
+    siblings: list[FaceSighting] = []
+    if extra_ids:
+        siblings = list(
+            (
+                await session.execute(
+                    select(FaceSighting).where(
+                        FaceSighting.id.in_(extra_ids),
+                        FaceSighting.hotel_id == hotel_id,
+                        # Boshqa mehmonga tegishlisini tortib olmaymiz.
+                        FaceSighting.guest_id.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    vectors = []
+    for member in (sighting, *siblings):
+        vector = gfs.unpack_embedding(member.embedding)
+        if vector is not None:
+            vectors.append(vector)
+    if not vectors:
         raise ValidationException("Saqlangan vektor buzuq", "BAD_EMBEDDING")
 
-    template = gfs.Template(
-        vector=vector,
-        sample_count=max(1, int(sighting.sample_count or 1)),
-        dropped=0,
-        cohesion=float(sighting.cohesion or 1.0),
-    )
+    # Bir necha epizoddan yig'ilgan shablon bittasidan aniqroq. build_template
+    # bir vaqtning o'zida himoya ham: guruhga tasodifan tushib qolgan boshqa
+    # odamning vektori bu yerda chetlatiladi.
+    template = gfs.build_template(vectors)
+    if template is None:
+        raise ValidationException("Shablon yasab bo'lmadi", "BAD_EMBEDDING")
+
     await gfs.enroll(
         session,
         hotel_id=hotel_id,
@@ -805,15 +935,26 @@ async def enroll_sighting(
     if guest.face_consent_at is None:
         guest.face_consent_at = datetime.now(timezone.utc)
 
-    sighting.guest_id = guest.id
-    sighting.status = "recognized"
-    if sighting.acknowledged_at is None:
-        sighting.acknowledged_at = datetime.now(timezone.utc)
-        sighting.acknowledged_by = current_user["id"]
-    # Biriktirilgandan keyin vektor profilda — ko'rinishda nusxasi shart emas.
-    sighting.embedding = None
+    now = datetime.now(timezone.utc)
+    for member in (sighting, *siblings):
+        member.guest_id = guest.id
+        member.status = "recognized"
+        if member.acknowledged_at is None:
+            member.acknowledged_at = now
+            member.acknowledged_by = current_user["id"]
+        # Biriktirilgandan keyin vektor profilda — ko'rinishda nusxasi
+        # saqlanib qolishining sababi yo'q.
+        member.embedding = None
     await session.flush()
 
+    logger.info(
+        "Mehmon %s ga %d ta ko'rinishdan yuz biriktirildi (shablon: %d kadr, "
+        "%d chetlatildi)",
+        guest.id,
+        len(vectors),
+        template.sample_count,
+        template.dropped,
+    )
     return await _profile_status(session, guest)
 
 

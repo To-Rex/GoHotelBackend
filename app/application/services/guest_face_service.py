@@ -251,6 +251,91 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(va, vb))
 
 
+#: Ikki EPIZOD bir odamga tegishli deb hisoblanadigan chegara.
+#:
+#: ``CLUSTER_MIN_SIMILARITY`` dan yuqori, chunki u bitta epizod ichidagi
+#: kadrlar uchun — ular bir necha soniya ichida, bir xil yorug'likda olingan
+#: va tabiiy ravishda o'xshash. Turli vaqtdagi epizodlar uzoqroq bo'ladi,
+#: lekin bu yerda xato qimmatroq: ikki odamni bitta guruhga qo'shish xodimga
+#: birovning yuzini boshqasiga biriktirishga imkon beradi. Bir odamning
+#: ikkita guruhga bo'linishi esa shunchaki bugungi holat — zarari yo'q.
+GROUP_MIN_SIMILARITY = 0.58
+
+
+@dataclass(slots=True)
+class _Group:
+    """Yig'ilayotgan guruh: a'zolar indeksi va ularning markazi."""
+
+    members: list[int]
+    centroid: np.ndarray
+
+
+def group_embeddings(
+    vectors: Sequence[np.ndarray],
+    *,
+    min_similarity: float = GROUP_MIN_SIMILARITY,
+    order: Sequence[int] | None = None,
+) -> list[list[int]]:
+    """Vektorlarni odamlar bo'yicha guruhlaydi; indekslar ro'yxatini qaytaradi.
+
+    "Leader" usuli: har vektor mavjud guruhlarning MARKAZLARI bilan
+    solishtiriladi, eng yaqiniga qo'shiladi, hech biriga mos kelmasa yangi
+    guruh ochadi.
+
+    Nega bog'lanishli (single-linkage) klasterlash emas: u zanjir hosil
+    qiladi — A va B o'xshash, B va C o'xshash, natijada A va C bir guruhda,
+    garchi ular bir-biriga umuman o'xshamasa ham. Bir necha soatlik
+    ko'rinishlarda bu ikki-uch odamni bitta guruhga yig'ib qo'yardi.
+    Markazga solishtirish bunga yo'l qo'ymaydi.
+
+    ``order`` — vektorlar qaysi tartibda ko'rilishi. Chaqiruvchi eng
+    sifatlisini boshiga qo'yadi: birinchi a'zo guruhning boshlang'ich markazi
+    bo'ladi, va sifatsiz kadrdan boshlangan guruh keyingilarini ham noto'g'ri
+    tortadi.
+    """
+    if not vectors:
+        return []
+    indices = list(order) if order is not None else list(range(len(vectors)))
+    groups: list[_Group] = []
+
+    for index in indices:
+        vector = l2_normalize(vectors[index])
+        best_group: _Group | None = None
+        best_score = min_similarity
+        for group in groups:
+            score = float(np.dot(group.centroid, vector))
+            if score >= best_score:
+                best_score = score
+                best_group = group
+
+        if best_group is None:
+            groups.append(_Group(members=[index], centroid=vector))
+            continue
+
+        best_group.members.append(index)
+        # Markaz yangilanadi, aks holda guruh birinchi a'zosiga bog'lanib
+        # qolardi va keyingi a'zolar faqat o'shanga qarab baholanardi.
+        members = np.vstack([l2_normalize(vectors[i]) for i in best_group.members])
+        best_group.centroid = l2_normalize(members.mean(axis=0))
+
+    return [g.members for g in groups]
+
+
+def group_cohesion(vectors: Sequence[np.ndarray], members: Sequence[int]) -> float:
+    """Guruh a'zolarining markazga o'rtacha o'xshashligi, 0..1.
+
+    Past qiymat — guruhga boshqa odam qo'shilgan bo'lishi mumkin degan belgi;
+    panel buni xodimga ko'rsatadi.
+    """
+    if not members:
+        return 0.0
+    if len(members) == 1:
+        return 1.0
+    matrix = np.vstack([l2_normalize(vectors[i]) for i in members])
+    centroid = l2_normalize(matrix.mean(axis=0))
+    return round(float(np.mean(matrix @ centroid)), 4)
+
+
 # ---------------------------------------------------------------------------
 # Mehmonxona indeksi
 # ---------------------------------------------------------------------------

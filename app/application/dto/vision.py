@@ -121,11 +121,48 @@ class SightingListResponse(BaseModel):
     engine: str = "agent"
 
 
+class SightingGroupResponse(BaseModel):
+    """Bitta odamning bir necha ko'rinishi — panel uchun bitta karta.
+
+    Bir odam kamera oldidan uch marta o'tsa uchta epizod yoziladi. Ularni
+    alohida ko'rsatish xodimni chalkashtiradi ("bularning qaysi biri?") va
+    biriktirilmagan ikkitasi ro'yxatda qolib ketadi. Guruhlangani esa
+    aniqroq ham: uch epizodning vektorlari birga o'rtachalanadi.
+    """
+
+    #: Guruhning barcha ko'rinish id'lari — biriktirishda hammasi ishlatiladi.
+    sighting_ids: list[UUID]
+    #: Eng sifatli ko'rinish — panelda shuning surati ko'rsatiladi.
+    best_sighting_id: UUID
+    count: int
+    camera_id: str
+    camera_name: Optional[str] = None
+    location: Optional[str] = None
+    branch_id: Optional[UUID] = None
+    first_seen_at: datetime
+    last_seen_at: datetime
+    quality_score: float = 0.0
+    #: A'zolarning guruh markaziga o'rtacha o'xshashligi. Past qiymat —
+    #: guruhga boshqa odam qo'shilgan bo'lishi mumkin degan belgi.
+    cohesion: float = 1.0
+    has_thumbnail: bool = False
+
+
+class SightingGroupListResponse(BaseModel):
+    items: list[SightingGroupResponse]
+    #: Guruhlanmagan (vektori yo'q) ko'rinishlar soni — diagnostika uchun.
+    ungrouped: int = 0
+
+
 class EnrollSightingRequest(BaseModel):
     guest_id: UUID
     #: Mehmon biometrik ma'lumot saqlashga rozilik berdi. Bu bayroqsiz
     #: biriktirish rad etiladi — rozilik huquqiy shart, texnik emas.
     consent: bool = False
+    #: Guruhning qolgan ko'rinishlari. Ular ham shu mehmonga yoziladi va
+    #: vektorlari shablonga qo'shiladi — bir necha epizoddan yig'ilgan
+    #: shablon bittasidan sezilarli aniqroq bo'ladi.
+    sighting_ids: list[UUID] = Field(default_factory=list)
 
 
 class FaceProfileStatus(BaseModel):
