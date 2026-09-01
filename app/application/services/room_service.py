@@ -426,7 +426,15 @@ class RoomService:
                 Reservation.room_id == room_id,
                 Reservation.is_deleted.is_(False),
             )
-            .order_by(Reservation.check_in_date.desc(), Reservation.created_at.desc())
+            .order_by(
+                Reservation.check_in_date.desc(),
+                # Bir kundagi SOATLIK bronlar uchun: sanasi bir xil bo'lsa
+                # aniq vaqti hal qiladi. Busiz ular kiritilish tartibida
+                # chiqardi — ya'ni 09:00 dagi bron 22:00 dagisidan keyin
+                # turishi mumkin edi.
+                Reservation.check_in_datetime.desc().nullslast(),
+                Reservation.created_at.desc(),
+            )
             .offset(skip)
             .limit(limit)
         )
