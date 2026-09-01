@@ -31,6 +31,9 @@ from app.infrastructure.database.models.shop import ShopProduct, ShopBatch, Shop
 from app.infrastructure.database.models.user_face_profile import UserFaceProfile
 from app.infrastructure.database.models.shift import ShiftSession
 from app.infrastructure.database.models.staff_message import StaffMessage
+from app.infrastructure.database.models.guest_face_profile import GuestFaceProfile
+from app.infrastructure.database.models.face_sighting import FaceSighting, VisionDevice
+from app.infrastructure.database.models.vision_camera import VisionCamera
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -46,4 +49,5 @@ __all__ = [
     "UserFaceProfile",
     "ShiftSession",
     "StaffMessage",
+    "GuestFaceProfile", "FaceSighting", "VisionDevice", "VisionCamera",
 ]

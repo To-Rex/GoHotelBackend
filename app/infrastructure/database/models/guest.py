@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -28,6 +28,12 @@ class Guest(FullMixin, SoftDeleteMixin, Base):
     id_document_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Mehmon yuzini saqlashga rozilik bergan payt. Biometrik shablon FAQAT
+    #: shu sana qo'yilgandan keyin yaratiladi, va uni o'chirish rozilikni
+    #: qaytarib olish demak — bitta ustun butun huquqiy holatni ifodalaydi.
+    face_consent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     hotel: Mapped["Hotel"] = relationship("Hotel", back_populates="guests")
     reservations: Mapped[list["Reservation"]] = relationship(
