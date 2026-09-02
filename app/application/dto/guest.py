@@ -54,6 +54,9 @@ class GuestResponse(BaseModel):
     is_deleted: bool
     created_at: datetime
     updated_at: datetime
+    #: Qora ro'yxat — sana qo'yilgan bo'lsa mehmon ro'yxatda
+    blacklisted_at: datetime | None = None
+    blacklist_reason: str | None = None
 
     model_config = {"from_attributes": True}
 

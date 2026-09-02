@@ -5,11 +5,12 @@ from uuid import UUID
 
 import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.dto.guest_stay import GuestHistoryResponse
+from app.application.services.blacklist_service import BlacklistService
 from app.application.services.guest_history_service import GuestHistoryService
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
@@ -272,6 +273,117 @@ async def register_guest(
         raise ForbiddenException("Hotel context required")
     service = GuestService(session)
     return await service.create_guest(h_id, data.model_dump())
+
+
+class BlacklistRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class BlacklistPolicyRequest(BaseModel):
+    block_booking: bool
+
+
+@router.get("/blacklist")
+async def list_blacklist(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qora ro'yxatdagi mehmonlar."""
+    h_id = (
+        current_user.get("hotel_id")
+        if current_user["user_type"] == "SUPER_ADMIN"
+        else _get_hotel_id(current_user)
+    )
+    return await BlacklistService(session).list_blacklisted(h_id)
+
+
+@router.get("/blacklist-settings")
+async def get_blacklist_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qora ro'yxatdagi mehmonga bron ochish taqiqlanganmi."""
+    from app.infrastructure.database.models.hotel import Hotel
+    from app.application.services.blacklist_service import (
+        DEFAULT_BLOCK_BOOKING,
+        resolve_block_booking,
+    )
+
+    h_id = (
+        current_user.get("hotel_id")
+        if current_user["user_type"] == "SUPER_ADMIN"
+        else _get_hotel_id(current_user)
+    )
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    return {
+        "block_booking": resolve_block_booking(hotel.settings if hotel else None),
+        "default_block_booking": DEFAULT_BLOCK_BOOKING,
+    }
+
+
+@router.put("/blacklist-settings")
+async def save_blacklist_settings(
+    data: BlacklistPolicyRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qoidani saqlash — faqat ADMIN/SUPER_ADMIN."""
+    from app.infrastructure.database.models.hotel import Hotel
+    from app.application.services.blacklist_service import (
+        BLACKLIST_SETTINGS_KEY,
+        DEFAULT_BLOCK_BOOKING,
+    )
+
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException("Faqat administrator o'zgartira oladi")
+    h_id = _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — o'zgarish sezilishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[BLACKLIST_SETTINGS_KEY] = {"block_booking": data.block_booking}
+    hotel.settings = new_settings
+    await session.flush()
+    return {
+        "block_booking": data.block_booking,
+        "default_block_booking": DEFAULT_BLOCK_BOOKING,
+    }
+
+
+@router.post("/{guest_id}/blacklist", response_model=GuestResponse)
+async def add_to_blacklist(
+    data: BlacklistRequest,
+    guest_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Mehmonni qora ro'yxatga qo'shish — faqat administrator, sabab bilan."""
+    h_id = (
+        (hotel_id or current_user.get("hotel_id"))
+        if current_user["user_type"] == "SUPER_ADMIN"
+        else _get_hotel_id(current_user)
+    )
+    return await BlacklistService(session).add(
+        guest_id, h_id, data.reason, current_user
+    )
+
+
+@router.delete("/{guest_id}/blacklist", response_model=GuestResponse)
+async def remove_from_blacklist(
+    guest_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qora ro'yxatdan chiqarish — faqat administrator."""
+    h_id = (
+        (hotel_id or current_user.get("hotel_id"))
+        if current_user["user_type"] == "SUPER_ADMIN"
+        else _get_hotel_id(current_user)
+    )
+    return await BlacklistService(session).remove(guest_id, h_id, current_user)
 
 
 @router.get("/{guest_id}", response_model=GuestResponse)

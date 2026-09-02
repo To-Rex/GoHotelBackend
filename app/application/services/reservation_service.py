@@ -679,6 +679,21 @@ class ReservationService:
         check_in_dt = data.get("check_in_datetime")
         check_out_dt = data.get("check_out_datetime")
 
+        # QORA RO'YXAT. Asosiy mehmon ham, hamrohlar ham tekshiriladi:
+        # ro'yxatdagi odam boshqa birovning nomiga hamroh bo'lib kirib
+        # ketmasligi kerak, aks holda taqiqni aylanib o'tish oson bo'lardi.
+        from app.application.services.blacklist_service import BlacklistService
+
+        companion_ids = []
+        for raw in data.get("companion_guest_ids") or []:
+            try:
+                companion_ids.append(UUID(str(raw)))
+            except (ValueError, AttributeError, TypeError):
+                continue  # buzuq ID bron yaratishni yiqitmasin
+        await BlacklistService(self.session).assert_bookable(
+            [guest.id, *companion_ids], hotel_id
+        )
+
         # Holat tekshiruvi sanalar o'qilgandan keyin: tozalanayotgan xona
         # kelgusi sanalarga ochiq, faqat hozirgi payt uchun yopiq
         self._assert_room_bookable(

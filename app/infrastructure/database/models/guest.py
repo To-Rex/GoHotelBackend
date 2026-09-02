@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -13,6 +13,15 @@ from app.shared.mixins import FullMixin, SoftDeleteMixin
 
 class Guest(FullMixin, SoftDeleteMixin, Base):
     __tablename__ = "guests"
+    __table_args__ = (
+        # Qora ro'yxat har bir bron yaratishda tekshiriladi. Qisman indeks
+        # faqat ro'yxatdagilarni saqlaydi — u kichik va tez qoladi.
+        Index(
+            "ix_guests_blacklisted",
+            "hotel_id",
+            postgresql_where=text("blacklisted_at IS NOT NULL"),
+        ),
+    )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
@@ -33,6 +42,23 @@ class Guest(FullMixin, SoftDeleteMixin, Base):
     #: qaytarib olish demak — bitta ustun butun huquqiy holatni ifodalaydi.
     face_consent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    #: QORA RO'YXAT.
+    #:
+    #: Sana qo'yilgan bo'lsa mehmon ro'yxatda. Bitta ustun butun holatni
+    #: ifodalaydi: uni tozalash ro'yxatdan chiqarish demak — `face_consent_at`
+    #: bilan bir xil uslub.
+    #:
+    #: Sabab MAJBURIY: "nega bu odam qora ro'yxatda?" degan savolga bir
+    #: yildan keyin ham javob bo'lishi kerak, aks holda ro'yxat ishonchini
+    #: yo'qotadi va xodimlar uni chetlab o'ta boshlaydi.
+    blacklisted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    blacklist_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    blacklisted_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     hotel: Mapped["Hotel"] = relationship("Hotel", back_populates="guests")
