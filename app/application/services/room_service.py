@@ -553,6 +553,8 @@ class RoomService:
             return {
                 "guest_id": guest.id,
                 "name": full_name(guest.first_name, guest.last_name) or name,
+                "first_name": guest.first_name,
+                "last_name": guest.last_name,
                 "is_primary": primary,
                 "phone": guest.phone,
                 "email": guest.email,

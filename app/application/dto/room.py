@@ -138,6 +138,11 @@ class ReservationOccupant(BaseModel):
 
     guest_id: UUID | None = None
     name: str | None = None
+    # Ism va familiya alohida ham: tahrirlash shakli ularni bo'lingan holda
+    # so'raydi, `name` ni bo'lakka ajratish esa qo'sh familiyalarda xato
+    # qilardi
+    first_name: str | None = None
+    last_name: str | None = None
     is_primary: bool = False
     phone: str | None = None
     email: str | None = None
