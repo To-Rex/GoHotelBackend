@@ -40,6 +40,7 @@ class AuthService:
         ip_address: str | None = None,
         user_agent: str | None = None,
         fcm_token: str | None = None,
+        device_id: str | None = None,
     ) -> dict:
         user = await self.user_repo.get_by_username(username)
         if not user or not verify_password(password, user.password_hash):
@@ -50,6 +51,17 @@ class AuthService:
 
         if user.is_deleted:
             raise ForbiddenException("Account has been deleted", "ACCOUNT_DELETED")
+
+        # --- Qurilma tasdiqlangan bo'lishi kerak ---
+        #
+        # Yuz tekshiruvidan OLDIN: tasdiqlanmagan qurilmada yuz so'rashning
+        # ma'nosi yo'q, u baribir kiritmaydi. Administrator bu tekshiruvdan
+        # ozod — batafsil izoh device_service da.
+        from app.application.services.device_service import DeviceService
+
+        await DeviceService(self.session).ensure_allowed(
+            user, device_id, user_agent=user_agent, ip_address=ip_address
+        )
 
         # FCM token faqat so'rovda kelganda yangilanadi — token yubormaydigan
         # klientlar (masalan web) mavjud tokenni o'chirib yubormasligi uchun.

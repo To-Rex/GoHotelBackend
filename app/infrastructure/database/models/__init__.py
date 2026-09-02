@@ -29,6 +29,7 @@ from app.infrastructure.database.models.webauthn_credential import WebAuthnCrede
 from app.infrastructure.database.models.webauthn_challenge import WebAuthnChallenge
 from app.infrastructure.database.models.shop import ShopProduct, ShopBatch, ShopSale, ShopSaleItem, ShopWriteoff
 from app.infrastructure.database.models.user_face_profile import UserFaceProfile
+from app.infrastructure.database.models.trusted_device import TrustedDevice
 from app.infrastructure.database.models.shift import ShiftSession
 from app.infrastructure.database.models.staff_message import StaffMessage
 from app.infrastructure.database.models.guest_face_profile import GuestFaceProfile

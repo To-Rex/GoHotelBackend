@@ -28,6 +28,7 @@ from app.presentation.api.v1 import (
     shifts,
     messages,
     vision,
+    devices,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -60,3 +61,4 @@ api_router.include_router(face.router, prefix="/auth/face", tags=["Face Login"])
 api_router.include_router(shifts.router, prefix="/shifts", tags=["Shifts"])
 api_router.include_router(messages.router, prefix="/messages", tags=["Staff Messages"])
 api_router.include_router(vision.router, prefix="/vision", tags=["Vision / Guest Face"])
+api_router.include_router(devices.router, prefix="/devices", tags=["Trusted Devices"])
