@@ -32,6 +32,34 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     return hotel_id
 
 
+@router.get("/debtors")
+async def list_debtors(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    mine: bool = Query(default=False),
+    guest_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qarzdorlar — to'lovi tugallanmagan bronlar.
+
+    `mine=true` bo'lsa faqat so'rovchi xodim ochgan bronlar qaytadi —
+    shaxsiy hisobot uchun. Ta'rif va cheklovlar `debtor_service` da.
+    """
+    from app.application.services.debtor_service import DebtorService
+
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await DebtorService(session).list_debtors(
+        h_id,
+        date_from=date_from,
+        date_to=date_to,
+        created_by=current_user["id"] if mine else None,
+        guest_id=guest_id,
+    )
+
+
 @router.get("/invoices", response_model=list[InvoiceResponse])
 async def list_invoices(
     status: str | None = Query(default=None),
