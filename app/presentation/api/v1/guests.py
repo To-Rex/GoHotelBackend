@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.dto.guest_stay import GuestHistoryResponse
+from app.application.services.guest_history_service import GuestHistoryService
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.guest import Guest
@@ -324,6 +326,25 @@ async def get_guest_reservations(
         h_id = _get_hotel_id(current_user)
     repo = ReservationRepository(session)
     return await repo.get_guest_reservations(guest_id, h_id)
+
+
+@router.get("/{guest_id}/history", response_model=GuestHistoryResponse)
+async def get_guest_history(
+    guest_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Mehmonning turish tarixi: qachon, qaysi xonada, kim bilan.
+
+    Mehmon HAMROH bo'lib turgan bronlar ham kiradi — ularsiz "kim bilan
+    kelgan" savoli chala javob olardi.
+    """
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    return await GuestHistoryService(session).get_history(guest_id, h_id)
 
 
 @router.delete("/{guest_id}", response_model=MessageResponse)
