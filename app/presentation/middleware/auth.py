@@ -38,13 +38,35 @@ async def get_current_user(
         except (ValueError, TypeError, AttributeError):
             return None
 
+    user_type = payload.get("user_type", "")
+    hotel_id = _safe_uuid(payload.get("hotel_id"))
+
+    # --- Qurilma hamon ruxsat etilganmi ---
+    #
+    # Faqat kirishda tekshirish yetarli emas: administrator qurilmani
+    # taqiqlasa yoki o'chirsa, unda allaqachon kirgan xodim token
+    # muddatigacha (refresh bilan esa undan uzoq) ishlab yuraverardi.
+    #
+    # Qurilma tokenning o'zidan olinadi — u imzolangan va o'zgartirib
+    # bo'lmaydi. Eski, qurilmasiz tokenlar uchun sarlavhaga tushamiz:
+    # ular tabiiy ravishda tugaydi, lekin shu oraliqda ham tekshiruv
+    # ishlashi kerak.
+    device_id = payload.get("device_id") or request.headers.get("x-device-id")
+    if device_id and hotel_id:
+        from app.application.services.device_service import DeviceService
+
+        await DeviceService(session).assert_session_allowed(
+            hotel_id, device_id, user_type
+        )
+
     return {
         "id": _safe_uuid(user_id),
-        "user_type": payload.get("user_type", ""),
-        "hotel_id": _safe_uuid(payload.get("hotel_id")),
+        "user_type": user_type,
+        "hotel_id": hotel_id,
         "branch_id": _safe_uuid(payload.get("branch_id")),
         "permissions": payload.get("permissions", []),
         "jti": payload.get("jti", ""),
+        "device_id": device_id,
     }
 
 

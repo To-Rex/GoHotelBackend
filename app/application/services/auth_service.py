@@ -81,7 +81,9 @@ class AuthService:
                 "face_expires_in": FACE_CHALLENGE_EXPIRE_MINUTES * 60,
             }
 
-        return await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
+        return await self.issue_tokens(
+            user, ip_address=ip_address, user_agent=user_agent, device_id=device_id
+        )
 
     async def _has_face_profile(self, user_id) -> bool:
         """Xodimda yuz biriktirilganmi."""
@@ -123,6 +125,7 @@ class AuthService:
         reason: str | None = None,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        device_id: str | None = None,
     ) -> dict:
         """Kamerasiz qurilmada ikkinchi bosqichni o'tkazib yuborish."""
         user = await self.resolve_face_challenge(face_token)
@@ -136,6 +139,7 @@ class AuthService:
             user,
             ip_address=ip_address,
             user_agent=f"{user_agent or ''} [yuzsiz: {note}]".strip(),
+            device_id=device_id,
         )
 
     async def issue_tokens(
@@ -143,6 +147,7 @@ class AuthService:
         user,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        device_id: str | None = None,
     ) -> dict:
         """Access/refresh token juftligini yaratib, sessiya yozuvini saqlaydi.
 
@@ -163,6 +168,10 @@ class AuthService:
             "branch_id": str(user.branch_id) if user.branch_id else None,
             "permissions": permissions,
             "jti": jti,
+            # Qurilma tokenga bog'lanadi. Sarlavhaga tayanib bo'lmaydi:
+            # taqiqlangan qurilma uni yubormay qo'yib, ishlashda davom
+            # etardi. Tokendagi qiymatni esa o'zgartirib bo'lmaydi.
+            "device_id": device_id,
         }
 
         access_token = create_access_token(token_data)

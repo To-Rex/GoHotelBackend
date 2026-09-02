@@ -73,6 +73,7 @@ async def login_without_camera(
         reason=data.reason,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
+        device_id=request.headers.get("x-device-id"),
     )
 
 

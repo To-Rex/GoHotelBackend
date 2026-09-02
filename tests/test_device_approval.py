@@ -141,5 +141,49 @@ user = FakeUser()
 user.hotel_id = None
 check("tekshirilmaydi", rejects(user, ses), None)
 
+print("--- qurilma tasdiqlanadi, XODIM emas ---")
+# Bir marta tasdiqlangan qurilmada mehmonxonaning istalgan xodimi ishlashi
+# kerak: resepsiya smenasi almashganda qayta tasdiq so'ralmasin
+hotel = uuid.uuid4()
+approved = FakeDevice("APPROVED")
+for who in ("resepsiya-1", "resepsiya-2", "menejer"):
+    ses = FakeSession(approved)
+    u = FakeUser(hotel_id=hotel)
+    u.username = who
+    check(f"{who} o'tadi", rejects(u, ses), None)
+
+
+print("--- ochiq sessiya: qurilma huquqi bekor qilinsa ---")
+
+
+def session_check(status_or_missing, user_type="EMPLOYEE"):
+    """assert_session_allowed — har so'rovda ishlaydigan tekshiruv."""
+
+    class Res:
+        def __init__(self, v):
+            self.v = v
+
+        def scalar_one_or_none(self):
+            return self.v
+
+    class Ses:
+        async def execute(self, _s):
+            return Res(status_or_missing)
+
+    svc = DeviceService.__new__(DeviceService)
+    svc.session = Ses()
+    try:
+        asyncio.run(svc.assert_session_allowed(uuid.uuid4(), "dev-1", user_type))
+        return None
+    except ForbiddenException as e:
+        return e.error_code
+
+
+check("tasdiqlangan — ishlayveradi", session_check("APPROVED"), None)
+check("taqiqlangan — to'xtatiladi", session_check("BLOCKED"), "DEVICE_BLOCKED")
+check("tasdiq bekor qilingan — to'xtatiladi", session_check("PENDING"), "DEVICE_PENDING")
+check("o'chirilgan — to'xtatiladi", session_check(None), "DEVICE_REVOKED")
+check("administrator sessiyasiga tegilmaydi", session_check(None, "ADMIN"), None)
+
 print(f"\nJami: {ok} ok, {fail} xato")
 raise SystemExit(1 if fail else 0)

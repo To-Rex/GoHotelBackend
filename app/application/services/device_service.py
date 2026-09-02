@@ -123,6 +123,51 @@ class DeviceService:
             "DEVICE_PENDING",
         )
 
+    async def assert_session_allowed(
+        self,
+        hotel_id,
+        device_id: str | None,
+        user_type: str,
+    ) -> None:
+        """Ochiq sessiya davom etishi mumkinmi.
+
+        Tekshiruv faqat kirishda bo'lsa yetarli emasdi: administrator
+        qurilmani taqiqlasa yoki ro'yxatdan o'chirsa, o'sha qurilmada
+        allaqachon kirgan xodim bemalol ishlab yuraverardi — token ikki
+        soat, refresh bilan esa undan ham uzoq yashaydi.
+
+        Endi har so'rovda tekshiriladi. So'rov bitta indeksli qidiruv, ya'ni
+        qimmat emas.
+        """
+        if user_type in DEVICE_CHECK_EXEMPT_TYPES or not hotel_id or not device_id:
+            return
+
+        device = (
+            await self.session.execute(
+                select(TrustedDevice.status).where(
+                    TrustedDevice.hotel_id == hotel_id,
+                    TrustedDevice.device_id == device_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if device is None:
+            # Ro'yxatdan o'chirilgan — sessiya ham tugaydi
+            raise ForbiddenException(
+                "Bu qurilma ro'yxatdan o'chirilgan. Qaytadan kiring",
+                "DEVICE_REVOKED",
+            )
+        if device == "BLOCKED":
+            raise ForbiddenException(
+                "Bu qurilmadan kirish taqiqlangan. Administratorga murojaat qiling",
+                "DEVICE_BLOCKED",
+            )
+        if device != "APPROVED":
+            raise ForbiddenException(
+                "Qurilma tasdig'i bekor qilingan. Administrator tasdiqlagach ishlay olasiz",
+                "DEVICE_PENDING",
+            )
+
     async def list_devices(
         self, hotel_id: UUID, status: str | None = None
     ) -> list[TrustedDevice]:

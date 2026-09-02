@@ -128,6 +128,7 @@ async def verify_login(
             user,
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
+            device_id=request.headers.get("x-device-id"),
         )
 
     best = 0.0
@@ -159,6 +160,7 @@ async def verify_login(
         user,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
+        device_id=request.headers.get("x-device-id"),
     )
 
 
