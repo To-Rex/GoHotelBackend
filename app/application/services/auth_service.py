@@ -3,6 +3,7 @@ Authentication service — handles login, token creation, and token refresh.
 Unified login: checks username against the single `users` table.
 JWT contains: sub, user_type, hotel_id, branch_id, permissions[], jti, type.
 """
+import logging
 from uuid import UUID
 from datetime import datetime, timedelta, timezone
 
@@ -10,10 +11,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedException, ForbiddenException
-from app.infrastructure.auth.jwt import create_access_token, create_refresh_token, decode_token
+from app.infrastructure.auth.jwt import (
+    FACE_CHALLENGE_EXPIRE_MINUTES,
+    create_access_token,
+    create_face_challenge_token,
+    create_refresh_token,
+    decode_face_challenge_token,
+    decode_token,
+)
 from app.infrastructure.auth.password import verify_password
 from app.infrastructure.database.repositories.user_repo import UserRepository, SessionRepository
 from app.shared.utils import generate_jti
+
+
+logger = logging.getLogger(__name__)
 
 
 class AuthService:
@@ -45,7 +56,75 @@ class AuthService:
         if fcm_token:
             user.fcm_token = fcm_token
 
+        # --- Ikkinchi bosqich: yuz tekshiruvi ---
+        #
+        # Yuz biriktirgan xodim uchun parol YETARLI EMAS. Tokenlar bu yerda
+        # berilmaydi — o'rniga qisqa muddatli challenge qaytadi va kirish
+        # `/face/verify-login` da yakunlanadi. Yuzi yo'q xodim uchun hech
+        # narsa o'zgarmaydi: parol avvalgidek yetarli.
+        if await self._has_face_profile(user.id):
+            return {
+                "face_required": True,
+                "face_token": create_face_challenge_token(str(user.id)),
+                "face_expires_in": FACE_CHALLENGE_EXPIRE_MINUTES * 60,
+            }
+
         return await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
+
+    async def _has_face_profile(self, user_id) -> bool:
+        """Xodimda yuz biriktirilganmi."""
+        from sqlalchemy import func, select
+
+        from app.infrastructure.database.models.user_face_profile import (
+            UserFaceProfile,
+        )
+
+        count = (
+            await self.session.execute(
+                select(func.count(UserFaceProfile.id)).where(
+                    UserFaceProfile.user_id == user_id
+                )
+            )
+        ).scalar() or 0
+        return count > 0
+
+    async def resolve_face_challenge(self, face_token: str):
+        """Challenge tokendan xodimni topadi va holatini qayta tekshiradi.
+
+        Qayta tekshirish kerak: token berilgandan keyin xodim o'chirilgan yoki
+        bloklangan bo'lishi mumkin, besh daqiqa ham buning uchun yetarli.
+        """
+        user_id = decode_face_challenge_token(face_token)
+        if not user_id:
+            raise UnauthorizedException(
+                "Kirish seansi tugadi — login va parolni qaytadan kiriting",
+                "FACE_CHALLENGE_INVALID",
+            )
+        user = await self.user_repo.get_by_id(UUID(str(user_id)))
+        if not user or user.is_deleted or user.status != "ACTIVE":
+            raise ForbiddenException("Account is not active", "ACCOUNT_INACTIVE")
+        return user
+
+    async def complete_login_without_face(
+        self,
+        face_token: str,
+        reason: str | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict:
+        """Kamerasiz qurilmada ikkinchi bosqichni o'tkazib yuborish."""
+        user = await self.resolve_face_challenge(face_token)
+        note = reason or "kamera topilmadi"
+        logger.info(
+            "Yuz tekshiruvisiz kirish: %s (sabab: %s)", user.username, note
+        )
+        # Sabab sessiya yozuviga tushadi — keyin kim qaysi yo'l bilan
+        # kirgani ko'rinadi
+        return await self.issue_tokens(
+            user,
+            ip_address=ip_address,
+            user_agent=f"{user_agent or ''} [yuzsiz: {note}]".strip(),
+        )
 
     async def issue_tokens(
         self,

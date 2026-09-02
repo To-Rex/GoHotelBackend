@@ -6,7 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.application.services.auth_service import AuthService
 from app.application.services.webauthn_service import WebAuthnService
-from app.application.dto.auth import LoginRequest, RefreshRequest, TokenResponse, UserProfileResponse
+from app.application.dto.auth import (
+    FaceSkipRequest,
+    LoginRequest,
+    LoginResponse,
+    RefreshRequest,
+    TokenResponse,
+    UserProfileResponse,
+)
 from app.application.dto.common import MessageResponse
 from app.application.dto.webauthn import (
     PasskeyResponse,
@@ -20,21 +27,49 @@ from app.presentation.middleware.auth import get_current_user
 router = APIRouter()
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=LoginResponse)
 async def login(
     data: LoginRequest,
     request: Request,
     session: AsyncSession = Depends(get_db),
 ):
+    """Birinchi bosqich: login va parol.
+
+    Xodim yuz biriktirgan bo'lsa tokenlar shu yerda BERILMAYDI — javobda
+    `face_required` va qisqa muddatli `face_token` keladi, kirish esa
+    `/face/verify-login` da yakunlanadi.
+    """
     service = AuthService(session)
-    result = await service.login(
+    return await service.login(
         username=data.username,
         password=data.password,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
         fcm_token=data.fcm_token,
     )
-    return result
+
+
+@router.post("/login/no-camera", response_model=TokenResponse)
+async def login_without_camera(
+    data: FaceSkipRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+):
+    """Qurilmada kamera bo'lmaganda ikkinchi bosqichni o'tkazib yuborish.
+
+    Kamera bor-yo'qligini faqat qurilmaning o'zi biladi, shuning uchun bu
+    qaror mijozdan keladi — ya'ni bu yo'l yuz tekshiruvidan ko'ra zaifroq.
+    Lekin u parolsiz ochilmaydi: `face_token` faqat login va parol to'g'ri
+    kelganda beriladi va besh daqiqada kuchini yo'qotadi. Sabab sessiya
+    yozuviga tushadi, ya'ni keyin kim qaysi yo'l bilan kirgani ko'rinadi.
+    """
+    service = AuthService(session)
+    return await service.complete_login_without_face(
+        data.face_token,
+        reason=data.reason,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)

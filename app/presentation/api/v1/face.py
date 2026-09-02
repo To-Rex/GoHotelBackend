@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 
 import anyio
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,29 +57,47 @@ def _require_engine() -> None:
 
 @router.get("/availability")
 async def face_availability(session: AsyncSession = Depends(get_db)):
-    """Ochiq endpoint: yuz-kirish umuman mavjudmi.
+    """Ochiq endpoint: yuz tekshiruvi dvigateli ishlaydimi.
 
-    Frontend tugmani faqat dvigatel ishlaydigan VA kamida bitta xodim yuz
-    biriktirgan holatda ko'rsatadi — yuzi yo'q tizimda so'ralmaydi.
+    Ikkinchi bosqich shu bo'yicha ishlaydi: dvigatel yo'q serverda yuz
+    tekshiruvi so'ralmaydi va parol yetarli bo'lib qoladi. Xodimlar soni bu
+    yerda ahamiyatsiz — tekshiruv aynan bitta xodimning profillari bo'yicha
+    bo'ladi, ro'yxat bo'yicha emas.
     """
     if not face_service.engine_importable():
         return {"available": False}
     count = (
         await session.execute(select(func.count(UserFaceProfile.id)))
     ).scalar() or 0
-    return {"available": count > 0}
+    return {"available": True, "enrolled_users": int(count)}
 
 
-@router.post("/login")
-async def face_login(
+@router.post("/verify-login")
+async def verify_login(
     request: Request,
+    face_token: str = Form(),
     file: UploadFile = File(),
     session: AsyncSession = Depends(get_db),
 ):
-    """Kameradan olingan kadr bo'yicha xodimni topib, token beradi."""
-    _require_engine()
-    content = await _read_image(file)
+    """Ikkinchi bosqich: login-parol to'g'ri kelgach yuzni tekshirish.
 
+    Ilgari bu yerda to'g'ridan-to'g'ri yuz bilan kirish bor edi: kadr barcha
+    xodimlar bilan solishtirilib, mos kelgani uchun token berilardi. Endi
+    unday emas va bu ataylab:
+
+      - kirish PAROLDAN boshlanadi, yuz esa ikkinchi bosqich. Yuzning o'zi
+        bilan kirib bo'lmaydi;
+
+      - kadr faqat `face_token` ko'rsatgan xodimning O'Z profillari bilan
+        solishtiriladi. Ilgari boshqa xodimning yuzi ham qabul qilinardi —
+        parolini bilgan odam yonidagi hamkasbining yuzi bilan kirib ketishi
+        mumkin edi. Endi bunday urinish rad etiladi.
+    """
+    _require_engine()
+    auth = AuthService(session)
+    user = await auth.resolve_face_challenge(face_token)
+
+    content = await _read_image(file)
     # CPU-og'ir hisob event loop'ni bloklamasligi uchun thread'da
     try:
         embedding = await anyio.to_thread.run_sync(
@@ -94,45 +112,51 @@ async def face_login(
             code,
         )
 
-    # Faol xodimlarning barcha yuz profillari bilan solishtiramiz
-    rows = (
-        await session.execute(
-            select(UserFaceProfile, User)
-            .join(User, User.id == UserFaceProfile.user_id)
-            .where(User.is_deleted.is_(False), User.status == "ACTIVE")
+    profiles = (
+        (
+            await session.execute(
+                select(UserFaceProfile).where(UserFaceProfile.user_id == user.id)
+            )
         )
-    ).all()
+        .scalars()
+        .all()
+    )
+    if not profiles:
+        # Token berilgandan keyin yuz o'chirilgan bo'lsa — parol yetarli
+        logger.info("Yuz profili topilmadi, parol bilan kiritildi: %s", user.username)
+        return await auth.issue_tokens(
+            user,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
 
+    best = 0.0
     best_profile = None
-    best_user = None
-    best_score = 0.0
-    for profile, user in rows:
+    for profile in profiles:
         stored = face_service.parse_embedding(profile.embedding)
         if not stored:
             continue
         score = face_service.cosine_similarity(embedding, stored)
-        if score > best_score:
-            best_score = score
+        if score > best:
+            best = score
             best_profile = profile
-            best_user = user
 
-    if best_user is None or best_score < face_service.MATCH_THRESHOLD:
+    if best_profile is None or best < face_service.MATCH_THRESHOLD:
         logger.warning(
-            "Yuz-kirish rad etildi: BEGONA shaxs urinishi (eng yaxshi o'xshashlik: %.3f)",
-            best_score,
+            "Yuz tekshiruvi rad etildi: %s (eng yaxshi o'xshashlik: %.3f)",
+            user.username,
+            best,
         )
         raise UnauthorizedException(
-            "Begona shaxs: bu yuz tizimda ro'yxatdan o'tmagan. "
-            "Parol bilan kiring yoki avval tizimga kirib yuzingizni biriktiring",
-            "FACE_NOT_RECOGNIZED",
+            "Yuz mos kelmadi. Bu hisobga faqat uning egasi kira oladi — "
+            "kameraga to'g'ri qarab qayta urining",
+            "FACE_MISMATCH",
         )
 
     best_profile.last_used_at = datetime.now(timezone.utc)
-    logger.info(
-        "Yuz-kirish: %s (o'xshashlik: %.3f)", best_user.username, best_score
-    )
-    return await AuthService(session).issue_tokens(
-        best_user,
+    logger.info("Yuz tekshiruvi o'tdi: %s (o'xshashlik: %.3f)", user.username, best)
+    return await auth.issue_tokens(
+        user,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )

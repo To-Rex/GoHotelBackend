@@ -18,6 +18,33 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
+class LoginResponse(BaseModel):
+    """Parol tekshiruvi natijasi.
+
+    Ikki xil bo'lishi mumkin va bu ataylab bitta javobda: xodim yuz
+    biriktirgan bo'lsa tokenlar BERILMAYDI, o'rniga ikkinchi bosqich uchun
+    qisqa muddatli `face_token` qaytadi. Yuzi yo'q xodim uchun javob
+    avvalgidek — tokenlar bilan, ya'ni eski klientlar ishlayveradi.
+    """
+
+    access_token: str | None = None
+    refresh_token: str | None = None
+    token_type: str = "bearer"
+    expires_in: int | None = None
+
+    #: True bo'lsa kirish hali tugallanmagan
+    face_required: bool = False
+    face_token: str | None = None
+    face_expires_in: int | None = None
+
+
+class FaceSkipRequest(BaseModel):
+    """Qurilmada kamera yo'q bo'lganda ikkinchi bosqichni o'tkazib yuborish."""
+
+    face_token: str
+    reason: str | None = None
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
