@@ -103,6 +103,15 @@ class DeviceService:
         if device.status == "APPROVED":
             return
 
+        # RAD ETISHDAN OLDIN SAQLAYMIZ.
+        #
+        # `get_db` har xatoda sessiyani rollback qiladi, ya'ni bu yerda
+        # ko'targan xato yuqoridagi yozuvni ham bekor qilardi: qurilma
+        # ro'yxatga umuman tushmasdi va administrator nimani
+        # tasdiqlashini bilmasdi. Shuning uchun urinish alohida
+        # commit bilan qayd etiladi.
+        await self.session.commit()
+
         if device.status == "BLOCKED":
             raise ForbiddenException(
                 "Bu qurilmadan kirish taqiqlangan. Administratorga murojaat qiling",
