@@ -68,6 +68,59 @@ def resolve_edit_window_minutes(hotel_settings: dict | None) -> int:
 # almashtirilishi kerak. Tozalash esa qisqa va o'z-o'zidan tugaydi, kelgusi
 # sanalarga to'sqinlik qilmaydi — faqat mehmon AYNAN HOZIR kirmoqchi bo'lsa
 # to'sadi.
+# Bron bekor qilinganda mehmonga qaytariladigan pul.
+#
+# Mehmonxonalar bu masalada bir xil emas: biri to'lovni to'liq qaytaradi,
+# biri jarima ushlab qoladi. Shuning uchun foiz sozlamada saqlanadi
+# (hotels.settings -> cancellation_policy), standarti esa 0 — ya'ni
+# sozlanmagan mehmonxonada pul TO'LIQ qaytariladi. Bu ataylab: tizim
+# o'zboshimchalik bilan mijozning pulini ushlab qolmasligi kerak.
+CANCELLATION_POLICY_KEY = "cancellation_policy"
+DEFAULT_CANCELLATION_FEE_PERCENT = 0.0
+
+
+def resolve_cancellation_fee_percent(hotel_settings: dict | None) -> float:
+    """Bekor qilishda ushlab qolinadigan foiz (0-100)."""
+    policy = (hotel_settings or {}).get(CANCELLATION_POLICY_KEY) or {}
+    try:
+        value = float(policy.get("fee_percent", DEFAULT_CANCELLATION_FEE_PERCENT))
+    except (TypeError, ValueError):
+        return DEFAULT_CANCELLATION_FEE_PERCENT
+    return min(max(value, 0.0), 100.0)
+
+
+def compute_cancellation_refund(
+    paid: float, fee_percent: float, requested: float | None = None
+) -> tuple[float, float]:
+    """Qaytariladigan va ushlab qolinadigan summa.
+
+    `requested` berilsa xodim tanlagani ustun turadi — masalan kech bekor
+    qilishda ko'proq ushlab qolish yoki aksincha, xayrixohlik bilan to'liq
+    qaytarish. Lekin to'langan puldan ko'p qaytarib bo'lmaydi: aks holda
+    bekor qilish orqali kassadan pul chiqarish yo'li ochilardi.
+
+    Manfiy `paid` (ma'lumot buzilgan bo'lsa) nol deb qaraladi — bekor qilish
+    shu sababdan yiqilmasligi kerak.
+    """
+    paid = max(round(float(paid or 0), 2), 0.0)
+    if requested is None:
+        refund = round(paid - paid * min(max(fee_percent, 0.0), 100.0) / 100.0, 2)
+    else:
+        refund = round(float(requested), 2)
+        if refund < 0:
+            raise ValidationException(
+                "Qaytariladigan summa manfiy bo'la olmaydi", "INVALID_REFUND"
+            )
+        if refund > paid + 0.01:
+            raise ValidationException(
+                f"Qaytariladigan summa to'langan puldan oshib ketdi "
+                f"(to'langan: {paid:.0f} So'm)",
+                "REFUND_EXCEEDS_PAID",
+            )
+        refund = min(refund, paid)
+    return refund, round(paid - refund, 2)
+
+
 ROOM_STATUS_BLOCKED_ALWAYS = ("MAINTENANCE", "INSPECTION", "OUT_OF_SERVICE")
 ROOM_STATUS_BLOCKED_NOW = ("CLEANING",)
 
@@ -1368,8 +1421,39 @@ class ReservationService:
                 counts[assigned_to] = cnt
         return min(pool_ids, key=lambda pid: counts.get(pid, 0))
 
+    async def cancellation_quote(
+        self, reservation_id: UUID, hotel_id: UUID
+    ) -> dict:
+        """Bekor qilinsa qancha qaytariladi — o'zgartirmasdan hisoblab beradi.
+
+        Xodim tasdiqlashdan OLDIN summani ko'rishi kerak: pul qaytarish
+        orqaga qaytarib bo'lmaydigan amal.
+        """
+        reservation = await self.repo.get_by_id(reservation_id, hotel_id)
+        if not reservation:
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+
+        from app.infrastructure.database.models.hotel import Hotel
+
+        hotel = await self.session.get(Hotel, hotel_id)
+        percent = resolve_cancellation_fee_percent(hotel.settings if hotel else None)
+        paid = float(reservation.paid_amount or 0)
+        refund, fee = compute_cancellation_refund(paid, percent)
+        return {
+            "paid_amount": paid,
+            "fee_percent": percent,
+            "fee_amount": fee,
+            "refund_amount": refund,
+        }
+
     async def cancel_reservation(
-        self, reservation_id: UUID, hotel_id: UUID, user_id: UUID, reason: str | None = None
+        self,
+        reservation_id: UUID,
+        hotel_id: UUID,
+        user_id: UUID,
+        reason: str | None = None,
+        refund_amount: float | None = None,
+        refund_method: str | None = None,
     ) -> Reservation:
         reservation = await self.repo.get_by_id(reservation_id, hotel_id)
         if not reservation:
@@ -1411,11 +1495,54 @@ class ReservationService:
             )
             self.session.add(history)
 
+        invoice = await self.invoice_repo.get_by_reservation(reservation_id, hotel_id)
+
+        # --- Pul qaytarish ---
+        #
+        # Summa chaqiruvchidan kelishi mumkin (xodim o'zgartirgan bo'lsa),
+        # aks holda mehmonxona sozlamasidagi foizdan hisoblanadi. Hisob-faktura
+        # VOID qilinishidan OLDIN yoziladi: qaytarim o'sha fakturaga bog'lanadi
+        # va moliya hisobotida ko'rinishi kerak.
+        paid = float(reservation.paid_amount or 0)
+        from app.infrastructure.database.models.hotel import Hotel
+
+        hotel = await self.session.get(Hotel, hotel_id)
+        fee_percent = resolve_cancellation_fee_percent(hotel.settings if hotel else None)
+        refund, kept = compute_cancellation_refund(paid, fee_percent, refund_amount)
+
+        refund_note = None
+        if refund > 0.009 and invoice is not None:
+            hotel_code = await self._get_hotel_code(hotel_id)
+            refund_note = (
+                f"Bekor qilishda qaytarim: {refund:.0f} So'm"
+                + (f", ushlab qolindi: {kept:.0f} So'm" if kept > 0.009 else "")
+            )
+            self.session.add(
+                Payment(
+                    hotel_id=hotel_id,
+                    invoice_id=invoice.id,
+                    payment_number=generate_code("PAY", hotel_code),
+                    # Manfiy summa — hisobotlar va kassa kutilgan summasida
+                    # qaytarim sifatida avtomatik aks etadi
+                    amount=-refund,
+                    payment_method=refund_method or "CASH",
+                    payment_date=date.today(),
+                    notes=refund_note,
+                    created_by=user_id,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            new_paid = round(paid - refund, 2)
+            reservation.paid_amount = new_paid
+            invoice.paid_amount = new_paid
+            # Bron bekor qilingan — qolgan summa jarima, ya'ni "to'langan"
+            # emas. REFUNDED holati aynan shuni bildiradi.
+            reservation.payment_status = "REFUNDED"
+            await self.session.flush()
+
         # Bron bekor qilinganda unga bog'liq hisob-faktura ham bekor qilinadi
         # (VOID) — aks holda Moliya bo'limida faol bo'lib qolaverardi.
-        # Qabul qilingan to'lov yozuvlari (payments) audit uchun saqlanadi;
-        # pul qaytarish jarayoni tizimdan tashqarida hal qilinadi.
-        invoice = await self.invoice_repo.get_by_reservation(reservation_id, hotel_id)
+        # Qabul qilingan to'lov yozuvlari (payments) audit uchun saqlanadi.
         if invoice and invoice.status not in ("VOID", "REFUNDED"):
             invoice.status = "VOID"
             void_note = f"Reservation {reservation.reservation_number} cancelled"
@@ -1423,8 +1550,13 @@ class ReservationService:
                 f"{invoice.notes}\n{void_note}" if invoice.notes else void_note
             )
 
+        # Qaytarim izohi bekor qilish sababiga yoziladi — keyin "qancha
+        # qaytarilgan edi?" degan savol tug'ilganda javob shu yerda turadi
+        final_reason = reason or "Cancelled by user"
+        if refund_note:
+            final_reason = f"{final_reason} ({refund_note})"
         reservation = await self.repo.cancel_reservation(
-            reservation, reason or "Cancelled by user", user_id
+            reservation, final_reason, user_id
         )
 
         # Mehmon KIRGAN bron bekor qilinganda farroshga avtomatik tozalash

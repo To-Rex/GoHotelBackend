@@ -76,6 +76,11 @@ class ReservationUpdateRequest(BaseModel):
 
 class ReservationCancelRequest(BaseModel):
     reason: str | None = None
+    #: Mehmonga qaytariladigan summa. Berilmasa mehmonxona sozlamasidagi
+    #: foizdan hisoblanadi; berilsa xodim tanlagani ustun turadi (masalan
+    #: kech bekor qilishda ko'proq ushlab qolish).
+    refund_amount: float | None = Field(default=None, ge=0)
+    refund_method: str | None = None
 
 
 class MoveRoomRequest(BaseModel):

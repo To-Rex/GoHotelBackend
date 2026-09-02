@@ -84,6 +84,60 @@ async def save_edit_window_settings(
     }
 
 
+@router.get("/cancellation-settings")
+async def get_cancellation_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Bekor qilishda ushlab qolinadigan foiz."""
+    from app.infrastructure.database.models.hotel import Hotel
+    from app.application.services.reservation_service import (
+        DEFAULT_CANCELLATION_FEE_PERCENT,
+        resolve_cancellation_fee_percent,
+    )
+
+    h_id = (
+        current_user.get("hotel_id")
+        if current_user["user_type"] == "SUPER_ADMIN"
+        else _get_hotel_id(current_user)
+    )
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    return {
+        "fee_percent": resolve_cancellation_fee_percent(hotel.settings if hotel else None),
+        "default_percent": DEFAULT_CANCELLATION_FEE_PERCENT,
+    }
+
+
+@router.put("/cancellation-settings")
+async def save_cancellation_settings(
+    fee_percent: float = Query(ge=0, le=100),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Foizni saqlash — faqat ADMIN/SUPER_ADMIN."""
+    from app.infrastructure.database.models.hotel import Hotel
+    from app.application.services.reservation_service import (
+        CANCELLATION_POLICY_KEY,
+        DEFAULT_CANCELLATION_FEE_PERCENT,
+    )
+
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException("Faqat administrator o'zgartira oladi")
+    h_id = _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — o'zgarish sezilishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[CANCELLATION_POLICY_KEY] = {"fee_percent": float(fee_percent)}
+    hotel.settings = new_settings
+    await session.flush()
+    return {
+        "fee_percent": float(fee_percent),
+        "default_percent": DEFAULT_CANCELLATION_FEE_PERCENT,
+    }
+
+
 @router.get("/", response_model=list[ReservationResponse])
 async def list_reservations(
     status: str | None = Query(default=None),
@@ -377,8 +431,37 @@ async def cancel_reservation(
     if not h_id:
         raise ForbiddenException("Hotel context required")
     service = ReservationService(session)
-    reason = data.reason if data else None
-    return await service.cancel_reservation(reservation_id, h_id, current_user["id"], reason)
+    return await service.cancel_reservation(
+        reservation_id,
+        h_id,
+        current_user["id"],
+        data.reason if data else None,
+        refund_amount=data.refund_amount if data else None,
+        refund_method=data.refund_method if data else None,
+    )
+
+
+@router.get("/{reservation_id}/cancellation-quote")
+async def get_cancellation_quote(
+    reservation_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.cancel")),
+):
+    """Bekor qilinsa qancha qaytariladi — tasdiqlashdan oldin ko'rsatish uchun."""
+    if current_user["user_type"] == "SUPER_ADMIN":
+        if not hotel_id:
+            reservation = await session.get(Reservation, reservation_id)
+            if not reservation:
+                raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+            h_id = reservation.hotel_id
+        else:
+            h_id = hotel_id
+    else:
+        h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await ReservationService(session).cancellation_quote(reservation_id, h_id)
 
 
 @router.post("/{reservation_id}/no-show", response_model=ReservationResponse)
