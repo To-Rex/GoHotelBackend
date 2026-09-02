@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -95,6 +96,31 @@ async def save_auto_complete_settings(
         for task_type in HK_AUTO_COMPLETE_DEFAULTS
     }
     return {"durations": durations, "defaults": HK_AUTO_COMPLETE_DEFAULTS}
+
+
+@router.get("/cleaning-report")
+async def cleaning_report(
+    date_from: date = Query(),
+    date_to: date = Query(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Chiqishlar va tozalashlarni solishtirish.
+
+    Davrda necha marta mehmon chiqdi va shundan nechtasi haqiqatan
+    tozalandi. Batafsil izoh `cleaning_report_service` da.
+    """
+    from app.application.services.cleaning_report_service import (
+        CleaningReportService,
+    )
+
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await CleaningReportService(session).build(h_id, date_from, date_to)
 
 
 @router.get("/tasks", response_model=list[TaskResponse])
