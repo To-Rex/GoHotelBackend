@@ -38,10 +38,17 @@ MIN_MATCH_DIGITS = 5
 #: qolgan bo'lsa ham ekranni band qilib turmasligi kerak.
 DEFAULT_WINDOW_MINUTES = 30
 
-#: Bir xil raqamdan shu vaqt ichida kelgan qo'ng'iroq TAKROR hisoblanadi.
-#: Android bitta qo'ng'iroq uchun bir necha marta xabar berishi mumkin
-#: (RINGING holati qayta-qayta keladi) — ro'yxat dublikatga to'lmasin.
-DEDUPE_SECONDS = 90
+#: Bir xil raqamdan shu vaqt ichida kelgan xabar BITTA jiringlash
+#: hisoblanadi. Android bitta qo'ng'iroq uchun `RINGING` ni bir necha
+#: marta yuborishi mumkin va ro'yxat dublikatga to'lib ketmasligi kerak.
+#:
+#: Oyna ATAYLAB qisqa. Ilgari u 90 soniya edi va HAQIQIY ikkinchi
+#: qo'ng'iroq ham "takror" deb yutib yuborilardi: mehmon go'shakni
+#: qo'yib darhol qayta qo'ng'iroq qilsa ekranda hech narsa
+#: o'zgarmasdi. Bitta jiringlash odatda 20-30 soniya davom etadi,
+#: shuning uchun shundan qisqa oyna takrorni ushlaydi-yu, yangi
+#: qo'ng'iroqni to'smaydi.
+DEDUPE_SECONDS = 20
 
 #: Xona qidirilganda hisobga olinadigan bron holatlari.
 ACTIVE_STATUSES = ("CONFIRMED", "CHECKED_IN")
@@ -149,12 +156,22 @@ class IncomingCallService:
                     IncomingCall.phone_digits.like(f"%{key}"),
                     IncomingCall.received_at
                     >= now - timedelta(seconds=DEDUPE_SECONDS),
+                    # YOPILGAN yozuv takror hisoblanmaydi. Xodim
+                    # qo'ng'iroqni ko'rib yopgan bo'lsa, o'sha odam qayta
+                    # qo'ng'iroq qilganda ekranda YANGI yozuv chiqishi
+                    # kerak — aks holda ikkinchi qo'ng'iroq umuman
+                    # ko'rinmay qolardi.
+                    IncomingCall.acknowledged_at.is_(None),
                 )
                 .order_by(desc(IncomingCall.received_at))
                 .limit(1)
             )
         ).scalars().first()
         if recent is not None:
+            # Uzoq jiringlagan qo'ng'iroq ro'yxat boshida va ko'rinish
+            # oynasi ichida qolishi kerak — vaqti yangilanadi
+            recent.received_at = now
+            await self.session.flush()
             return self._as_dict(recent, duplicate=True)
 
         guest = await self.find_guest(hotel_id, digits)
