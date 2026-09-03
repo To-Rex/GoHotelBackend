@@ -373,6 +373,12 @@ class AutomationService:
                 )
                 self.session.add(task)
                 await self.session.flush()
+                # Tiklangan vazifa ham bandlarsiz qolmasin
+                from app.application.services.checklist_template_service import (
+                    ChecklistTemplateService,
+                )
+
+                await ChecklistTemplateService(self.session).attach_to_task(task)
                 logger.info(
                     "Room %s CLEANING da vazifasiz edi — vazifa tiklandi "
                     "(task=%s, cleaner=%s)",

@@ -13,6 +13,7 @@ from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.service import Service, HotelService, ReservationService
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.checklist_item import ChecklistItem
+from app.infrastructure.database.models.checklist_template import ChecklistTemplate
 from app.infrastructure.database.models.problem import Problem
 from app.infrastructure.database.models.ledger import Ledger
 from app.infrastructure.database.models.journal_entry import JournalEntry, JournalEntryLine

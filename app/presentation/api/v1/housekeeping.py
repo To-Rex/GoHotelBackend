@@ -22,6 +22,9 @@ from app.application.dto.housekeeping import (
     TaskAssignRequest,
     TaskResponse,
 )
+from app.application.services.checklist_template_service import (
+    ChecklistTemplateService,
+)
 from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel
@@ -36,6 +39,133 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
     return hotel_id
+
+
+# ------------------------------------------ vazifa bandlari (shablon) --
+#
+# DIQQAT: bu marshrutlar /tasks/{task_id} dan OLDIN turishi shart emas —
+# ular boshqa prefiksda (/checklist-templates), lekin router ichida
+# literal yo'llar odat bo'yicha yuqorida turadi.
+
+
+class ChecklistTemplateCreateRequest(BaseModel):
+    task_type: str
+    title: str = Field(min_length=1, max_length=255)
+    sort_order: int | None = None
+    is_active: bool = True
+
+
+class ChecklistTemplateUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+class ChecklistTemplateReplaceRequest(BaseModel):
+    """Turdagi barcha bandlarni bir yo'la almashtirish."""
+
+    task_type: str
+    titles: list[str] = Field(default_factory=list, max_length=100)
+
+
+class ChecklistTemplateReorderRequest(BaseModel):
+    task_type: str
+    ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+
+@router.get("/checklist-templates")
+async def list_checklist_templates(
+    task_type: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Vazifa bandlari ro'yxati — farroshga ham, administratorga ham ochiq."""
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await ChecklistTemplateService(session).list_templates(h_id, task_type)
+
+
+@router.get("/checklist-templates/defaults")
+async def checklist_template_defaults(
+    task_type: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Standart bandlar — mehmonxona o'z ro'yxatini kiritmagan bo'lsa shular
+    ishlatiladi. Administratorga namuna sifatida ko'rsatiladi."""
+    return await ChecklistTemplateService(session).defaults(task_type)
+
+
+@router.post("/checklist-templates")
+async def create_checklist_template(
+    data: ChecklistTemplateCreateRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await ChecklistTemplateService(session).create(
+        h_id, data.model_dump(), current_user
+    )
+
+
+@router.put("/checklist-templates/replace")
+async def replace_checklist_templates(
+    data: ChecklistTemplateReplaceRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Turdagi barcha bandlarni berilgan ro'yxat bilan almashtiradi."""
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await ChecklistTemplateService(session).replace_all(
+        h_id, data.task_type, data.titles, current_user
+    )
+
+
+@router.put("/checklist-templates/reorder")
+async def reorder_checklist_templates(
+    data: ChecklistTemplateReorderRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await ChecklistTemplateService(session).reorder(
+        h_id, data.task_type, data.ids, current_user
+    )
+
+
+@router.put("/checklist-templates/{template_id}")
+async def update_checklist_template(
+    template_id: UUID = Path(),
+    data: ChecklistTemplateUpdateRequest = ...,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await ChecklistTemplateService(session).update(
+        h_id, template_id, data.model_dump(exclude_unset=True), current_user
+    )
+
+
+@router.delete("/checklist-templates/{template_id}", response_model=MessageResponse)
+async def delete_checklist_template(
+    template_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    await ChecklistTemplateService(session).delete(h_id, template_id, current_user)
+    return MessageResponse(message="Band o'chirildi")
 
 
 class AutoCompleteSettingsRequest(BaseModel):

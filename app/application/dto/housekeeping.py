@@ -53,6 +53,15 @@ class TaskAssignRequest(BaseModel):
     assigned_to: UUID
 
 
+class ChecklistItemBrief(BaseModel):
+    """Vazifadagi bitta ish bandi (farrosh belgilaydi)."""
+
+    id: str
+    title: str
+    is_completed: bool
+    sort_order: int = 0
+
+
 class TaskResponse(BaseModel):
     id: UUID
     hotel_id: UUID
@@ -73,6 +82,12 @@ class TaskResponse(BaseModel):
     created_by: UUID
     created_at: datetime
     photo_count: int = 0
+    # Farrosh mobil ilovada belgilaydigan ish bandlari. Veb ekranida ular
+    # faqat KO'RSATILADI: kim nimani bajarganini boshqaruv ko'rishi kerak,
+    # lekin belgilash farroshning ishi.
+    checklist: list["ChecklistItemBrief"] = []
+    checklist_done: int = 0
+    checklist_total: int = 0
     room: RoomBrief | None = None
     assigned_user: UserBrief | None = None
     branch: BranchBrief | None = None

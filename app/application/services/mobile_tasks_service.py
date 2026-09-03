@@ -90,9 +90,28 @@ class MobileTasksService:
         from datetime import datetime, timezone
         task.status = "IN_PROGRESS"
         task.started_at = datetime.now(timezone.utc)
+
+        # Bandlar odatda vazifa YARATILGANDA nusxalanadi. Lekin bu
+        # imkoniyat qo'shilishidan oldin ochilgan vazifalarda ro'yxat yo'q
+        # — farrosh bo'sh ekran ko'rmasligi uchun ular shu yerda,
+        # boshlash paytida to'ldiriladi. Yozuv amali bo'lgani uchun bu
+        # o'rin xavfsiz: GET so'rovida bazani o'zgartirmaymiz.
+        from app.application.services.checklist_template_service import (
+            ChecklistTemplateService,
+        )
+
+        added = await ChecklistTemplateService(self.session).attach_to_task(task)
+
         # refresh() ishlatilmaydi: u selectinload bilan yuklangan munosabatlarni
         # expire qilib, _enrich_task dagi task.room murojaatida MissingGreenlet beradi
         await self.session.flush()
+        if added:
+            # `checklist_items` allaqachon (bo'sh holda) yuklangan — qayta
+            # so'rov uni O'ZI yangilamaydi, chunki obyekt identity map dan
+            # qaytadi va to'ldirilgan kolleksiya ustiga yozilmaydi. Shuning
+            # uchun avval eskirgan deb belgilaymiz, keyin qayta o'qiymiz.
+            self.session.expire(task, ["checklist_items"])
+            task = await self._get_task(task_id, hotel_id)
         return await self._enrich_task(task, hotel_id)
 
     async def update_progress(self, task_id: UUID, hotel_id: UUID, progress: int) -> dict:

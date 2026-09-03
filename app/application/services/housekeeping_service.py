@@ -12,9 +12,13 @@ from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.room_status_history import RoomStatusHistory
+from app.infrastructure.database.models.checklist_item import ChecklistItem
 from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.infrastructure.database.repositories.housekeeping_repo import HousekeepingRepository
 from app.infrastructure.database.repositories.room_repo import RoomRepository
+from app.application.services.checklist_template_service import (
+    ChecklistTemplateService,
+)
 from app.application.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -197,6 +201,41 @@ class HousekeepingService:
                 assignee_id,
             )
 
+    async def _enrich_checklists(self, tasks: list[HousekeepingTask]) -> None:
+        """Vazifa bandlarini javobga qo'shadi.
+
+        Boshqaruv veb ekranida farrosh nimani bajarganini ko'radi: bu
+        fotohisobotdan ham aniqroq javob beradi — qaysi ish qilinmagani
+        darhol ko'rinadi.
+        """
+        if not tasks:
+            return
+        rows = (
+            await self.session.execute(
+                sa_select(ChecklistItem)
+                .where(ChecklistItem.task_id.in_([t.id for t in tasks]))
+                .order_by(ChecklistItem.task_id, ChecklistItem.sort_order)
+            )
+        ).scalars().all()
+
+        by_task: dict = {}
+        for row in rows:
+            by_task.setdefault(row.task_id, []).append(row)
+
+        for task in tasks:
+            items = by_task.get(task.id, [])
+            task.checklist = [
+                {
+                    "id": str(i.id),
+                    "title": i.title,
+                    "is_completed": i.is_completed,
+                    "sort_order": i.sort_order,
+                }
+                for i in items
+            ]
+            task.checklist_total = len(items)
+            task.checklist_done = sum(1 for i in items if i.is_completed)
+
     async def _enrich_photo_counts(self, tasks: list[HousekeepingTask]) -> None:
         if not tasks:
             return
@@ -332,6 +371,9 @@ class HousekeepingService:
             created_by=created_by,
         )
         task = await self.repo.create(task)
+        # Standart ish bandlari vazifaga NUSXA bo'lib tushadi — farrosh
+        # nima qilish kerakligini ro'yxatdan ko'radi
+        await ChecklistTemplateService(self.session).attach_to_task(task)
         # Xona holati vazifaga mos kelsin — aks holda ta'mirdagi xona
         # "Bo'sh" bo'lib turaverardi va unga bron qilish mumkin edi
         await self._apply_task_room_status(task, hotel_id, created_by)
@@ -369,6 +411,7 @@ class HousekeepingService:
         result = await self.session.execute(stmt)
         tasks = list(result.scalars().all())
         await self._enrich_photo_counts(tasks)
+        await self._enrich_checklists(tasks)
         return tasks
 
     async def get_my_tasks(
@@ -401,6 +444,7 @@ class HousekeepingService:
         if not task:
             raise NotFoundException("Task not found", "TASK_NOT_FOUND")
         await self._enrich_photo_counts([task])
+        await self._enrich_checklists([task])
         return task
 
     async def update_task(self, task_id: UUID, hotel_id: UUID, data: dict) -> HousekeepingTask:

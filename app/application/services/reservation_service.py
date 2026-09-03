@@ -1339,6 +1339,12 @@ class ReservationService:
         )
         self.session.add(task)
         await self.session.flush()
+        # Farrosh ro'yxatsiz qolmasin — standart bandlar nusxalanadi
+        from app.application.services.checklist_template_service import (
+            ChecklistTemplateService,
+        )
+
+        await ChecklistTemplateService(self.session).attach_to_task(task)
         return task
 
     async def check_out(
