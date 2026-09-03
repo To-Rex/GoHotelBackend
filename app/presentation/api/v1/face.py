@@ -11,17 +11,23 @@ kameraga qarab O'Z hisoblariga kirishadi (1:N identifikatsiya).
 Rasm saqlanmaydi — faqat embedding. Har kirish last_used_at'da iz qoldiradi.
 """
 import logging
+from uuid import UUID
 from datetime import datetime, timezone
 
 import anyio
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Request, UploadFile
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services import face_service
 from app.application.services.auth_service import AuthService
 from app.core.database import get_db
-from app.core.exceptions import UnauthorizedException, ValidationException
+from app.core.exceptions import (
+    ForbiddenException,
+    NotFoundException,
+    UnauthorizedException,
+    ValidationException,
+)
 from app.infrastructure.database.models.user import User
 from app.infrastructure.database.models.user_face_profile import UserFaceProfile
 from app.presentation.middleware.auth import get_current_user
@@ -244,3 +250,97 @@ async def face_unenroll(
     )
     await session.flush()
     return {"enrolled": False, "count": 0}
+
+
+#: Boshqa xodimning yuzini o'chira oladiganlar.
+#:
+#: Menejer belgisi — `shift.force_close` ruxsati (loyihada menejer aynan shu
+#: bilan ajratiladi). Administrator ham kiradi.
+def _may_reset_others(current_user: dict) -> bool:
+    if current_user["user_type"] in ("ADMIN", "SUPER_ADMIN"):
+        return True
+    return "shift.force_close" in (current_user.get("permissions") or [])
+
+
+@router.get("/users")
+async def face_users(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Xodimlar va ularning yuz holati — menejer ko'rishi uchun."""
+    if not _may_reset_others(current_user):
+        raise ForbiddenException(
+            "Bu ro'yxatni menejer yoki administrator ko'radi", "MANAGER_ONLY"
+        )
+
+    hotel_id = current_user.get("hotel_id")
+    stmt = (
+        select(
+            User.id,
+            User.first_name,
+            User.last_name,
+            User.username,
+            User.user_type,
+            func.count(UserFaceProfile.id).label("faces"),
+        )
+        .join(UserFaceProfile, UserFaceProfile.user_id == User.id, isouter=True)
+        .where(User.is_deleted.is_(False), User.status == "ACTIVE")
+        .group_by(User.id, User.first_name, User.last_name, User.username, User.user_type)
+        .order_by(User.first_name, User.last_name)
+    )
+    if hotel_id is not None:
+        stmt = stmt.where(User.hotel_id == hotel_id)
+
+    rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "user_id": r.id,
+            "name": " ".join(p for p in (r.first_name, r.last_name) if p).strip()
+            or r.username,
+            "username": r.username,
+            "user_type": r.user_type,
+            "face_count": int(r.faces or 0),
+            "enrolled": int(r.faces or 0) > 0,
+        }
+        for r in rows
+    ]
+
+
+@router.delete("/enroll/{user_id}")
+async def face_unenroll_user(
+    user_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Boshqa xodimning yuzini o'chirish — menejer yoki administrator.
+
+    Nega kerak: yuz tanilmay qolsa (soqol, ko'zoynak, jarohat yoki shunchaki
+    sifatsiz kadr) xodim tizimga umuman kira olmaydi — kirish uchun yuz
+    kerak, yuzni almashtirish uchun esa kirish kerak. Bu yopiq halqani
+    faqat tashqaridan uzish mumkin.
+
+    O'chirilgandan keyin xodim parol bilan kiradi va tizim undan yangi yuz
+    biriktirishni so'raydi.
+    """
+    if not _may_reset_others(current_user):
+        raise ForbiddenException(
+            "Boshqa xodimning yuzini menejer yoki administrator o'chiradi",
+            "MANAGER_ONLY",
+        )
+
+    target = await session.get(User, user_id)
+    if target is None or target.is_deleted:
+        raise NotFoundException("User not found", "USER_NOT_FOUND")
+    # Boshqa mehmonxona xodimiga tegib bo'lmaydi
+    hotel_id = current_user.get("hotel_id")
+    if hotel_id is not None and target.hotel_id != hotel_id:
+        raise NotFoundException("User not found", "USER_NOT_FOUND")
+
+    await session.execute(
+        delete(UserFaceProfile).where(UserFaceProfile.user_id == user_id)
+    )
+    await session.flush()
+    logger.info(
+        "Yuz o'chirildi: %s (bajardi: %s)", target.username, current_user["id"]
+    )
+    return {"user_id": str(user_id), "enrolled": False, "count": 0}
