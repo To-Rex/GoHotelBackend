@@ -373,6 +373,87 @@ class EstateService:
             for u in rows
         ]
 
+    async def create_staff(self, hotel_id: UUID, data: dict) -> dict:
+        """Mehmonxonaga xodim qo'shish.
+
+        Panel egasiga SHART bo'ladigan amal: yangi mehmonxona ochilganda
+        unga birinchi administratorni kiritadigan boshqa yo'l yo'q —
+        tizimga kirish uchun hisob kerak, hisob ochish uchun esa kirish
+        kerak bo'lardi.
+        """
+        from app.infrastructure.auth.password import (
+            hash_password as hash_staff_password,
+        )
+
+        await self._hotel(hotel_id)
+        username = (data.get("username") or "").strip().lower()
+        password = data.get("password") or ""
+        first_name = _clean(data.get("first_name"))
+        last_name = _clean(data.get("last_name"))
+        user_type = (data.get("user_type") or "EMPLOYEE").upper()
+
+        if len(username) < 3:
+            raise ValidationException(
+                "Login kamida 3 belgidan iborat bo'lsin", "USERNAME_TOO_SHORT"
+            )
+        if len(password) < 6:
+            raise ValidationException(
+                "Parol kamida 6 belgidan iborat bo'lsin", "PASSWORD_TOO_SHORT"
+            )
+        if not first_name:
+            raise ValidationException("Ism kerak", "NAME_REQUIRED")
+        if user_type not in ("ADMIN", "EMPLOYEE"):
+            raise ValidationException("Noma'lum rol", "INVALID_USER_TYPE")
+
+        taken = (
+            await self.session.execute(
+                select(User.id).where(User.username == username)
+            )
+        ).first()
+        if taken:
+            raise ConflictException("Bu login band", "USERNAME_TAKEN")
+
+        branch_id = data.get("branch_id")
+        if not branch_id:
+            # Filial ko'rsatilmasa asosiysi olinadi: xodim filialsiz
+            # qolsa ba'zi ekranlar unga bo'sh ro'yxat ko'rsatardi
+            branch = (
+                await self.session.execute(
+                    select(Branch)
+                    .where(Branch.hotel_id == hotel_id)
+                    .order_by(Branch.is_main_branch.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            branch_id = branch.id if branch else None
+
+        user = User(
+            hotel_id=hotel_id,
+            branch_id=branch_id,
+            username=username,
+            password_hash=hash_staff_password(password),
+            first_name=first_name,
+            last_name=last_name or "",
+            email=_clean(data.get("email")),
+            phone=_clean(data.get("phone")),
+            user_type=user_type,
+            status="ACTIVE",
+        )
+        self.session.add(user)
+        await self.session.flush()
+        await self.session.refresh(user)
+        return {
+            "id": str(user.id),
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "user_type": user.user_type,
+            "status": user.status,
+            "email": user.email,
+            "phone": user.phone,
+            "last_login_at": None,
+        }
+
     async def set_user_status(self, user_id: UUID, status: str) -> dict:
         """Xodimni faollashtirish yoki to'xtatish."""
         value = (status or "").upper()

@@ -6,6 +6,7 @@ kirish sharti — panel tokeni.
 """
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Path, Query
@@ -16,6 +17,7 @@ from app.core.database import get_db
 from app.core.exceptions import UnauthorizedException
 from app.superadmin import security
 from app.superadmin.estate_service import EstateService
+from app.superadmin.insight_service import InsightService
 from app.superadmin.models import PanelUser
 from app.superadmin.service import PanelAuthService
 
@@ -313,3 +315,102 @@ async def reset_staff_password(
 ):
     """Mehmonxona xodimining parolini tiklash."""
     return await EstateService(session).reset_user_password(user_id, data.password)
+
+
+# ------------------------------------------- nazorat: bron, pul, tarix --
+
+
+class StaffCreateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=6, max_length=200)
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(default="", max_length=100)
+    user_type: str = Field(default="EMPLOYEE", max_length=20)
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=50)
+    branch_id: UUID | None = None
+
+
+@router.post("/hotels/{hotel_id}/users")
+async def create_hotel_staff(
+    data: StaffCreateRequest,
+    hotel_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Mehmonxonaga xodim qo'shish — yangi obyektning birinchi admini uchun."""
+    return await EstateService(session).create_staff(
+        hotel_id, data.model_dump(exclude_none=True)
+    )
+
+
+@router.get("/hotels/{hotel_id}/rooms")
+async def list_hotel_rooms(
+    hotel_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    return await InsightService(session).rooms(hotel_id)
+
+
+@router.get("/reservations")
+async def list_reservations(
+    hotel_id: UUID | None = Query(default=None),
+    status: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    search: str | None = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Barcha mehmonxonalardagi bronlar."""
+    return await InsightService(session).reservations(
+        hotel_id=hotel_id,
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.get("/finance")
+async def finance(
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Mehmonxonalar kesimida tushum va xarajat."""
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+    return await InsightService(session).finance(date_from, date_to, hotel_id)
+
+
+@router.get("/audit")
+async def audit(
+    hotel_id: UUID | None = Query(default=None),
+    action: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Kim nima o'zgartirgani — oxirgi yozuvlar."""
+    return await InsightService(session).audit(
+        hotel_id=hotel_id, action=action, limit=limit
+    )
+
+
+@router.get("/guests")
+async def guests(
+    search: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Mehmonlar bazasi — barcha mehmonxonalar uchun umumiy."""
+    return await InsightService(session).guests(search=search, limit=limit)
