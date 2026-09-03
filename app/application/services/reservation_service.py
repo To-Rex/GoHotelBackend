@@ -24,9 +24,30 @@ from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
 from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.discount_policy import check_discount
+from app.application.services import reservation_extend as extend_rules
 from app.application.services.notification_service import NotificationService
 from app.shared.utils import generate_code
 from sqlalchemy import func, select
+
+
+def _extend_exception(error: extend_rules.ExtendError):
+    """Cho'zish qoidasi xatosini foydalanuvchi o'qiydigan xabarga aylantiradi."""
+    if error.code == "RESERVATION_LOCKED":
+        return ValidationException(
+            "Yakunlangan yoki bekor qilingan bronni cho'zib bo'lmaydi",
+            "RESERVATION_LOCKED",
+        )
+    if error.code == "NOT_AN_EXTENSION":
+        return ValidationException(
+            "Yangi tugash vaqti hozirgisidan keyin bo'lishi kerak — "
+            "bu amal faqat cho'zadi",
+            "NOT_AN_EXTENSION",
+        )
+    when = error.limit.strftime("%d.%m.%Y %H:%M") if error.limit else ""
+    return ConflictException(
+        f"Bu xonada keyingi bron bor — {when} gacha cho'zish mumkin",
+        "EXTENSION_BLOCKED",
+    )
 
 
 # Bron tahriri (xona almashtirish) uchun vaqt oynasi sozlamasi:
@@ -1019,6 +1040,103 @@ class ReservationService:
         if not reservation:
             raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
         return reservation
+
+    # ------------------------------------------------- bronni cho'zish --
+
+    async def _room_spans(self, reservation: Reservation) -> list[extend_rules.Span]:
+        """Shu xonadagi BOSHQA bronlarning vaqt oraliqlari."""
+        rows = (
+            (
+                await self.session.execute(
+                    select(Reservation).where(
+                        Reservation.room_id == reservation.room_id,
+                        Reservation.id != reservation.id,
+                        Reservation.status.in_(extend_rules.BLOCKING_STATUSES),
+                        Reservation.is_deleted.is_(False),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [extend_rules.span_of(r) for r in rows]
+
+    async def extension_limit(self, reservation_id: UUID, hotel_id: UUID) -> dict:
+        """Bronni qachongacha cho'zish mumkinligi — brauzerga ko'rsatish uchun."""
+        reservation = await self.repo.get_by_id(reservation_id, hotel_id)
+        if not reservation:
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+
+        current = extend_rules.span_of(reservation)
+        limit = extend_rules.extension_limit(
+            current,
+            await self._room_spans(reservation),
+            settings.HOURLY_TURNOVER_MINUTES,
+        )
+        return {
+            "reservation_id": str(reservation.id),
+            "booking_type": reservation.booking_type,
+            "current_end": current.end.isoformat(),
+            # None — keyingi bron yo'q, istalgancha cho'zish mumkin
+            "limit": limit.isoformat() if limit else None,
+        }
+
+    async def extend_reservation(
+        self, reservation_id: UUID, hotel_id: UUID, new_end: datetime
+    ) -> Reservation:
+        """Bronni keyingi bron boshlanishigacha cho'zadi.
+
+        QO'SHIMCHA HAQ OLINMAYDI: `total_amount`, hisob-faktura va to'lovlar
+        qo'lga tegmaydi. Shuning uchun bu amal `update_reservation` dan
+        alohida turadi — u yerda sanalar o'zgarsa narx ham qayta hisoblanishi
+        kutiladi.
+
+        Ruxsat tekshiruvi endpointda: bu faqat administrator qo'lidagi amal.
+        """
+        reservation = await self.repo.get_by_id(reservation_id, hotel_id)
+        if not reservation:
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+
+        try:
+            extend_rules.assert_extendable(reservation.status)
+            current = extend_rules.span_of(reservation)
+            limit = extend_rules.extension_limit(
+                current,
+                await self._room_spans(reservation),
+                settings.HOURLY_TURNOVER_MINUTES,
+            )
+            extend_rules.validate_new_end(current, new_end, limit)
+        except extend_rules.ExtendError as e:
+            raise _extend_exception(e) from e
+
+        new_end = new_end.replace(tzinfo=None) if new_end.tzinfo else new_end
+        new_check_out_date = extend_rules.checkout_date_for(
+            reservation.check_in_date, new_end, current.hourly
+        )
+
+        update: dict = {"check_out_date": new_check_out_date}
+        if current.hourly:
+            update["check_out_datetime"] = new_end
+
+        # Oxirgi to'siq: bron YARATISHDAGI aynan o'sha tekshiruv. Yuqoridagi
+        # hisob bilan ikki xil javob chiqsa, "xona band" javobi ustun turadi —
+        # ustma-ust tushgan bron eng yomon natija.
+        available = await self.repo.check_room_availability(
+            reservation.room_id,
+            reservation.check_in_date,
+            new_check_out_date,
+            exclude_reservation_id=reservation.id,
+            booking_type="HOURLY" if current.hourly else "DAILY",
+            check_in_datetime=reservation.check_in_datetime,
+            check_out_datetime=new_end if current.hourly else None,
+        )
+        if not available:
+            raise ConflictException(
+                "Bu xonada keyingi bron bor — bu vaqtgacha cho'zib bo'lmaydi",
+                "ROOM_ALREADY_BOOKED",
+            )
+
+        return await self.repo.update(reservation, **update)
 
     async def get_calendar(
         self,

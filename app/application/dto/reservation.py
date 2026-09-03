@@ -74,6 +74,18 @@ class ReservationUpdateRequest(BaseModel):
     notes: str | None = None
 
 
+class ReservationExtendRequest(BaseModel):
+    """Bronni cho'zish so'rovi.
+
+    `check_out` — bronning YANGI tugash payti. Soatlik bronda bu aniq
+    vaqt (masalan 2026-09-03T21:00:00), kunlik bronda esa chiqish kuni
+    boshlanishi (2026-09-05T00:00:00). Vaqt zonasisiz yuboriladi: loyihada
+    bu ustunlar xodim tergan devor soatini saqlaydi.
+    """
+
+    check_out: datetime
+
+
 class ReservationCancelRequest(BaseModel):
     reason: str | None = None
     #: Mehmonga qaytariladigan summa. Berilmasa mehmonxona sozlamasidagi

@@ -19,6 +19,7 @@ from app.application.dto.reservation import (
     ReservationCreateRequest,
     ReservationUpdateRequest,
     ReservationCancelRequest,
+    ReservationExtendRequest,
     ReservationServiceAddRequest,
     ReservationResponse,
     ReservationDetailResponse,
@@ -297,6 +298,51 @@ async def move_room(
     h_id = _get_hotel_id(current_user)
     service = ReservationService(session)
     return await service.move_room(h_id, reservation_id, data.new_room_id, current_user)
+
+
+def _extend_hotel_id(current_user: dict, hotel_id: UUID | None) -> UUID:
+    """Cho'zish faqat ADMINISTRATOR qo'lida.
+
+    Menejer ham, qabulxona xodimi ham cho'za olmaydi: cho'zish qo'shimcha
+    haqsiz beriladigan imtiyoz, ya'ni pul masalasi. Uni kim berishini
+    mehmonxona egasi hal qiladi.
+    """
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException(
+            "Bronni cho'zish faqat administrator uchun", "ADMIN_ONLY"
+        )
+    h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" else None
+    h_id = h_id or current_user.get("hotel_id")
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return h_id
+
+
+@router.get("/{reservation_id}/extension-limit")
+async def extension_limit(
+    reservation_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Bronni qachongacha cho'zish mumkin — `limit: null` bo'lsa cheklovsiz."""
+    h_id = _extend_hotel_id(current_user, hotel_id)
+    return await ReservationService(session).extension_limit(reservation_id, h_id)
+
+
+@router.post("/{reservation_id}/extend", response_model=ReservationResponse)
+async def extend_reservation(
+    reservation_id: UUID = Path(),
+    data: ReservationExtendRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Bronni keyingi bron boshlanishigacha cho'zadi — qo'shimcha haqsiz."""
+    h_id = _extend_hotel_id(current_user, hotel_id)
+    return await ReservationService(session).extend_reservation(
+        reservation_id, h_id, data.check_out
+    )
 
 
 @router.post("/{reservation_id}/settle-payment", response_model=ReservationResponse)
