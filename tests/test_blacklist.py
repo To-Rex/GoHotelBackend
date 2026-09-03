@@ -92,10 +92,13 @@ class FakeSession:
         self.guest = guest
         self.hotel = hotel
         self.blacklisted_row = blacklisted_row
-        self.flushed = False
+        self.events = []
 
     async def flush(self):
-        self.flushed = True
+        self.events.append("flush")
+
+    async def refresh(self, _obj):
+        self.events.append("refresh")
 
     async def get(self, _model, _pk):
         return self.hotel
@@ -197,6 +200,20 @@ check(
 check("bo'sh ro'yxat tekshirilmaydi",
       (lambda: asyncio.run(svc(FakeSession()).assert_bookable([], uuid.uuid4())))(),
       None)
+
+print("--- yozgandan keyin refresh ---")
+# `updated_at` ustunida server tomonidagi `onupdate` bor: UPDATE dan keyin u
+# "eskirgan" bo'lib qoladi. Refreshsiz javob seriyalanayotganda Pydantic
+# o'sha maydonni o'qishga urinib, MissingGreenlet bilan 500 qaytarardi —
+# aynan shu xato ishlab chiqarishda chiqdi.
+ses = FakeSession(guest=FakeGuest())
+asyncio.run(svc(ses).add(uuid.uuid4(), uuid.uuid4(), "Janjal", ADMIN))
+check("qo'shishda refresh chaqiriladi", "refresh" in ses.events, True)
+check("refresh flush'dan KEYIN", ses.events, ["flush", "refresh"])
+
+ses = FakeSession(guest=FakeGuest(blacklisted=True))
+asyncio.run(svc(ses).remove(uuid.uuid4(), uuid.uuid4(), ADMIN))
+check("chiqarishda ham refresh", ses.events, ["flush", "refresh"])
 
 print(f"\nJami: {ok} ok, {fail} xato")
 raise SystemExit(1 if fail else 0)

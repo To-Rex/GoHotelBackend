@@ -55,6 +55,22 @@ class BlacklistService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def _save(self, guest: Guest) -> None:
+        """Yozib, so'ng obyektni yangilaydi.
+
+        `refresh` SHART: `updated_at` ustunida server tomonidagi `onupdate`
+        bor, shuning uchun UPDATE dan keyin u "eskirgan" deb belgilanadi va
+        qiymati bazadan qayta o'qilishi kerak. Javob seriyalanayotganda
+        Pydantic o'sha maydonni o'qiydi — refreshsiz bu async kontekstdan
+        tashqarida lazy-load bo'lib, MissingGreenlet bilan 500 qaytarardi.
+
+        Loyihaning umumiy repozitoriysi (`BaseRepository.update`) ham aynan
+        shunday qiladi; bu yerda ORM'ga to'g'ridan-to'g'ri yozilgani uchun
+        qadam qo'lda takrorlanadi.
+        """
+        await self.session.flush()
+        await self.session.refresh(guest)
+
     async def _get_guest(self, guest_id: UUID, hotel_id: UUID | None) -> Guest:
         stmt = select(Guest).where(Guest.id == guest_id)
         if hotel_id is not None:
@@ -88,7 +104,7 @@ class BlacklistService:
         guest.blacklisted_at = datetime.now(timezone.utc)
         guest.blacklist_reason = text
         guest.blacklisted_by = current_user["id"]
-        await self.session.flush()
+        await self._save(guest)
         return guest
 
     async def remove(
@@ -100,7 +116,7 @@ class BlacklistService:
         guest.blacklisted_at = None
         guest.blacklist_reason = None
         guest.blacklisted_by = None
-        await self.session.flush()
+        await self._save(guest)
         return guest
 
     async def list_blacklisted(self, hotel_id: UUID | None) -> list[dict]:
