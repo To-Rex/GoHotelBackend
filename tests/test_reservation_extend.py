@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Bronni cho'zish qoidalari.
+"""Bron muddatini o'zgartirish qoidalari.
 
 Ishga tushirish:  python tests/test_reservation_extend.py
 
 Nozik joylar:
 
-1. Chegara — shu xonadagi KEYINGI bron. Keyingi bron bo'lmasa cheklov
-   ham yo'q ("istalgancha cho'zish mumkin").
+1. YUQORI chegara — shu xonadagi KEYINGI bron. Keyingi bron bo'lmasa
+   cheklov ham yo'q ("istalgancha cho'zish mumkin").
 
 2. Soatlik bronda keyingi bron oldidan tozalash tanaffusi qoladi; kunlik
    bronda esa chiqish kuni keyingi mehmonning kirish kuni bo'la oladi va
@@ -14,8 +14,8 @@ Nozik joylar:
    bo'lishi shart, aks holda cho'zib bo'lgan vaqtga bron ochib bo'lmay
    qolardi (yoki teskarisi).
 
-3. Faqat cho'zish. Qisqartirish pul qaytarish savolini ochadi — u
-   bekor qilishdagi kabi alohida qoida talab qiladi.
+3. QUYI chegara — bronning o'z boshlanishi: soatlikda eng qisqasi 15
+   daqiqa, kunlikda bir kun. Pul ikkala yo'nalishda ham o'zgarmaydi.
 
 4. Bir kun ichidagi soatlik bronda `check_out_date` bazadagi
    `check_out_date > check_in_date` cheklovi uchun kirish kunidan bir
@@ -30,11 +30,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.application.services.reservation_extend import (  # noqa: E402
     BLOCKING_STATUSES,
     LOCKED_STATUSES,
+    MIN_HOURLY_MINUTES,
     ExtendError,
     Span,
     assert_extendable,
     checkout_date_for,
     extension_limit,
+    minimum_end,
     span_of,
     validate_new_end,
 )
@@ -175,14 +177,14 @@ check(
     "EXTENSION_BLOCKED",
 )
 check(
-    "qisqartirish qabul qilinmaydi",
+    "qisqartirish ham mumkin",
     verdict(hourly_span(10, 12), dt(3, 11), None),
-    "NOT_AN_EXTENSION",
+    None,
 )
 check(
-    "o'zgarishsiz vaqt ham qabul qilinmaydi",
+    "o'zgarishsiz vaqt qabul qilinmaydi",
     verdict(hourly_span(10, 12), dt(3, 12), None),
-    "NOT_AN_EXTENSION",
+    "NO_CHANGE",
 )
 check(
     "zonali vaqt ham to'g'ri taqqoslanadi",
@@ -195,6 +197,51 @@ check(
     "chegara o'tib ketgan bo'lsa",
     verdict(hourly_span(10, 12), dt(3, 12, 30), dt(3, 11, 45)),
     "EXTENSION_BLOCKED",
+)
+
+
+print("QUYI CHEGARA: qisqartirish".center(60, "-"))
+check(
+    "soatlik: eng qisqasi 15 daqiqa",
+    minimum_end(hourly_span(10, 12)),
+    dt(3, 10, MIN_HOURLY_MINUTES),
+)
+check("kunlik: eng qisqasi bir kun", minimum_end(daily_span(3, 6)), dt(4))
+check(
+    "eng qisqa muddatgacha qisqartirish mumkin",
+    verdict(hourly_span(10, 12), dt(3, 10, 15), None),
+    None,
+)
+check(
+    "undan qisqa bo'lsa to'siladi",
+    verdict(hourly_span(10, 12), dt(3, 10, 14), None),
+    "TOO_SHORT",
+)
+check(
+    "boshlanish vaqtining o'zi ham to'siladi",
+    verdict(hourly_span(10, 12), dt(3, 10), None),
+    "TOO_SHORT",
+)
+check(
+    "boshlanishdan oldinga o'tolmaydi",
+    verdict(hourly_span(10, 12), dt(3, 9), None),
+    "TOO_SHORT",
+)
+check(
+    "kunlik: bir kunga qisqartirish mumkin",
+    verdict(daily_span(3, 6), dt(4), None),
+    None,
+)
+check(
+    "kunlik: nol kunlik bron bo'lmaydi (bazadagi cheklov)",
+    verdict(daily_span(3, 6), dt(3), None),
+    "TOO_SHORT",
+)
+# Qisqartirishga keyingi bron xalaqit bermaydi — biz joy bo'shatyapmiz
+check(
+    "keyingi bron bo'lsa ham qisqartirish o'tadi",
+    verdict(hourly_span(10, 12), dt(3, 11), dt(3, 11, 45)),
+    None,
 )
 
 

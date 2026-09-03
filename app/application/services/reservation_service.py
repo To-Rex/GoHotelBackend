@@ -31,17 +31,22 @@ from sqlalchemy import func, select
 
 
 def _extend_exception(error: extend_rules.ExtendError):
-    """Cho'zish qoidasi xatosini foydalanuvchi o'qiydigan xabarga aylantiradi."""
+    """Muddat qoidasi xatosini foydalanuvchi o'qiydigan xabarga aylantiradi."""
     if error.code == "RESERVATION_LOCKED":
         return ValidationException(
-            "Yakunlangan yoki bekor qilingan bronni cho'zib bo'lmaydi",
+            "Yakunlangan yoki bekor qilingan bron muddatini o'zgartirib bo'lmaydi",
             "RESERVATION_LOCKED",
         )
-    if error.code == "NOT_AN_EXTENSION":
+    if error.code == "NO_CHANGE":
         return ValidationException(
-            "Yangi tugash vaqti hozirgisidan keyin bo'lishi kerak — "
-            "bu amal faqat cho'zadi",
-            "NOT_AN_EXTENSION",
+            "Yangi tugash vaqti hozirgisidan farq qilishi kerak",
+            "NO_CHANGE",
+        )
+    if error.code == "TOO_SHORT":
+        when = error.floor.strftime("%d.%m.%Y %H:%M") if error.floor else ""
+        return ValidationException(
+            f"Bron bundan qisqa bo'la olmaydi — eng erta {when}",
+            "TOO_SHORT",
         )
     when = error.limit.strftime("%d.%m.%Y %H:%M") if error.limit else ""
     return ConflictException(
@@ -1079,16 +1084,23 @@ class ReservationService:
             "current_end": current.end.isoformat(),
             # None — keyingi bron yo'q, istalgancha cho'zish mumkin
             "limit": limit.isoformat() if limit else None,
+            # Qisqartirishning quyi chegarasi — bronning o'z boshlanishi
+            "floor": extend_rules.minimum_end(current).isoformat(),
         }
 
     async def extend_reservation(
         self, reservation_id: UUID, hotel_id: UUID, new_end: datetime
     ) -> Reservation:
-        """Bronni keyingi bron boshlanishigacha cho'zadi.
+        """Bron tugash vaqtini suradi — cho'zadi yoki qisqartiradi.
 
-        QO'SHIMCHA HAQ OLINMAYDI: `total_amount`, hisob-faktura va to'lovlar
-        qo'lga tegmaydi. Shuning uchun bu amal `update_reservation` dan
-        alohida turadi — u yerda sanalar o'zgarsa narx ham qayta hisoblanishi
+        Yuqori chegara — shu xonadagi keyingi bron; quyi chegara —
+        bronning o'z boshlanishi. Tafsilot `reservation_extend` da.
+
+        PUL O'ZGARMAYDI: `total_amount`, hisob-faktura va to'lovlar qo'lga
+        tegmaydi. Cho'zganda qo'shimcha haq olinmaydi, qisqartirganda
+        avtomatik qaytarim bo'lmaydi — pul qaytarish kerak bo'lsa buning
+        o'z yo'li bor. Shuning uchun bu amal `update_reservation` dan
+        alohida turadi: u yerda sanalar o'zgarsa narx ham qayta hisoblanishi
         kutiladi.
 
         Ruxsat tekshiruvi endpointda: bu faqat administrator qo'lidagi amal.

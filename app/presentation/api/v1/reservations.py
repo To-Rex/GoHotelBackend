@@ -301,10 +301,11 @@ async def move_room(
 
 
 def _extend_hotel_id(current_user: dict, hotel_id: UUID | None) -> UUID:
-    """Cho'zish faqat ADMINISTRATOR qo'lida.
+    """Muddatni o'zgartirish faqat ADMINISTRATOR qo'lida.
 
-    Menejer ham, qabulxona xodimi ham cho'za olmaydi: cho'zish qo'shimcha
-    haqsiz beriladigan imtiyoz, ya'ni pul masalasi. Uni kim berishini
+    Menejer ham, qabulxona xodimi ham o'zgartira olmaydi: bu pul
+    masalasiga tegadi — cho'zish qo'shimcha haqsiz beriladi, qisqartirish
+    esa mijoz to'lagan muddatni kamaytiradi. Kim qaror qilishini
     mehmonxona egasi hal qiladi.
     """
     if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
@@ -325,7 +326,8 @@ async def extension_limit(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Bronni qachongacha cho'zish mumkin — `limit: null` bo'lsa cheklovsiz."""
+    """Muddat chegaralari: `limit` — qachongacha cho'zish mumkin (`null` —
+    cheklovsiz), `floor` — qachongacha qisqartirish mumkin."""
     h_id = _extend_hotel_id(current_user, hotel_id)
     return await ReservationService(session).extension_limit(reservation_id, h_id)
 
@@ -338,7 +340,11 @@ async def extend_reservation(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Bronni keyingi bron boshlanishigacha cho'zadi — qo'shimcha haqsiz."""
+    """Bron tugash vaqtini suradi: cho'zadi yoki qisqartiradi.
+
+    Yuqori chegara — keyingi bron, quyi chegara — bronning boshlanishi.
+    Ikkala yo'nalishda ham pul o'zgarmaydi.
+    """
     h_id = _extend_hotel_id(current_user, hotel_id)
     return await ReservationService(session).extend_reservation(
         reservation_id, h_id, data.check_out
