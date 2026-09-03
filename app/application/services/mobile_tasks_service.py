@@ -145,13 +145,12 @@ class MobileTasksService:
         completed = sum(1 for i in task.checklist_items if i.is_completed)
         task.progress = int((completed / total) * 100) if total > 0 else 0
 
-        if task.progress >= 100 and task.status != "COMPLETED":
-            from datetime import datetime, timezone
-            task.status = "COMPLETED"
-            task.completed_at = datetime.now(timezone.utc)
-            room = await self.session.get(Room, task.room_id)
-            if room and room.current_status == "CLEANING":
-                room.current_status = "AVAILABLE"
+        # Band belgilash vazifani YAKUNLAMAYDI — u faqat progressni
+        # o'zgartiradi. Ilgari oxirgi band belgilanishi bilan vazifa
+        # o'zi yopilib, xona bo'shab ketardi: farrosh "Tozalashni
+        # yakunlash" tugmasini bosishga ulgurmasdi va tasodifiy bosilgan
+        # oxirgi band ishni tugatib qo'yardi. Endi yakunlash faqat
+        # `update_progress(100)` orqali, ya'ni ONGLI bosish bilan bo'ladi.
 
         await self.session.flush()
         return await self._enrich_task(task, None)
