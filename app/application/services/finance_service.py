@@ -1,7 +1,7 @@
 from uuid import UUID
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.core.exceptions import NotFoundException, ValidationException, BadRequestException
 from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem
@@ -15,6 +15,37 @@ from app.infrastructure.database.repositories.finance_repo import (
     PaymentRepository,
 )
 from app.shared.utils import generate_code
+
+
+#: Saralash mumkin bo'lgan ustunlar. Ro'yxat ataylab YOPIQ: mijozdan
+#: kelgan nomni to'g'ridan-to'g'ri `order_by` ga qo'yish ochiq eshik
+#: bo'lardi. Nomlar jadval sarlavhalariga mos.
+INVOICE_SORTS = {
+    "invoice_number": Invoice.invoice_number,
+    "invoice_date": Invoice.invoice_date,
+    "due_date": Invoice.due_date,
+    "status": Invoice.status,
+    "discount_amount": Invoice.discount_amount,
+    "total_amount": Invoice.total_amount,
+    "paid_amount": Invoice.paid_amount,
+    # "Qoldiq" ustuni bazada yo'q — u ikkita ustunning ayirmasi
+    "remaining": Invoice.total_amount - Invoice.paid_amount,
+    "created_at": Invoice.created_at,
+}
+
+PAYMENT_SORTS = {
+    "payment_number": Payment.payment_number,
+    "payment_date": Payment.payment_date,
+    "payment_method": Payment.payment_method,
+    "amount": Payment.amount,
+    "created_at": Payment.created_at,
+}
+
+
+def _ordering(columns: dict, sort_by: str | None, sort_dir: str | None, default):
+    """Tanlangan ustun bo'yicha tartib; noma'lum nom standartga qaytadi."""
+    column = columns.get(sort_by or "", default)
+    return column.asc() if (sort_dir or "desc").lower() == "asc" else column.desc()
 
 
 class FinanceService:
@@ -147,6 +178,35 @@ class FinanceService:
         await self.session.flush()
         return invoice
 
+    def _invoice_conditions(
+        self,
+        hotel_id: UUID | None,
+        status: str | None,
+        date_from: date | None,
+        date_to: date | None,
+        search: str | None,
+    ) -> list:
+        """Ro'yxat va sanoq bitta shartlar to'plamidan foydalanadi.
+
+        Ikkalasi alohida yozilganda ular vaqt o'tib bir-biridan ajralib
+        ketardi va sahifalagich "jami" soni ro'yxatga mos kelmay qolardi.
+        """
+        conditions = []
+        if hotel_id is not None:
+            conditions.append(Invoice.hotel_id == hotel_id)
+        if status:
+            conditions.append(Invoice.status == status)
+        # Sana oralig'i bo'yicha filtr (hisobot uchun) — ixtiyoriy, berilmasa
+        # avvalgi xatti-harakat aynan saqlanadi
+        if date_from:
+            conditions.append(Invoice.invoice_date >= date_from)
+        if date_to:
+            conditions.append(Invoice.invoice_date <= date_to)
+        text = (search or "").strip()
+        if text:
+            conditions.append(Invoice.invoice_number.ilike(f"%{text}%"))
+        return conditions
+
     async def get_invoices(
         self,
         hotel_id: UUID | None,
@@ -155,21 +215,40 @@ class FinanceService:
         status: str | None = None,
         date_from: date | None = None,
         date_to: date | None = None,
+        search: str | None = None,
+        sort_by: str | None = None,
+        sort_dir: str | None = None,
     ) -> list[Invoice]:
-        stmt = select(Invoice)
-        if hotel_id is not None:
-            stmt = stmt.where(Invoice.hotel_id == hotel_id)
-        if status:
-            stmt = stmt.where(Invoice.status == status)
-        # Sana oralig'i bo'yicha filtr (hisobot uchun) — ixtiyoriy, berilmasa
-        # avvalgi xatti-harakat aynan saqlanadi
-        if date_from:
-            stmt = stmt.where(Invoice.invoice_date >= date_from)
-        if date_to:
-            stmt = stmt.where(Invoice.invoice_date <= date_to)
-        stmt = stmt.order_by(Invoice.created_at.desc()).offset(skip).limit(limit)
+        stmt = (
+            select(Invoice)
+            .where(*self._invoice_conditions(
+                hotel_id, status, date_from, date_to, search
+            ))
+            # `Invoice.id` — qat'iy tartib uchun ikkinchi mezon. Usiz bir xil
+            # sanadagi hujjatlar tartibi so'rovdan so'rovga o'zgarib, sahifalar
+            # orasida ba'zi qatorlar takrorlanib, ba'zilari tushib qolardi
+            .order_by(
+                _ordering(INVOICE_SORTS, sort_by, sort_dir, Invoice.created_at),
+                Invoice.id,
+            )
+            .offset(skip)
+            .limit(limit)
+        )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def count_invoices(
+        self,
+        hotel_id: UUID | None,
+        status: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        search: str | None = None,
+    ) -> int:
+        stmt = select(func.count(Invoice.id)).where(
+            *self._invoice_conditions(hotel_id, status, date_from, date_to, search)
+        )
+        return int((await self.session.execute(stmt)).scalar() or 0)
 
     async def get_invoice(self, invoice_id: UUID, hotel_id: UUID | None) -> dict:
         if hotel_id is None:
@@ -250,26 +329,78 @@ class FinanceService:
         await self.session.flush()
         return payment
 
+    def _payment_conditions(
+        self,
+        hotel_id: UUID | None,
+        date_from: date | None,
+        date_to: date | None,
+        search: str | None,
+    ) -> list:
+        conditions = []
+        if hotel_id is not None:
+            conditions.append(Payment.hotel_id == hotel_id)
+        # Sana oralig'i bo'yicha filtr (kunlik tushum hisoboti uchun)
+        if date_from:
+            conditions.append(Payment.payment_date >= date_from)
+        if date_to:
+            conditions.append(Payment.payment_date <= date_to)
+        text = (search or "").strip()
+        if text:
+            # Jadvalda ko'rinadigan uchala matn maydoni bo'yicha: xodim
+            # ko'rib turgan narsasini qidiradi
+            like = f"%{text}%"
+            conditions.append(
+                or_(
+                    Payment.payment_number.ilike(like),
+                    Payment.reference.ilike(like),
+                    Payment.notes.ilike(like),
+                )
+            )
+        return conditions
+
     async def get_payments(
         self,
         hotel_id: UUID | None,
         invoice_id: UUID | None = None,
         date_from: date | None = None,
         date_to: date | None = None,
+        skip: int = 0,
+        limit: int | None = None,
+        search: str | None = None,
+        sort_by: str | None = None,
+        sort_dir: str | None = None,
     ) -> list[Payment]:
         if invoice_id:
+            # Bitta hujjat to'lovlari — ular soni oz va chek uchun to'liq
+            # kerak, shuning uchun sahifalanmaydi
             return await self.payment_repo.get_by_invoice(invoice_id, hotel_id)
-        stmt = select(Payment)
-        if hotel_id is not None:
-            stmt = stmt.where(Payment.hotel_id == hotel_id)
-        # Sana oralig'i bo'yicha filtr (kunlik tushum hisoboti uchun)
-        if date_from:
-            stmt = stmt.where(Payment.payment_date >= date_from)
-        if date_to:
-            stmt = stmt.where(Payment.payment_date <= date_to)
-        stmt = stmt.order_by(Payment.created_at.desc())
+        stmt = (
+            select(Payment)
+            .where(*self._payment_conditions(hotel_id, date_from, date_to, search))
+            # Ikkinchi mezon — sahifalar orasida qator takrorlanmasligi uchun
+            .order_by(
+                _ordering(PAYMENT_SORTS, sort_by, sort_dir, Payment.created_at),
+                Payment.id,
+            )
+        )
+        # `limit` berilmasa avvalgidek hammasi qaytadi — eski chaqiruvlar
+        # (hisobotlar) shu holatga tayanadi
+        if limit is not None:
+            stmt = stmt.offset(skip).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def count_payments(
+        self,
+        hotel_id: UUID | None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        search: str | None = None,
+    ) -> int:
+        stmt = select(func.count(Payment.id)).where(
+            *self._payment_conditions(hotel_id, date_from, date_to, search)
+        )
+        return int((await self.session.execute(stmt)).scalar() or 0)
 
     async def get_ledgers(self, hotel_id: UUID | None) -> list[Ledger]:
         stmt = select(Ledger).where(Ledger.is_active.is_(True))

@@ -53,6 +53,11 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Sahifalanadigan ro'yxatlar jami qatorlar sonini shu sarlavhada
+    # qaytaradi. `allow_headers` so'rov sarlavhalariga tegishli — javob
+    # sarlavhasini brauzerga ko'rsatish uchun uni ALOHIDA ochish kerak,
+    # aks holda mijoz kodi uni umuman ko'rmaydi.
+    expose_headers=["X-Total-Count"],
 )
 
 

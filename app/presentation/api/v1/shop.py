@@ -14,9 +14,9 @@ from datetime import date, datetime, time, timezone
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -459,8 +459,18 @@ async def add_batch(
 # -------------------------------------------------------------- sales --
 
 
+#: Do'kon savdosini saralash mumkin bo'lgan ustunlar — ro'yxat yopiq.
+SALE_SORTS = {
+    "created_at": ShopSale.created_at,
+    "paid_at": ShopSale.paid_at,
+    "total_amount": ShopSale.total_amount,
+    "status": ShopSale.status,
+}
+
+
 @router.get("/sales")
 async def list_sales(
+    response: Response,
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     status: str | None = Query(default=None),
@@ -468,28 +478,66 @@ async def list_sales(
     # vaqt (do'kon sahifasi); "paid" — to'lov olingan vaqt (moliya hisoboti,
     # bronga yozilib keyin to'langan sotuv o'sha kun tushumiga tushadi)
     date_by: Literal["created", "paid"] = Query(default="created"),
+    search: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
+    sort_dir: str | None = Query(default=None),
+    skip: int = Query(default=0, ge=0),
     hotel_id: UUID | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=1000),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     h_id = _get_hotel_id(current_user, hotel_id)
+
+    date_col = ShopSale.paid_at if date_by == "paid" else ShopSale.created_at
+    conditions = [ShopSale.hotel_id == h_id]
+    if date_from:
+        conditions.append(date_col >= datetime.combine(date_from, time.min))
+    if date_to:
+        conditions.append(date_col <= datetime.combine(date_to, time.max))
+    if status:
+        conditions.append(ShopSale.status == status)
+    text = (search or "").strip()
+    if text:
+        # Xodim ko'rib turgan narsasi bo'yicha qidiradi: bron raqami yoki
+        # chekdagi mahsulot nomi
+        like = f"%{text}%"
+        conditions.append(
+            or_(
+                Reservation.reservation_number.ilike(like),
+                ShopSale.items.any(ShopSaleItem.product_name.ilike(like)),
+            )
+        )
+
+    # Jami soni sahifalagich uchun — javob turi o'zgarmaydi
+    response.headers["X-Total-Count"] = str(
+        (
+            await session.execute(
+                select(func.count(func.distinct(ShopSale.id)))
+                .select_from(ShopSale)
+                .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
+                .where(*conditions)
+            )
+        ).scalar()
+        or 0
+    )
+
+    column = SALE_SORTS.get(sort_by or "", ShopSale.created_at)
     stmt = (
         select(ShopSale, User, Reservation, Guest)
         .join(User, User.id == ShopSale.created_by)
         .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
         .outerjoin(Guest, Guest.id == Reservation.guest_id)
         .options(selectinload(ShopSale.items))
-        .where(ShopSale.hotel_id == h_id)
+        .where(*conditions)
+        # `ShopSale.id` — sahifalar orasida qator takrorlanib ketmasligi uchun
+        .order_by(
+            column.asc() if (sort_dir or "desc").lower() == "asc" else column.desc(),
+            ShopSale.id,
+        )
+        .offset(skip)
+        .limit(limit)
     )
-    date_col = ShopSale.paid_at if date_by == "paid" else ShopSale.created_at
-    if date_from:
-        stmt = stmt.where(date_col >= datetime.combine(date_from, time.min))
-    if date_to:
-        stmt = stmt.where(date_col <= datetime.combine(date_to, time.max))
-    if status:
-        stmt = stmt.where(ShopSale.status == status)
-    stmt = stmt.order_by(ShopSale.created_at.desc()).limit(limit)
     rows = (await session.execute(stmt)).all()
     return [_sale_dict(s, u, r, g) for s, u, r, g in rows]
 

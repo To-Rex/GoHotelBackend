@@ -1,7 +1,7 @@
 from uuid import UUID
 from datetime import date
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -21,6 +21,14 @@ from app.presentation.middleware.auth import get_current_user, require_permissio
 from app.presentation.api.v1._deps import require_active_hotel
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
+
+#: Sahifalagich uchun jami qatorlar soni. Sarlavhada uzatiladi, chunki
+#: javob turini `{items, total}` ga o'zgartirish shu endpointlardan
+#: foydalanadigan boshqa ekranlarni buzardi.
+#:
+#: Brauzer buni faqat CORS `expose_headers` ro'yxatida bo'lsa o'qiy oladi —
+#: `app/main.py` da qo'shilgan.
+TOTAL_COUNT_HEADER = "X-Total-Count"
 
 
 def _get_hotel_id(current_user: dict) -> UUID | None:
@@ -60,11 +68,43 @@ async def list_debtors(
     )
 
 
+@router.get("/summary")
+async def finance_summary(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    status: str | None = Query(default=None),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Moliya sahifasining barcha yig'ma raqamlari — bitta so'rovda.
+
+    Jadvallar endi sahifalab olinadi, ya'ni davrning to'liq ro'yxati
+    brauzerga umuman kelmaydi. Shuning uchun yig'indi shu yerda, bazada
+    hisoblanadi. Tafsilot va formulalar `finance_summary_service` da.
+    """
+    from app.application.services.finance_summary_service import (
+        FinanceSummaryService,
+    )
+
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    return await FinanceSummaryService(session).build(
+        h_id, date_from=date_from, date_to=date_to, status=status
+    )
+
+
 @router.get("/invoices", response_model=list[InvoiceResponse])
 async def list_invoices(
+    response: Response,
     status: str | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
+    search: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
+    sort_dir: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     hotel_id: UUID | None = Query(default=None),
@@ -76,9 +116,18 @@ async def list_invoices(
     else:
         h_id = _get_hotel_id(current_user)
     service = FinanceService(session)
+    # Jami soni sarlavhada: javob turi (`list[InvoiceResponse]`) o'zgarmaydi,
+    # ya'ni bu endpointdan foydalanadigan eski ekranlar hech narsa sezmaydi
+    response.headers[TOTAL_COUNT_HEADER] = str(
+        await service.count_invoices(
+            h_id, status=status, date_from=date_from, date_to=date_to,
+            search=search,
+        )
+    )
     return await service.get_invoices(
         h_id, skip=skip, limit=limit, status=status,
         date_from=date_from, date_to=date_to,
+        search=search, sort_by=sort_by, sort_dir=sort_dir,
     )
 
 
@@ -210,9 +259,17 @@ async def record_payment(
 
 @router.get("/payments", response_model=list[PaymentResponse])
 async def list_payments(
+    response: Response,
     invoice_id: UUID | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
+    search: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
+    sort_dir: str | None = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    # `limit` berilmasa avvalgidek BARCHA to'lovlar qaytadi — bu endpointga
+    # tayanadigan eski ekranlar buzilmasligi uchun
+    limit: int | None = Query(default=None, ge=1, le=500),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -222,8 +279,16 @@ async def list_payments(
     else:
         h_id = _get_hotel_id(current_user)
     service = FinanceService(session)
+    if invoice_id is None:
+        response.headers[TOTAL_COUNT_HEADER] = str(
+            await service.count_payments(
+                h_id, date_from=date_from, date_to=date_to, search=search
+            )
+        )
     return await service.get_payments(
-        h_id, invoice_id=invoice_id, date_from=date_from, date_to=date_to
+        h_id, invoice_id=invoice_id, date_from=date_from, date_to=date_to,
+        skip=skip, limit=limit, search=search,
+        sort_by=sort_by, sort_dir=sort_dir,
     )
 
 
