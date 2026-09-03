@@ -64,3 +64,10 @@ api_router.include_router(shifts.router, prefix="/shifts", tags=["Shifts"])
 api_router.include_router(messages.router, prefix="/messages", tags=["Staff Messages"])
 api_router.include_router(vision.router, prefix="/vision", tags=["Vision / Guest Face"])
 api_router.include_router(devices.router, prefix="/devices", tags=["Trusted Devices"])
+
+# Boshqaruv paneli — alohida modul (app/superadmin), o'z kirishi bilan
+from app.superadmin.router import router as superadmin_router  # noqa: E402
+
+api_router.include_router(
+    superadmin_router, prefix="/superadmin", tags=["Super Admin Panel"]
+)
