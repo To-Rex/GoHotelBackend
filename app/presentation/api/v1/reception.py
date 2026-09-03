@@ -10,12 +10,17 @@ administrator. Farrosh bu bo'limni ko'rmaydi.
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
+from app.application.services.incoming_call_service import (
+    DEFAULT_WINDOW_MINUTES,
+    IncomingCallService,
+)
 from app.application.services.reception_service import ReceptionService
 from app.presentation.api.v1._deps import require_active_hotel
 from app.presentation.middleware.auth import get_current_user
@@ -88,4 +93,68 @@ async def list_bookings(
         search=search,
         include_cancelled=include_cancelled,
         limit=limit,
+    )
+
+
+# ------------------------------------------- kiruvchi qo'ng'iroqlar --
+
+
+class IncomingCallRequest(BaseModel):
+    """Qurilma xabar bergan kiruvchi qo'ng'iroq."""
+
+    phone: str = Field(min_length=3, max_length=32)
+    #: Qaysi qurilma xabar berdi — bir nechta telefon bo'lsa ajratish uchun
+    device_id: str | None = Field(default=None, max_length=128)
+
+
+@router.post("/calls")
+async def report_incoming_call(
+    data: IncomingCallRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Kiruvchi qo'ng'iroqni qayd etadi va topilgan mehmonni qaytaradi.
+
+    Qurilma qo'ng'iroq kelishi bilan chaqiradi. Javobdagi `matched`
+    mehmon topilganini bildiradi; topilmagan qo'ng'iroq ham yoziladi —
+    yangi mijoz bo'lishi mumkin va raqami bron ochishda asqotadi.
+    """
+    hotel_id = _require_reception(current_user)
+    return await IncomingCallService(session).record(
+        hotel_id,
+        data.phone,
+        reported_by=current_user.get("id"),
+        device_id=data.device_id,
+        today=_local_today(),
+    )
+
+
+@router.get("/calls")
+async def list_incoming_calls(
+    minutes: int = Query(default=DEFAULT_WINDOW_MINUTES, ge=1, le=1440),
+    include_acknowledged: bool = Query(default=False),
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Oxirgi qo'ng'iroqlar — veb ekranidagi menyu shuni o'qiydi."""
+    hotel_id = _require_reception(current_user)
+    return await IncomingCallService(session).recent(
+        hotel_id,
+        minutes=minutes,
+        include_acknowledged=include_acknowledged,
+        limit=limit,
+    )
+
+
+@router.post("/calls/{call_id}/ack")
+async def acknowledge_call(
+    call_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qo'ng'iroqni ko'rib chiqilgan deb belgilaydi — menyudan chiqadi."""
+    hotel_id = _require_reception(current_user)
+    return await IncomingCallService(session).acknowledge(
+        call_id, hotel_id, current_user["id"]
     )
