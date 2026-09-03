@@ -71,11 +71,21 @@ class BlacklistService:
         await self.session.flush()
         await self.session.refresh(guest)
 
-    async def _get_guest(self, guest_id: UUID, hotel_id: UUID | None) -> Guest:
-        stmt = select(Guest).where(Guest.id == guest_id)
-        if hotel_id is not None:
-            stmt = stmt.where(Guest.hotel_id == hotel_id)
-        guest = (await self.session.execute(stmt)).scalar_one_or_none()
+    async def _get_guest(self, guest_id: UUID) -> Guest:
+        """Mehmonni ID bo'yicha topadi — MEHMONXONA BO'YICHA FILTRSIZ.
+
+        Mehmonlar bazasi bu loyihada GLOBAL: barcha mehmonxonalar bitta
+        umumiy ro'yxatni ko'radi va `guest.hotel_id` faqat kim birinchi
+        kiritganini bildiradi. Loyihaning qolgan qismi ham shunday ishlaydi
+        (`guest_service.get_guest`, bron yaratish — hammasi unscoped).
+
+        Ilgari bu yerda hotel_id bo'yicha filtr bor edi va natijada faqat
+        shu mehmonxona kiritgan mehmonni qora ro'yxatga qo'shish mumkin
+        edi; qolganlari "Guest not found" berardi.
+        """
+        guest = (
+            await self.session.execute(select(Guest).where(Guest.id == guest_id))
+        ).scalar_one_or_none()
         if guest is None:
             raise NotFoundException("Guest not found", "GUEST_NOT_FOUND")
         return guest
@@ -83,7 +93,6 @@ class BlacklistService:
     async def add(
         self,
         guest_id: UUID,
-        hotel_id: UUID | None,
         reason: str,
         current_user: dict,
     ) -> Guest:
@@ -95,7 +104,7 @@ class BlacklistService:
                 "Qora ro'yxatga qo'shish sababini yozing", "REASON_REQUIRED"
             )
 
-        guest = await self._get_guest(guest_id, hotel_id)
+        guest = await self._get_guest(guest_id)
         if guest.blacklisted_at is not None:
             raise ConflictException(
                 "Bu mehmon allaqachon qora ro'yxatda", "ALREADY_BLACKLISTED"
@@ -107,11 +116,9 @@ class BlacklistService:
         await self._save(guest)
         return guest
 
-    async def remove(
-        self, guest_id: UUID, hotel_id: UUID | None, current_user: dict
-    ) -> Guest:
+    async def remove(self, guest_id: UUID, current_user: dict) -> Guest:
         _require_admin(current_user)
-        guest = await self._get_guest(guest_id, hotel_id)
+        guest = await self._get_guest(guest_id)
         # Uchala maydon birga tozalanadi — yarim holat qolmasin
         guest.blacklisted_at = None
         guest.blacklist_reason = None
@@ -119,15 +126,19 @@ class BlacklistService:
         await self._save(guest)
         return guest
 
-    async def list_blacklisted(self, hotel_id: UUID | None) -> list[dict]:
+    async def list_blacklisted(self) -> list[dict]:
+        """Qora ro'yxatdagi barcha mehmonlar.
+
+        Ro'yxat mehmonlar bazasi kabi GLOBAL: bir mehmonxona kiritgan
+        ogohlantirish boshqasiga ham ko'rinadi. Unga amal qilish-qilmaslikni
+        esa har bir mehmonxona o'z sozlamasi bilan hal qiladi.
+        """
         stmt = (
             select(Guest, User.first_name, User.last_name)
             .join(User, User.id == Guest.blacklisted_by, isouter=True)
             .where(Guest.blacklisted_at.isnot(None))
             .order_by(Guest.blacklisted_at.desc())
         )
-        if hotel_id is not None:
-            stmt = stmt.where(Guest.hotel_id == hotel_id)
 
         rows = (await self.session.execute(stmt)).all()
         return [

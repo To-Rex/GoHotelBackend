@@ -289,12 +289,8 @@ async def list_blacklist(
     current_user: dict = Depends(get_current_user),
 ):
     """Qora ro'yxatdagi mehmonlar."""
-    h_id = (
-        current_user.get("hotel_id")
-        if current_user["user_type"] == "SUPER_ADMIN"
-        else _get_hotel_id(current_user)
-    )
-    return await BlacklistService(session).list_blacklisted(h_id)
+    # Ro'yxat global — mehmonlar bazasi kabi. Izoh servisda.
+    return await BlacklistService(session).list_blacklisted()
 
 
 @router.get("/blacklist-settings")
@@ -355,35 +351,25 @@ async def save_blacklist_settings(
 async def add_to_blacklist(
     data: BlacklistRequest,
     guest_id: UUID = Path(),
-    hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Mehmonni qora ro'yxatga qo'shish — faqat administrator, sabab bilan."""
-    h_id = (
-        (hotel_id or current_user.get("hotel_id"))
-        if current_user["user_type"] == "SUPER_ADMIN"
-        else _get_hotel_id(current_user)
-    )
-    return await BlacklistService(session).add(
-        guest_id, h_id, data.reason, current_user
-    )
+    """Mehmonni qora ro'yxatga qo'shish — faqat administrator, sabab bilan.
+
+    Mehmonxona bo'yicha cheklov yo'q: mehmonlar bazasi global va qora
+    ro'yxat ham shunday. Izoh `blacklist_service` da.
+    """
+    return await BlacklistService(session).add(guest_id, data.reason, current_user)
 
 
 @router.delete("/{guest_id}/blacklist", response_model=GuestResponse)
 async def remove_from_blacklist(
     guest_id: UUID = Path(),
-    hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Qora ro'yxatdan chiqarish — faqat administrator."""
-    h_id = (
-        (hotel_id or current_user.get("hotel_id"))
-        if current_user["user_type"] == "SUPER_ADMIN"
-        else _get_hotel_id(current_user)
-    )
-    return await BlacklistService(session).remove(guest_id, h_id, current_user)
+    return await BlacklistService(session).remove(guest_id, current_user)
 
 
 @router.get("/{guest_id}", response_model=GuestResponse)

@@ -123,7 +123,7 @@ STAFF = {"user_type": "EMPLOYEE", "id": uuid.uuid4()}
 
 def add(session, user, reason):
     try:
-        asyncio.run(svc(session).add(uuid.uuid4(), uuid.uuid4(), reason, user))
+        asyncio.run(svc(session).add(uuid.uuid4(), reason, user))
         return None
     except (ForbiddenException, ValidationException, ConflictException) as e:
         return e.error_code
@@ -159,13 +159,13 @@ check(
 print("--- ro'yxatdan chiqarish ---")
 guest = FakeGuest(blacklisted=True)
 session = FakeSession(guest=guest)
-asyncio.run(svc(session).remove(guest.id, uuid.uuid4(), ADMIN))
+asyncio.run(svc(session).remove(guest.id, ADMIN))
 check("uchala maydon ham tozalanadi",
       (guest.blacklisted_at, guest.blacklist_reason, guest.blacklisted_by),
       (None, None, None))
 
 try:
-    asyncio.run(svc(FakeSession(guest=FakeGuest(True))).remove(uuid.uuid4(), uuid.uuid4(), STAFF))
+    asyncio.run(svc(FakeSession(guest=FakeGuest(True))).remove(uuid.uuid4(), STAFF))
     check("oddiy xodim chiqara olmaydi", "ruxsat berildi", "ADMIN_ONLY")
 except ForbiddenException as e:
     check("oddiy xodim chiqara olmaydi", e.error_code, "ADMIN_ONLY")
@@ -207,13 +207,27 @@ print("--- yozgandan keyin refresh ---")
 # o'sha maydonni o'qishga urinib, MissingGreenlet bilan 500 qaytarardi —
 # aynan shu xato ishlab chiqarishda chiqdi.
 ses = FakeSession(guest=FakeGuest())
-asyncio.run(svc(ses).add(uuid.uuid4(), uuid.uuid4(), "Janjal", ADMIN))
+asyncio.run(svc(ses).add(uuid.uuid4(), "Janjal", ADMIN))
 check("qo'shishda refresh chaqiriladi", "refresh" in ses.events, True)
 check("refresh flush'dan KEYIN", ses.events, ["flush", "refresh"])
 
 ses = FakeSession(guest=FakeGuest(blacklisted=True))
-asyncio.run(svc(ses).remove(uuid.uuid4(), uuid.uuid4(), ADMIN))
+asyncio.run(svc(ses).remove(uuid.uuid4(), ADMIN))
 check("chiqarishda ham refresh", ses.events, ["flush", "refresh"])
+
+print("--- mehmonlar bazasi GLOBAL ---")
+# Ilgari bu yerda hotel_id bo'yicha filtr bor edi va faqat shu mehmonxona
+# kiritgan mehmonni qora ro'yxatga qo'shish mumkin edi; qolganlari
+# "Guest not found" berardi. Aynan shu xato ishlab chiqarishda chiqdi.
+foreign = FakeGuest()
+foreign.hotel_id = uuid.uuid4()  # boshqa mehmonxona kiritgan
+ses = FakeSession(guest=foreign)
+check(
+    "boshqa mehmonxona kiritgan mehmon ham qo'shiladi",
+    add(ses, ADMIN, "Janjal ko'targan"),
+    None,
+)
+check("mehmon ro'yxatga tushdi", foreign.blacklist_reason, "Janjal ko'targan")
 
 print(f"\nJami: {ok} ok, {fail} xato")
 raise SystemExit(1 if fail else 0)
