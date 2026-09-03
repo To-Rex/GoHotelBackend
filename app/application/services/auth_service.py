@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.hotel_access import assert_hotel_active
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedException, ForbiddenException
 from app.infrastructure.auth.jwt import (
@@ -52,6 +53,13 @@ class AuthService:
         if user.is_deleted:
             raise ForbiddenException("Account has been deleted", "ACCOUNT_DELETED")
 
+        # --- Mehmonxona hamon xizmatdami ---
+        #
+        # Kirishga ruxsat berib, keyin har bir so'rovni 403 bilan qaytarish
+        # eng yomon variant edi: xodim bo'sh, cheksiz yuklanadigan ekranni
+        # ko'rardi. Sabab shu yerda, kirish paytida aytiladi.
+        await self._assert_hotel_active(user)
+
         # --- Qurilma tasdiqlangan bo'lishi kerak ---
         #
         # Yuz tekshiruvidan OLDIN: tasdiqlanmagan qurilmada yuz so'rashning
@@ -84,6 +92,16 @@ class AuthService:
         return await self.issue_tokens(
             user, ip_address=ip_address, user_agent=user_agent, device_id=device_id
         )
+
+    async def _assert_hotel_active(self, user) -> None:
+        """Xodimning mehmonxonasi to'xtatilgan bo'lsa kirishni to'sadi.
+
+        Mehmonxonaga bog'lanmagan hisob (masalan tizim ma'muri) avvalgidek
+        kiraveradi — unda tekshiradigan obyekt yo'q.
+        """
+        if not user.hotel_id:
+            return
+        await assert_hotel_active(self.session, user.hotel_id, user.user_type)
 
     async def _has_face_profile(self, user_id) -> bool:
         """Xodimda yuz biriktirilganmi."""
@@ -154,6 +172,10 @@ class AuthService:
         Parol bilan login va WebAuthn (Face ID/passkey) login uchun umumiy —
         ikkalasi ham foydalanuvchi allaqachon tekshirilgach shu yerga keladi.
         """
+        # Yuz orqali kirish parol bosqichini chetlab o'tadi — mehmonxona
+        # holati bu yerda ham tekshiriladi
+        await self._assert_hotel_active(user)
+
         permissions: list[str] = []
         if user.user_type == "EMPLOYEE":
             permissions = [p["code"] for p in await self.user_repo.get_user_permissions(user.id)]
@@ -219,6 +241,9 @@ class AuthService:
         user = await self.user_repo.get_by_id(user_id)
         if not user or user.status != "ACTIVE":
             raise UnauthorizedException("User not active", "USER_INACTIVE")
+
+        # Mehmonxona sessiya ochilgandan keyin to'xtatilgan bo'lishi mumkin
+        await self._assert_hotel_active(user)
 
         permissions: list[str] = []
         if user.user_type == "EMPLOYEE":
