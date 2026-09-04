@@ -55,11 +55,19 @@ class NotificationService:
                     user_id,
                 )
                 return
+            # Yangi vazifa — "budilnik" pushi: xabar data-only ketadi va
+            # ilovaning fon ishlovchisi uni yopilmaguncha jiringlaydigan
+            # qilib ko'rsatadi. Qolgan xabarlar avvalgidek tizim orqali.
+            is_task = entity_type == "task"
+            data = self._build_data(entity_type, entity_id)
+            if is_task:
+                data["kind"] = "task_alarm"
             sent = await firebase.send_push(
                 token,
                 title,
                 body,
-                data=self._build_data(entity_type, entity_id),
+                data=data,
+                data_only=is_task,
             )
             logger.info(
                 "Push yuborildi (user_id=%s, natija=%s, title=%s)", user_id, sent, title

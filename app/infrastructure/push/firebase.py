@@ -124,8 +124,21 @@ def is_configured() -> bool:
     return _init() is not None
 
 
-def _send_sync(tokens: list[str], title: str, body: str | None, data: dict | None) -> int:
-    """Berilgan tokenlarga push yuboradi. Muvaffaqiyatli yuborilganlar sonini qaytaradi."""
+def _send_sync(
+    tokens: list[str],
+    title: str,
+    body: str | None,
+    data: dict | None,
+    data_only: bool = False,
+) -> int:
+    """Berilgan tokenlarga push yuboradi. Muvaffaqiyatli yuborilganlar sonini qaytaradi.
+
+    `data_only=True` — Android'da xabar tizim tomonidan EMAS, ilovaning fon
+    ishlovchisi tomonidan ko'rsatiladi. Bu yangi vazifa kabi "budilnik"
+    xabarlari uchun: tizim chizsa tovush bir marta chalinadi, ilova esa
+    yopilmaguncha jiringlaydigan qilib ko'rsatadi. Sarlavha/matn data
+    ichida ketadi; iOS uchun alert APNS'da baribir saqlanadi.
+    """
     app = _init()
     if app is None or not tokens:
         return 0
@@ -137,13 +150,21 @@ def _send_sync(tokens: list[str], title: str, body: str | None, data: dict | Non
 
     # FCM data payload faqat string qiymatlarni qabul qiladi
     str_data = {str(k): str(v) for k, v in (data or {}).items() if v is not None}
-    notification = messaging.Notification(title=title, body=body or "")
+    if data_only:
+        str_data.setdefault("title", title)
+        if body:
+            str_data.setdefault("body", body)
+        notification = None
+    else:
+        notification = messaging.Notification(title=title, body=body or "")
 
     # Android: YUQORI prioritet — heads-up banner darhol ko'rinsin (Doze/battery
     # optimizatsiyada ham). iOS (APNS): alert + tovush.
     android_cfg = messaging.AndroidConfig(
         priority="high",
-        notification=messaging.AndroidNotification(
+        notification=None
+        if data_only
+        else messaging.AndroidNotification(
             title=title,
             body=body or "",
             sound="default",
@@ -223,6 +244,7 @@ async def send_push(
     title: str,
     body: str | None = None,
     data: dict | None = None,
+    data_only: bool = False,
 ) -> int:
     """Bir yoki bir nechta FCM tokenga push yuboradi (bloklamaydi, xato tashlamaydi).
 
@@ -234,7 +256,7 @@ async def send_push(
     if not tokens:
         return 0
     try:
-        return await asyncio.to_thread(_send_sync, tokens, title, body, data)
+        return await asyncio.to_thread(_send_sync, tokens, title, body, data, data_only)
     except Exception:
         logger.exception("send_push kutilmagan xato")
         return 0
