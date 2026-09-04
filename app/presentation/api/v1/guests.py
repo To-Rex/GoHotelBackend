@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.dto.guest_stay import GuestHistoryResponse
+from app.application.services.document_ocr import intake
 from app.application.services.blacklist_service import BlacklistService
 from app.application.services.guest_history_service import GuestHistoryService
 from app.core.database import get_db
@@ -53,13 +54,9 @@ SCAN_SETTINGS_KEY = "document_scan"
 #   device — faqat brauzerda (rasm qurilmadan chiqmaydi)
 DEFAULT_SCAN_SETTINGS = {"mode": "auto", "engine": "server"}
 
-#: Bir vaqtda nechta OCR ishlaydi. Model kichik, lekin VPS yadrolari kam —
-#: cheklovsiz qo'yilsa bir nechta parallel skan bir-birini sekinlashtiradi.
-_MAX_CONCURRENT_SCANS = 2
-_scan_limiter = anyio.Semaphore(_MAX_CONCURRENT_SCANS)
-
-#: Yuklangan rasm uchun oqilona chegara (frontend ~200-400 KB yuboradi)
-MAX_SCAN_IMAGE_BYTES = 12 * 1024 * 1024
+#: Rasm o'qish, hajm chegarasi va OCR chaqiruvi qabulxona telefoni bilan
+#: umumiy — qoidalar `document_ocr/intake.py` da.
+MAX_SCAN_IMAGE_BYTES = intake.MAX_SCAN_IMAGE_BYTES
 
 
 class ScanSettingsRequest(BaseModel):
@@ -67,20 +64,8 @@ class ScanSettingsRequest(BaseModel):
     engine: Literal["server", "device"] = "server"
 
 
-@lru_cache(maxsize=1)
-def _server_ocr_available() -> bool:
-    """Serverda OCR dvigateli bormi.
-
-    Natija keshlanadi: modul importi va model fayllarini tekshirish jarayon
-    ishlagan davomida o'zgarmaydi, bu funksiya esa skaner sozlamasi har
-    so'ralganda chaqiriladi.
-    """
-    try:
-        from app.application.services.document_ocr import engine as ocr_engine
-
-        return ocr_engine.engine_importable()
-    except Exception:  # noqa: BLE001
-        return False
+#: Dvigatel bor-yo'qligi — qabulxona telefoni bilan umumiy tekshiruv.
+_server_ocr_available = intake.server_ocr_available
 
 
 _ocr_warm_up_started = False
@@ -164,14 +149,7 @@ async def save_scan_settings(
 
 
 async def _read_scan_image(file, label: str) -> bytes | None:
-    if file is None:
-        return None
-    content = await file.read()
-    if not content:
-        raise ValidationException(f"{label}: rasm bo'sh", "BAD_IMAGE")
-    if len(content) > MAX_SCAN_IMAGE_BYTES:
-        raise ValidationException(f"{label}: rasm juda katta", "IMAGE_TOO_LARGE")
-    return content
+    return await intake.read_image(file, label)
 
 
 @router.post("/scan-document")
@@ -196,10 +174,7 @@ async def scan_document(
     Dvigatel serverda mavjud bo'lmasa 503 qaytadi — frontend buni ko'rib,
     qurilmadagi OCR'ga qaytadi va foydalanuvchi hech narsa sezmaydi.
     """
-    if not _server_ocr_available():
-        raise HTTPException(
-            status_code=503, detail="Server hujjat skaneri bu serverda mavjud emas"
-        )
+    intake.require_server_ocr()
 
     images: dict[str, bytes] = {}
     front_bytes = await _read_scan_image(front, "Old tomon")
@@ -213,29 +188,8 @@ async def scan_document(
     if single_bytes and not images:
         # Eski chaqiruv shakli: bitta `file` va `side`
         images[side] = single_bytes
-    if not images:
-        raise ValidationException("Hujjat rasmi yuborilmadi", "BAD_IMAGE")
 
-    from app.application.services.document_ocr import service as ocr_service
-
-    async with _scan_limiter:
-        try:
-            return await anyio.to_thread.run_sync(
-                ocr_service.scan_document, images, document_type
-            )
-        except ValueError as exc:
-            code = str(exc)
-            raise ValidationException(
-                {
-                    "BAD_IMAGE": "Rasm o'qilmadi",
-                    "IMAGE_TOO_SMALL": "Rasm juda kichik — hujjatni yaqinroqdan oling",
-                    "NO_TEXT": "Rasmda yozuv topilmadi — hujjatni ramkaga to'liq joylang",
-                }.get(code, "Hujjat o'qilmadi"),
-                code,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Hujjat skanerlashda kutilmagan xato")
-            raise HTTPException(status_code=500, detail="Hujjatni o'qishda xatolik")
+    return await intake.run_scan(images, document_type)
 
 
 @router.get("/", response_model=list[GuestResponse])

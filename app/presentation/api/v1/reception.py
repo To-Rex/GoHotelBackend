@@ -8,9 +8,10 @@ Ruxsat: bron ko'rish huquqi bo'lgan xodim (`reservation.read`) yoki
 administrator. Farrosh bu bo'limni ko'rmaydi.
 """
 from datetime import date, datetime, timedelta, timezone
+from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,11 @@ from app.core.exceptions import ForbiddenException
 from app.application.services.incoming_call_service import (
     DEFAULT_WINDOW_MINUTES,
     IncomingCallService,
+)
+from app.application.services.document_ocr import intake
+from app.application.services.document_scan_service import (
+    DEFAULT_WINDOW_MINUTES as SCAN_WINDOW_MINUTES,
+    DocumentScanService,
 )
 from app.application.services.reception_service import ReceptionService
 from app.presentation.api.v1._deps import require_active_hotel
@@ -157,4 +163,80 @@ async def acknowledge_call(
     hotel_id = _require_reception(current_user)
     return await IncomingCallService(session).acknowledge(
         call_id, hotel_id, current_user["id"]
+    )
+
+
+# ------------------------------------------- hujjat skaneri (telefon) --
+
+
+@router.post("/scans")
+async def submit_document_scan(
+    document_type: Literal["ID_CARD", "PASSPORT"] = Form(default="PASSPORT"),
+    front: UploadFile | None = File(default=None),
+    back: UploadFile | None = File(default=None),
+    device_id: str | None = Form(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Telefonda olingan hujjat rasmini o'qiydi va qabulxonaga uzatadi.
+
+    Telefonda OCR ishlamaydi — rasm shu yerga keladi, server uni o'qiydi.
+    Natija saqlanadi va veb ekrani uni ko'rib yangi bandlov oynasini o'zi
+    ochadi: mehmon bazada bo'lsa tanlangan holda, bo'lmasa maydonlari
+    to'ldirilgan holda.
+
+    ID karta uchun IKKALA tomonni bitta so'rovda yuborish kerak: faqat
+    shundagina old tomondagi bosma ma'lumot orqadagi MRZ bilan
+    solishtiriladi. Passport uchun bitta sahifa yetarli.
+
+    Rasm saqlanmaydi — javob qaytgach yo'qoladi.
+    """
+    hotel_id = _require_reception(current_user)
+    intake.require_server_ocr()
+
+    images: dict[str, bytes] = {}
+    front_bytes = await intake.read_image(front, "Old tomon")
+    back_bytes = await intake.read_image(back, "Orqa tomon")
+    if front_bytes:
+        images["passport" if document_type == "PASSPORT" else "front"] = front_bytes
+    if back_bytes:
+        images["back"] = back_bytes
+
+    document = await intake.run_scan(images, document_type)
+    return await DocumentScanService(session).record(
+        hotel_id,
+        document,
+        scanned_by=current_user.get("id"),
+        device_id=device_id or current_user.get("device_id"),
+    )
+
+
+@router.get("/scans")
+async def list_document_scans(
+    minutes: int = Query(default=SCAN_WINDOW_MINUTES, ge=1, le=1440),
+    include_acknowledged: bool = Query(default=False),
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Oxirgi skanerlar — veb ekranidagi kuzatuvchi shuni o'qiydi."""
+    hotel_id = _require_reception(current_user)
+    return await DocumentScanService(session).recent(
+        hotel_id,
+        minutes=minutes,
+        include_acknowledged=include_acknowledged,
+        limit=limit,
+    )
+
+
+@router.post("/scans/{scan_id}/ack")
+async def acknowledge_document_scan(
+    scan_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Skanerni ko'rib chiqilgan deb belgilaydi — ro'yxatdan chiqadi."""
+    hotel_id = _require_reception(current_user)
+    return await DocumentScanService(session).acknowledge(
+        scan_id, hotel_id, current_user.get("id")
     )

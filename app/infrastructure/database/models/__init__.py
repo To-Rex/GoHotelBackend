@@ -14,6 +14,7 @@ from app.infrastructure.database.models.service import Service, HotelService, Re
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.checklist_item import ChecklistItem
 from app.infrastructure.database.models.checklist_template import ChecklistTemplate
+from app.infrastructure.database.models.document_scan import DocumentScan
 from app.infrastructure.database.models.incoming_call import IncomingCall
 # Boshqaruv paneli jadvali — alohida modulda, lekin bitta Base ustida
 from app.superadmin.models import PanelUser
