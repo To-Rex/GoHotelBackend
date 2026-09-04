@@ -65,6 +65,17 @@ async def delete_file(bucket: str, object_path: str) -> bool:
         return False
 
 
+async def open_file_stream(bucket: str, object_path: str):
+    """Faylni to'liq xotiraga olmasdan oqim bilan o'qish uchun ochadi.
+
+    Katta o'rnatish fayllari (APK, EXE) uchun: `download_file` butun
+    faylni xotiraga olardi. Chaqiruvchi javob obyektini o'qib bo'lgach
+    `close()` va `release_conn()` qilishi SHART.
+    """
+    client = get_minio_client()
+    return await asyncio.to_thread(client.get_object, bucket, object_path)
+
+
 async def download_file(bucket: str, object_path: str) -> bytes:
     client = get_minio_client()
     response = await asyncio.to_thread(client.get_object, bucket, object_path)

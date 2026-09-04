@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.presentation.api.v1 import (
+    apps,
     auth,
     hotels,
     branches,
@@ -51,6 +52,7 @@ api_router.include_router(finance.router, prefix="/finance", tags=["Finance"])
 api_router.include_router(reports.router, prefix="/reports", tags=["Reports"])
 api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["Audit Logs"])
 api_router.include_router(files.router, prefix="/files", tags=["Files"])
+api_router.include_router(apps.router, prefix="/apps", tags=["App Store"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])
 api_router.include_router(amenities.router, prefix="/amenities", tags=["Amenities"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Mobile Tasks"])

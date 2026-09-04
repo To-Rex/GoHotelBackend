@@ -9,13 +9,16 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Path, Query
+from fastapi import APIRouter, Depends, File, Form, Header, Path, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import UnauthorizedException
 from app.superadmin import security
+from app.application.services.app_store_service import AppStoreService
+from app.presentation.api.v1.apps import download_headers
 from app.superadmin.estate_service import EstateService
 from app.superadmin.insight_service import InsightService
 from app.superadmin.models import PanelUser
@@ -414,3 +417,71 @@ async def guests(
 ):
     """Mehmonlar bazasi — barcha mehmonxonalar uchun umumiy."""
     return await InsightService(session).guests(search=search, limit=limit)
+
+
+# -------------------------------------------------- dasturlar do'koni --
+
+
+@router.get("/apps")
+async def list_app_releases(
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Do'kondagi barcha fayllar — yuklab olishlar soni bilan."""
+    return await AppStoreService(session).list()
+
+
+@router.post("/apps")
+async def upload_app_release(
+    platform: str = Form(),
+    name: str = Form(),
+    version: str | None = Form(default=None),
+    notes: str | None = Form(default=None),
+    file: UploadFile = File(),
+    session: AsyncSession = Depends(get_db),
+    actor: PanelUser = Depends(current_panel_user),
+):
+    """Yangi dastur faylini do'konga qo'shadi.
+
+    Fayl MinIO'ga yoziladi; mehmonxona administratorlari uni o'z
+    tizimidagi "Ilovalar" sahifasidan yuklab oladi.
+    """
+    content = await file.read()
+    return await AppStoreService(session).create(
+        platform=platform,
+        name=name,
+        version=version,
+        notes=notes,
+        filename=file.filename or "app.bin",
+        content=content,
+        content_type=file.content_type,
+        uploaded_by=actor.id,
+    )
+
+
+@router.delete("/apps/{app_id}")
+async def delete_app_release(
+    app_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Fayl MinIO'dan ham, ro'yxatdan ham olib tashlanadi."""
+    await AppStoreService(session).delete(app_id)
+    return {"deleted": True}
+
+
+@router.get("/apps/{app_id}/download")
+async def download_app_release(
+    app_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Tekshirish uchun paneldan ham yuklab olish mumkin.
+
+    Panelning yuklashi hisobga QO'SHILMAYDI — hisob mehmonxonalarga
+    qancha tarqalganini ko'rsatishi kerak.
+    """
+    meta, chunks = await AppStoreService(session).stream(app_id)
+    return StreamingResponse(
+        chunks, media_type=meta["mime_type"], headers=download_headers(meta)
+    )
