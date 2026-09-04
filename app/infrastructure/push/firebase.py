@@ -30,6 +30,37 @@ _lock = Lock()
 # Diagnostika uchun: init nima sababdan o'chganini eslab qolamiz (health endpoint).
 _last_error: str | None = None
 
+#: Panel orqali yuklangan kalit (JSON matni) — env va fayldan USTUN.
+#: Server ko'tarilganda bazadan shu yerga qo'yiladi, panel almashtirsa
+#: darhol yangilanadi.
+_credential_override: str | None = None
+
+
+def set_credential_override(raw_json: str | None) -> None:
+    """Panel boshqaradigan kalitni o'rnatadi (None — olib tashlaydi)."""
+    global _credential_override
+    _credential_override = raw_json
+
+
+def reload() -> None:
+    """Kalit almashganda Firebase'ni QAYTA ishga tushiradi — restartsiz.
+
+    Eski ilova yopiladi, keyingi yuborishda yangi kalit bilan lazy-init
+    bo'ladi. Xato bo'lsa diagnostika orqali ko'rinadi.
+    """
+    global _app, _init_done, _last_error
+    with _lock:
+        if _app is not None:
+            try:
+                import firebase_admin
+
+                firebase_admin.delete_app(_app)
+            except Exception:  # noqa: BLE001
+                logger.exception("Eski Firebase ilovasini yopib bo'lmadi")
+        _app = None
+        _init_done = False
+        _last_error = None
+
 
 def _load_credential():
     """firebase_admin credentials.Certificate uchun kirish qiymatini tayyorlaydi.
@@ -39,6 +70,15 @@ def _load_credential():
     """
     global _last_error
     from firebase_admin import credentials
+
+    # Panel orqali yuklangan kalit hamma manbadan ustun
+    if _credential_override:
+        try:
+            return credentials.Certificate(json.loads(_credential_override))
+        except Exception as exc:  # noqa: BLE001
+            _last_error = f"Panel orqali yuklangan kalit yaroqsiz: {exc}"
+            logger.error(_last_error)
+            return None
 
     raw = settings.FIREBASE_CREDENTIALS_JSON
     if raw and raw.strip():
@@ -105,7 +145,9 @@ def diagnostics() -> dict:
     """Push konfiguratsiyasi holati (health/diagnostika endpointi uchun)."""
     configured = _init() is not None
     source = "none"
-    if settings.FIREBASE_CREDENTIALS_JSON and settings.FIREBASE_CREDENTIALS_JSON.strip():
+    if _credential_override:
+        source = "panel"
+    elif settings.FIREBASE_CREDENTIALS_JSON and settings.FIREBASE_CREDENTIALS_JSON.strip():
         source = "env(FIREBASE_CREDENTIALS_JSON)"
     elif settings.FIREBASE_CREDENTIALS_FILE and os.path.isfile(
         settings.FIREBASE_CREDENTIALS_FILE

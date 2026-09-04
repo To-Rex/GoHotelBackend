@@ -24,6 +24,10 @@ async def lifespan(app: FastAPI):
     engine = _get_engine()
     async with engine.begin() as conn:
         pass
+    # Panel orqali yuklangan Firebase kaliti (bo'lsa) qo'llanadi
+    from app.superadmin.push_config_service import apply_stored_credentials
+
+    await apply_stored_credentials()
     # Bron chiqishini avtomatlashtiruvchi fon vazifasini ishga tushiramiz
     start_scheduler()
     yield

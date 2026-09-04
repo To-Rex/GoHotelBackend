@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,4 +54,28 @@ class PanelUser(UUIDPrimaryKeyMixin, Base):
     )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+class PanelSetting(UUIDPrimaryKeyMixin, Base):
+    """Panel darajasidagi sozlama — nomi bo'yicha yagona yozuv.
+
+    Hozircha bitta iste'molchisi bor: Firebase kaliti (`firebase_credentials`).
+    Qiymat SHIFRLANGAN holda yotadi (`push_config_service` dagi izohga
+    qarang) — bazaga kirgan odam sirni o'qiy olmaydi.
+    """
+
+    __tablename__ = "panel_settings"
+
+    name: Mapped[str] = mapped_column(
+        String(100), nullable=False, unique=True, index=True
+    )
+    #: Fernet bilan shifrlangan qiymat.
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+
+    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("panel_users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

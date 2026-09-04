@@ -21,7 +21,9 @@ from app.application.services.app_store_service import AppStoreService
 from app.presentation.api.v1.apps import download_headers
 from app.superadmin.estate_service import EstateService
 from app.superadmin.insight_service import InsightService
+from app.infrastructure.push import firebase as push_firebase
 from app.superadmin.models import PanelUser
+from app.superadmin.push_config_service import PushConfigService
 from app.superadmin.service import PanelAuthService
 
 router = APIRouter()
@@ -485,3 +487,65 @@ async def download_app_release(
     return StreamingResponse(
         chunks, media_type=meta["mime_type"], headers=download_headers(meta)
     )
+
+
+# ------------------------------------------------- push (Firebase) --
+
+
+class PushCredentialsRequest(BaseModel):
+    """Service-account kaliti — xom JSON yoki base64."""
+
+    credentials: str = Field(min_length=20, max_length=20000)
+
+
+class PushTestRequest(BaseModel):
+    fcm_token: str = Field(min_length=10, max_length=4096)
+
+
+@router.get("/push")
+async def push_status(
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Push holati: kalit manbai, sozlanganmi, oxirgi xato."""
+    return await PushConfigService(session).status()
+
+
+@router.post("/push/credentials")
+async def save_push_credentials(
+    data: PushCredentialsRequest,
+    session: AsyncSession = Depends(get_db),
+    actor: PanelUser = Depends(current_panel_user),
+):
+    """Firebase kalitini saqlaydi va push'ni RESTARTSIZ qayta ishga tushiradi.
+
+    Kalit bazada shifrlangan holda yotadi va server qayta ko'tarilganda
+    ham qo'llanadi. Env/fayl kalitidan ustun turadi.
+    """
+    return await PushConfigService(session).save(data.credentials, actor.id)
+
+
+@router.delete("/push/credentials")
+async def delete_push_credentials(
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Panel kalitini o'chiradi — tizim env/fayl kalitiga qaytadi."""
+    return await PushConfigService(session).delete()
+
+
+@router.post("/push/test")
+async def send_test_push(
+    data: PushTestRequest,
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Berilgan FCM tokenga sinov push yuboradi — kalit ishlayotganini
+    darhol tekshirish uchun."""
+    sent = await push_firebase.send_push(
+        data.fcm_token,
+        "GoHotel — sinov",
+        "Push sozlamasi ishlayapti",
+        data={"kind": "panel_test"},
+    )
+    return {"sent": sent}
+
