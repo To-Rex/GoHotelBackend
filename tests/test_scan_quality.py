@@ -126,5 +126,12 @@ check(
     1400,
 )
 
+print("--- rejim normalizatsiyasi ---")
+check("auto", service.normalize_mode("auto"), "auto")
+check("katta harf ham", service.normalize_mode("MRZ"), "mrz")
+check("visual", service.normalize_mode(" visual "), "visual")
+check("noma'lum qiymat autoga tushadi", service.normalize_mode("hammasi"), "auto")
+check("bo'sh qiymat", service.normalize_mode(None), "auto")
+
 print(f"\nJami: {ok} ok, {fail} xato")
 raise SystemExit(1 if fail else 0)

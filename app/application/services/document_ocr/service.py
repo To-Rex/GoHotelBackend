@@ -41,6 +41,17 @@ MIN_WIDTH = 500
 #: mumkin, qayta olingan tiniq kadr esa to'g'ri o'qiladi.
 BLUR_THRESHOLD = 15.0
 
+#: Skaner rejimlari: auto — avval MRZ, bo'lmasa vizual; mrz — faqat MRZ
+#: (eng tez va eng ishonchli, bosma maydonlar o'qilmaydi); visual — faqat
+#: bosma tomon (MRZ'siz yoki MRZ'i o'chgan hujjatlar uchun).
+SCAN_MODES = ("auto", "mrz", "visual")
+
+
+def normalize_mode(value: str | None) -> str:
+    mode = (value or "").strip().lower()
+    return mode if mode in SCAN_MODES else "auto"
+
+
 _MRZ_BANDS = {
     # (yuqori chegara, qatorlar soni) — hujjat turiga qarab
     "ID_CARD": [(0.55, 3), (0.42, 3)],
@@ -247,19 +258,39 @@ def regions_source(image: np.ndarray, document_type: str, mrz_result) -> np.ndar
     return image
 
 
-def read_side(image_bytes: bytes, document_type: str, side: str) -> SideReading:
+def read_side(
+    image_bytes: bytes, document_type: str, side: str, mode: str = "auto"
+) -> SideReading:
     """Bitta rasmni o'qiydi: MRZ (bo'lsa) va bosma maydonlar.
 
     ID kartaning old tomonida MRZ yo'q, orqasida esa bosma maydon deyarli yo'q;
-    passport sahifasida ikkalasi ham bor. Shuning uchun har tomonda ikkala
-    manba ham izlanadi va qaysi biri chiqsa, o'sha ishlatiladi.
+    passport sahifasida ikkalasi ham bor. Shuning uchun `auto` rejimda har
+    tomonda ikkala manba ham izlanadi va qaysi biri chiqsa, o'sha ishlatiladi.
+
+    Rejim ustun turadi: `mrz` — bosma maydonlar UMUMAN o'qilmaydi (deteksiya
+    faqat MRZ tez yo'ldan chiqmagandagina, zaxira sifatida ishlaydi);
+    `visual` — MRZ'ga umuman qaralmaydi. Sozlamadagi tanlov aynan shu
+    yerda kuchga kiradi — ilgari server rejimni e'tiborsiz qoldirardi.
     """
+    mode = normalize_mode(mode)
     image = rectify(_decode(image_bytes), document_type)
     reading = SideReading(side=side)
 
-    if side != "front":
+    if side != "front" and mode != "visual":
         # Eng tez yo'l: MRZ joyi ma'lum, deteksiya kerak emas
         reading.mrz = read_mrz_fast(image, document_type)
+
+    if mode == "mrz":
+        # Faqat MRZ: deteksiya zaxira sifatida, MRZ qatorlarini izlash uchun
+        if side != "front" and (reading.mrz is None or not reading.mrz.verified):
+            regions = engine.read_regions(image)
+            texts = [r["text"] for r in regions if mrz.looks_like_mrz(r["text"])]
+            from_regions = mrz.parse_lines(texts) if texts else None
+            if from_regions and (
+                reading.mrz is None or from_regions.score > reading.mrz.score
+            ):
+                reading.mrz = from_regions
+        return reading
 
     # Passportda bosma maydonlar ham kerak (otasining ismi, fuqarolik), ID
     # kartaning orqasida esa MRZ tez yo'ldan chiqmasa qutilar bo'yicha izlanadi.
@@ -272,7 +303,7 @@ def read_side(image_bytes: bytes, document_type: str, side: str) -> SideReading:
         )
         if regions:
             reading.printed = visual.parse_regions(regions)
-            if side != "front":
+            if side != "front" and mode != "visual":
                 texts = [r["text"] for r in regions if mrz.looks_like_mrz(r["text"])]
                 from_regions = mrz.parse_lines(texts) if texts else None
                 if from_regions and (
@@ -290,7 +321,9 @@ def _confidence_for(name: str, sources: list[str], verified: bool) -> float:
     return 0.65
 
 
-def scan_document(images: dict[str, bytes], document_type: str = "ID_CARD") -> dict:
+def scan_document(
+    images: dict[str, bytes], document_type: str = "ID_CARD", mode: str = "auto"
+) -> dict:
     """Hujjatni to'liq o'qiydi va tekshiradi.
 
     `images` — {"front": ..., "back": ...} (ID karta) yoki {"passport": ...}.
@@ -301,7 +334,11 @@ def scan_document(images: dict[str, bytes], document_type: str = "ID_CARD") -> d
     Raises:
         ValueError("BAD_IMAGE" | "IMAGE_TOO_SMALL" | "NO_TEXT")
     """
-    readings = {side: read_side(data, document_type, side) for side, data in images.items()}
+    mode = normalize_mode(mode)
+    readings = {
+        side: read_side(data, document_type, side, mode)
+        for side, data in images.items()
+    }
     if not readings:
         raise ValueError("BAD_IMAGE")
 
@@ -317,6 +354,10 @@ def scan_document(images: dict[str, bytes], document_type: str = "ID_CARD") -> d
     printed_reading = readings.get("front") or readings.get("passport") or mrz_reading
     printed_fields = printed_reading.printed_fields if printed_reading else {}
 
+    if mode == "mrz" and not mrz_fields:
+        # Rejim faqat MRZ deydi-yu, MRZ topilmadi — taxminiy vizual natija
+        # bilan aldamaymiz, foydalanuvchi kadrni to'g'rilab qayta oladi
+        raise ValueError("MRZ_NOT_FOUND")
     if not mrz_fields and not printed_fields:
         raise ValueError("NO_TEXT")
 
@@ -357,7 +398,7 @@ def scan_document(images: dict[str, bytes], document_type: str = "ID_CARD") -> d
                 verify.WARN,
                 "Mustaqil manba tasdiqlamadi — qiymatni hujjat bilan solishtiring",
             )
-    else:
+    elif mode != "visual":
         verification.add(
             "mrz.present",
             "MRZ o‘qilmadi",

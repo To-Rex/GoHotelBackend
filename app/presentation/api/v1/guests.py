@@ -137,6 +137,7 @@ async def scan_document(
     back: UploadFile | None = File(default=None),
     file: UploadFile | None = File(default=None),
     side: Literal["front", "back", "passport"] = Form(default="front"),
+    session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Hujjat rasm(lar)ini o'qib, maydonlarni va tekshiruvlar ro'yxatini qaytaradi.
@@ -167,7 +168,12 @@ async def scan_document(
         # Eski chaqiruv shakli: bitta `file` va `side`
         images[side] = single_bytes
 
-    return await intake.run_scan(images, document_type)
+    # Sozlamadagi rejim SERVERDA ham kuchga kiradi — ilgari u faqat
+    # qurilmadagi OCR'ga ta'sir qilib, server doim "auto" ishlardi
+    h_id = _get_hotel_id(current_user)
+    hotel = await session.get(Hotel, h_id) if h_id else None
+    mode = _resolve_scan(hotel.settings if hotel else None)["mode"]
+    return await intake.run_scan(images, document_type, mode)
 
 
 @router.get("/", response_model=list[GuestResponse])

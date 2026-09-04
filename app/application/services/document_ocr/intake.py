@@ -35,6 +35,10 @@ ERROR_MESSAGES = {
     "IMAGE_BLURRY": (
         "Rasm xira chiqdi — telefonni qimirlatmay, qayta suratga oling"
     ),
+    "MRZ_NOT_FOUND": (
+        "MRZ o'qilmadi — hujjat pastidagi ikki qator ramkada to'liq va "
+        "tiniq ko'rinsin (yoki sozlamada rejimni 'auto'ga qaytaring)"
+    ),
 }
 
 
@@ -101,7 +105,9 @@ async def read_image(file, label: str) -> bytes | None:
     return content
 
 
-async def run_scan(images: dict[str, bytes], document_type: str) -> dict:
+async def run_scan(
+    images: dict[str, bytes], document_type: str, mode: str = "auto"
+) -> dict:
     """OCR'ni ishga tushiradi va xatolarni foydalanuvchi tiliga o'giradi.
 
     OCR og'ir va sinxron — u alohida oqimda bajariladi, aks holda bitta
@@ -115,7 +121,7 @@ async def run_scan(images: dict[str, bytes], document_type: str) -> dict:
     async with _scan_limiter:
         try:
             return await anyio.to_thread.run_sync(
-                ocr_service.scan_document, images, document_type
+                ocr_service.scan_document, images, document_type, mode
             )
         except ValueError as exc:
             code = str(exc)

@@ -205,7 +205,14 @@ async def submit_document_scan(
     if back_bytes:
         images["back"] = back_bytes
 
-    document = await intake.run_scan(images, document_type)
+    # Sozlamadagi skaner rejimi (mrz/visual/auto) telefon skaneriga ham
+    # birdek amal qiladi
+    from app.infrastructure.database.models.hotel import Hotel
+    from app.presentation.api.v1.guests import _resolve_scan
+
+    hotel = await session.get(Hotel, hotel_id)
+    mode = _resolve_scan(hotel.settings if hotel else None)["mode"]
+    document = await intake.run_scan(images, document_type, mode)
     return await DocumentScanService(session).record(
         hotel_id,
         document,
