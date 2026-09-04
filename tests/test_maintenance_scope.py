@@ -5,9 +5,27 @@ undan tushib qolgan jadval jimgina eski ma'lumot bo'lib qoladi — yoki, tashqi
 kalit bilan bog'langan bo'lsa, tozalashning o'zini yiqitadi.
 """
 from app.application.services.maintenance_service import (
+    FILE_ENTITY_TYPES,
     HOTEL_SCOPED_TABLES,
     MaintenanceService,
 )
+
+
+def test_guests_are_never_deleted():
+    """Mehmonlar bazasi GLOBAL va tozalashdan tashqarida.
+
+    Bu mehmonxona yaratgan mehmonning boshqa mehmonxonada broni bo'lishi
+    mumkin — o'chirishga urinish RESTRICT tufayli 500 berardi. Qoida esa
+    undan ham keng: mehmon hech qachon o'chirilmaydi, fayllari ham.
+    """
+    assert "guests" not in HOTEL_SCOPED_TABLES
+    assert "guest" not in FILE_ENTITY_TYPES
+
+
+def test_reception_journals_are_cleared():
+    """Qo'ng'iroqlar va telefon skanerlari operatsion tarixga kiradi."""
+    assert "incoming_calls" in HOTEL_SCOPED_TABLES
+    assert "document_scans" in HOTEL_SCOPED_TABLES
 
 
 def test_shift_history_is_cleared_with_operational_data():
@@ -33,6 +51,7 @@ def test_hotel_structure_survives_an_operational_reset():
     protected = {
         "hotels", "branches", "floors", "rooms", "room_types",
         "services", "hotel_services", "amenities", "users", "permissions",
+        "guests",
     }
     assert protected.isdisjoint(HOTEL_SCOPED_TABLES)
 

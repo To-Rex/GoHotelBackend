@@ -21,6 +21,7 @@ from app.core.exceptions import (
     NotFoundException,
     ValidationException,
 )
+from app.infrastructure.database.models.audit_log import AuditLog
 from app.infrastructure.database.models.branch import Branch
 from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.hotel import Hotel

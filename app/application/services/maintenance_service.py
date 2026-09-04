@@ -4,9 +4,18 @@
 Barcha o'chirishlar BITTA mehmonxona doirasida (hotel_id bo'yicha) bajariladi —
 boshqa mehmonxonalar ma'lumotlariga tegilmaydi. Ikki rejim:
 
-- operational: bronlar, moliya, mehmonlar, xo'jalik vazifalari, smenalar va
+- operational: bronlar, moliya, xo'jalik vazifalari, smenalar va
   kassa sessiyalari, tarix va bildirishnomalar o'chiriladi. Xodimlar, ruxsatlar
   va mehmonxona tuzilmasi (filial/qavat/xona/turlar/xizmatlar) saqlanadi.
+
+MEHMONLAR HECH QACHON O'CHIRILMAYDI. Mehmonlar bazasi butun tizim uchun
+umumiy (global): bu mehmonxona yaratgan mehmonning boshqa mehmonxonada
+broni yoki hisob-fakturasi bo'lishi mumkin — o'chirishga urinish tashqi
+kalit (RESTRICT) tufayli butun tozalashni yiqitardi. Bundan tashqari bu
+qasddan qilingan qaror: mehmon tarixi mehmonxonaga emas, mehmonning
+o'ziga tegishli va mehmonxona to'xtatilsa/tozalansa ham yashashda davom
+etadi. Mehmonning hujjat fayllari va yuz profili ham shu sababdan
+saqlanadi.
 - full: yuqoridagilarga qo'shimcha barcha EMPLOYEE xodimlar (ruxsat
   biriktiruvlari va sessiyalari bilan) ham o'chiriladi. ADMIN/SUPER_ADMIN
   hisoblari hech qachon o'chirilmaydi — tizimga kirish saqlanib qoladi.
@@ -28,8 +37,11 @@ HOTEL_SCOPED_TABLES = [
     "journal_entries",
     "invoices",
     "reservations",
-    "guests",
     "notifications",
+    # Qabulxona jurnallari — qo'ng'iroqlar va telefon skanerlari ham
+    # operatsion tarix (mehmonga ishorasi SET NULL, o'zi bemalol o'chadi)
+    "incoming_calls",
+    "document_scans",
     "audit_logs",
     "reports",
     "room_status_history",
@@ -55,8 +67,9 @@ HOTEL_SCOPED_TABLES = [
     "shift_sessions",
 ]
 
-# Faqat operatsion fayllar; mehmonxonaning o'z fayllari ('Hotel') saqlanadi
-FILE_ENTITY_TYPES = ["guest", "task", "task_report", "problem"]
+# Faqat operatsion fayllar; mehmonxonaning o'z fayllari ('Hotel') va
+# mehmon hujjatlari ('guest' — mehmon bilan birga yashaydi) saqlanadi
+FILE_ENTITY_TYPES = ["task", "task_report", "problem"]
 
 
 class MaintenanceService:
