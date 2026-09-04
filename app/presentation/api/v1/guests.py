@@ -3,7 +3,6 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -68,30 +67,9 @@ class ScanSettingsRequest(BaseModel):
 _server_ocr_available = intake.server_ocr_available
 
 
-_ocr_warm_up_started = False
-
-
-def _start_ocr_warm_up() -> None:
-    """Modellarni fonda yuklaydi — birinchi skan model kutib turmasligi uchun.
-
-    Skaner dialogi ochilganda sozlama so'raladi, ya'ni bu chaqiruv aynan
-    skanerlashdan bir necha soniya oldin keladi — modelni yuklashning eng
-    qulay payti.
-    """
-    global _ocr_warm_up_started
-    if _ocr_warm_up_started:
-        return
-    _ocr_warm_up_started = True
-    try:
-        import asyncio
-
-        from app.application.services.document_ocr import engine as ocr_engine
-
-        asyncio.get_running_loop().create_task(
-            anyio.to_thread.run_sync(ocr_engine.warm_up)
-        )
-    except Exception:  # noqa: BLE001
-        _ocr_warm_up_started = False
+#: Qizdirish mantiqiy jihatdan skanerning bir qismi — `intake` da turadi
+#: va telefon yo'li bilan umumiy.
+_start_ocr_warm_up = intake.start_warm_up
 
 
 def _resolve_scan(settings: dict | None) -> dict:

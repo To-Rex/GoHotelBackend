@@ -225,6 +225,28 @@ class SideReading:
         return {k: v for k, v in (self.printed.fields.items() if self.printed else []) if v}
 
 
+def regions_source(image: np.ndarray, document_type: str, mrz_result) -> np.ndarray:
+    """To'liq o'tish (deteksiya) qaysi qismda ishlashini tanlaydi.
+
+    Passportda MRZ nazorat raqamlari TOZA o'tgan bo'lsa, pastdagi MRZ
+    bandini qayta o'qishning hojati yo'q — undagi hamma maydon allaqachon
+    tasdiqlangan. Deteksiya faqat bosma qismda (sahifaning yuqori 62%)
+    ishlaydi: eng og'ir qatorlar (44 belgili MRZ) o'qilmaydi va skan
+    sezilarli tezlashadi. Bosma maydonlar (otasining ismi, fuqarolik)
+    o'sha yuqori qismda — hech narsa yo'qolmaydi.
+
+    MRZ tasdiqlanmagan yoki umuman topilmagan bo'lsa, butun rasm
+    o'qiladi — avvalgidek.
+    """
+    if (
+        document_type == "PASSPORT"
+        and mrz_result is not None
+        and mrz_result.verified
+    ):
+        return image[: int(image.shape[0] * 0.62)]
+    return image
+
+
 def read_side(image_bytes: bytes, document_type: str, side: str) -> SideReading:
     """Bitta rasmni o'qiydi: MRZ (bo'lsa) va bosma maydonlar.
 
@@ -245,7 +267,9 @@ def read_side(image_bytes: bytes, document_type: str, side: str) -> SideReading:
         reading.mrz is None or not reading.mrz.verified
     )
     if need_regions:
-        regions = engine.read_regions(image)
+        regions = engine.read_regions(
+            regions_source(image, document_type, reading.mrz)
+        )
         if regions:
             reading.printed = visual.parse_regions(regions)
             if side != "front":

@@ -92,6 +92,9 @@ async def list_bookings(
     `arrival` / `inhouse` / `departure`.
     """
     hotel_id = _require_reception(current_user)
+    # Qabulxona ilovasi ochildi — tez orada hujjat skanerlanishi mumkin.
+    # Modellar hozirdan fonda yuklansa, birinchi skan kutib turmaydi.
+    intake.start_warm_up()
     return await ReceptionService(session).bookings(
         hotel_id,
         day or _local_today(),

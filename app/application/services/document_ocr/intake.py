@@ -62,6 +62,33 @@ def require_server_ocr() -> None:
         )
 
 
+_warm_up_started = False
+
+
+def start_warm_up() -> None:
+    """Modellarni fonda yuklaydi — birinchi skan model kutib turmasligi uchun.
+
+    Veb skanerida bu sozlama so'ralganda ishga tushadi; telefon yo'lida
+    esa qabulxona ilovasi ochilib bronlarni so'raganda — ya'ni birinchi
+    skanerlashdan ancha oldin. Bir marta ishlaydi, dvigatel bo'lmagan
+    serverda esa hech narsa qilmaydi.
+    """
+    global _warm_up_started
+    if _warm_up_started or not server_ocr_available():
+        return
+    _warm_up_started = True
+    try:
+        import asyncio
+
+        from app.application.services.document_ocr import engine as ocr_engine
+
+        asyncio.get_running_loop().create_task(
+            anyio.to_thread.run_sync(ocr_engine.warm_up)
+        )
+    except Exception:  # noqa: BLE001
+        _warm_up_started = False
+
+
 async def read_image(file, label: str) -> bytes | None:
     """Yuklangan faylni o'qiydi va hajmini tekshiradi."""
     if file is None:

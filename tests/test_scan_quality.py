@@ -91,5 +91,40 @@ check(
     True,
 )
 
+print("--- deteksiya manbai (tezlik uchun qirqish) ---")
+
+
+class FakeMrz:
+    def __init__(self, verified):
+        self.verified = verified
+
+
+page = np.full((1000, 1400, 3), 235, np.uint8)
+check(
+    "passport + tasdiqlangan MRZ: faqat yuqori qism",
+    service.regions_source(page, "PASSPORT", FakeMrz(True)).shape[0],
+    620,
+)
+check(
+    "tasdiqlanmagan MRZ: butun rasm",
+    service.regions_source(page, "PASSPORT", FakeMrz(False)).shape[0],
+    1000,
+)
+check(
+    "MRZ topilmagan: butun rasm",
+    service.regions_source(page, "PASSPORT", None).shape[0],
+    1000,
+)
+check(
+    "ID karta har doim to'liq o'qiladi",
+    service.regions_source(page, "ID_CARD", FakeMrz(True)).shape[0],
+    1000,
+)
+check(
+    "eni o'zgarmaydi",
+    service.regions_source(page, "PASSPORT", FakeMrz(True)).shape[1],
+    1400,
+)
+
 print(f"\nJami: {ok} ok, {fail} xato")
 raise SystemExit(1 if fail else 0)
