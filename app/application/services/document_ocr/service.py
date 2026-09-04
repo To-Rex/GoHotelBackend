@@ -33,6 +33,14 @@ logger = logging.getLogger(__name__)
 MAX_WIDTH = 1600
 MIN_WIDTH = 500
 
+#: Laplas dispersiyasi shundan past bo'lsa rasm xira deb qaytariladi.
+#: Chegara ATAYLAB juda past: matnli hujjatda odatda 100+ chiqadi, faqat
+#: chinakam silkinib olingan kadr shundan pastga tushadi. Xira kadrni
+#: o'qishga urinishdan ko'ra foydalanuvchidan qayta olishni so'rash
+#: aniqlikni ko'proq oshiradi — xato o'qilgan maydonni hech kim sezmasligi
+#: mumkin, qayta olingan tiniq kadr esa to'g'ri o'qiladi.
+BLUR_THRESHOLD = 15.0
+
 _MRZ_BANDS = {
     # (yuqori chegara, qatorlar soni) — hujjat turiga qarab
     "ID_CARD": [(0.55, 3), (0.42, 3)],
@@ -50,6 +58,12 @@ def _decode(image_bytes: bytes) -> np.ndarray:
     if width > MAX_WIDTH:
         scale = MAX_WIDTH / width
         image = cv2.resize(image, (MAX_WIDTH, int(round(height * scale))), interpolation=cv2.INTER_AREA)
+
+    # Silkinib olingan kadr eng ko'p xatoning manbai: undan o'qilgan qiymat
+    # ko'pincha "deyarli to'g'ri" chiqadi va tekshiruvdan sezilmay o'tadi.
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if float(cv2.Laplacian(gray, cv2.CV_64F).var()) < BLUR_THRESHOLD:
+        raise ValueError("IMAGE_BLURRY")
     return image
 
 
@@ -156,21 +170,41 @@ def mrz_band_lines(image: np.ndarray, top_fraction: float, count: int) -> list[n
     ]
 
 
+def _clahe(image: np.ndarray) -> np.ndarray:
+    """Kontrasti past kadr uchun mahalliy kontrast kuchaytirish.
+
+    Xira yoritilgan xonada olingan MRZ belgilar fondan ajralmay, model
+    ularni chalkashtiradi. CLAHE har kichik hududning o'z kontrastini
+    ko'taradi — soyaga tushgan band ham o'qiladigan bo'ladi.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    enhanced = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(gray)
+    return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+
+
 def read_mrz_fast(image: np.ndarray, document_type: str) -> mrz.MrzResult | None:
-    """MRZ'ni deteksiyasiz o'qishga urinadi."""
+    """MRZ'ni deteksiyasiz o'qishga urinadi.
+
+    Ikki bosqich: avval asl kadr; nazorat raqamlari toza o'tmasa —
+    kontrasti kuchaytirilgan nusxada QAYTA. Ikkinchi urinish faqat kerak
+    bo'lgandagina ishlaydi, shuning uchun toza kadrlar avvalgidek tez
+    o'qiladi, muammolilari esa endi ko'proq tiklanadi.
+    """
     best: mrz.MrzResult | None = None
-    for top_fraction, count in _MRZ_BANDS.get(document_type, _MRZ_BANDS["ID_CARD"]):
-        crops = mrz_band_lines(image, top_fraction, count)
-        if len(crops) < count:
-            continue
-        texts = [text for text, _confidence in engine.recognize(crops)]
-        result = mrz.parse_lines(texts)
-        if result is None:
-            continue
-        if result.verified:
-            return result
-        if best is None or result.score > best.score:
-            best = result
+    for candidate in (image, None):
+        source = candidate if candidate is not None else _clahe(image)
+        for top_fraction, count in _MRZ_BANDS.get(document_type, _MRZ_BANDS["ID_CARD"]):
+            crops = mrz_band_lines(source, top_fraction, count)
+            if len(crops) < count:
+                continue
+            texts = [text for text, _confidence in engine.recognize(crops)]
+            result = mrz.parse_lines(texts)
+            if result is None:
+                continue
+            if result.verified:
+                return result
+            if best is None or result.score > best.score:
+                best = result
     return best
 
 

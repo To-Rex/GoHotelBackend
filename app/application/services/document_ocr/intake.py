@@ -32,6 +32,9 @@ ERROR_MESSAGES = {
     "BAD_IMAGE": "Rasm o'qilmadi",
     "IMAGE_TOO_SMALL": "Rasm juda kichik — hujjatni yaqinroqdan oling",
     "NO_TEXT": "Rasmda yozuv topilmadi — hujjatni ramkaga to'liq joylang",
+    "IMAGE_BLURRY": (
+        "Rasm xira chiqdi — telefonni qimirlatmay, qayta suratga oling"
+    ),
 }
 
 
