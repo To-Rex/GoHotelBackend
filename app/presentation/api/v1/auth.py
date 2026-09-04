@@ -94,6 +94,14 @@ async def logout(
 ):
     service = AuthService(session)
     await service.logout(current_user["jti"])
+    # Chiqqan foydalanuvchiga push bormasligi kerak — saqlangan FCM token
+    # o'chadi; keyingi kirishda mobil ilova yangisini ro'yxatdan o'tkazadi
+    from app.infrastructure.database.models.user import User
+
+    user = await session.get(User, current_user["id"])
+    if user is not None and user.fcm_token:
+        user.fcm_token = None
+        await session.flush()
     return {"message": "Logged out successfully"}
 
 
