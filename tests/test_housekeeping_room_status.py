@@ -262,7 +262,9 @@ def try_book(status, task_rows, check_in_delta=3):
 
 check("tozalashda + ochiq ta'mir", try_book("CLEANING", [("MAINTENANCE", None)]), "BLOKLANDI")
 check("bo'sh + ochiq tekshiruv", try_book("AVAILABLE", [("INSPECTION", None)]), "BLOKLANDI")
-check("tozalashda, vazifasiz — kelgusiga ochiq", try_book("CLEANING", []), "OK")
+check("bo'sh + ochiq tozalash vazifasi", try_book("AVAILABLE", [("CLEANING", None)]), "BLOKLANDI")
+# Tozalanayotgan xona endi kelgusi sanaga ham yopiq — tozalash tugagach ochiladi
+check("tozalashda, vazifasiz — baribir yopiq", try_book("CLEANING", []), "BLOKLANDI")
 check("bo'sh, vazifasiz", try_book("AVAILABLE", []), "OK")
 check(
     "kelgusi haftadagi ta'mir to'smaydi",

@@ -630,13 +630,14 @@ class ReservationService:
         return reservation
 
     async def _active_blocking_task(self, room_id: UUID) -> str | None:
-        """Xonadagi faol ta'mir/tekshiruv vazifasining turi (bo'lsa).
+        """Xonadagi faol xo'jalik vazifasining turi (bo'lsa).
 
-        Xona holati "tozalashda" yoki hatto "bo'sh" bo'lishi mumkin, lekin
-        unda OCHIQ ta'mir yoki tekshiruv VAZIFASI turgan bo'lsa — ish hali
-        tugamagan. Bunday xonaga bron ish yakunlangunga qadar yopiq.
+        Xona holati hatto "bo'sh" bo'lishi mumkin, lekin unda OCHIQ
+        vazifa — ta'mir, tekshiruv YOKI har qanday tozalash — turgan
+        bo'lsa, ish hali tugamagan va bron ish yakunlangunga qadar yopiq.
         Kelgusi sanaga rejalashtirilgan vazifa hisobga olinmaydi — u
         xonani hozirdan band qilmasligi kerak (mavjud qoida).
+        Og'irroq ish ustun: ta'mir > tekshiruv > tozalash.
         """
         local_today = (
             datetime.now(timezone.utc)
@@ -647,19 +648,20 @@ class ReservationService:
                 select(HousekeepingTask.task_type, HousekeepingTask.scheduled_date)
                 .where(
                     HousekeepingTask.room_id == room_id,
-                    HousekeepingTask.task_type.in_(["MAINTENANCE", "INSPECTION"]),
+                    HousekeepingTask.task_type.in_(
+                        ["MAINTENANCE", "INSPECTION", "CLEANING", "DEEP_CLEANING"]
+                    ),
                     HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
                 )
-                .limit(10)
+                .limit(20)
             )
         ).all()
         active = {
             t for t, sched in rows if sched is None or sched <= local_today
         }
-        if "MAINTENANCE" in active:
-            return "MAINTENANCE"
-        if "INSPECTION" in active:
-            return "INSPECTION"
+        for task_type in ("MAINTENANCE", "INSPECTION", "DEEP_CLEANING", "CLEANING"):
+            if task_type in active:
+                return task_type
         return None
 
     async def _assert_room_bookable(
@@ -673,15 +675,12 @@ class ReservationService:
     ) -> None:
         """Xona holati bu bronga yo'l qo'yadimi.
 
-        Ilgari faqat "har qanday vaqt uchun taqiqlangan" holatlar
-        tekshirilardi. Tozalanayotgan xonaga esa hozirning o'zi uchun bron
-        qilish mumkin edi: mehmon kalitni olib, hali tozalanmagan xonaga
-        kirardi.
-
-        Vaqtlar mahalliy devor soati bo'yicha solishtiriladi. `check_in_dt`
-        bazaga foydalanuvchi kiritgan devor soati sifatida tushadi (mintaqa
-        siljishisiz), shuning uchun "hozir" ham xuddi shunday olinadi —
-        `local_today` allaqachon shu usulda hisoblanadi.
+        To'rttala texnik holat (tozalanmoqda, ta'mirda, tekshiruvda,
+        xizmatdan tashqari) ham xonani BUTUNLAY yopadi — hech qanday
+        sanaga bron qilinmaydi. Farq faqat xabarda: tozalash o'zi tugab
+        xona ochiladi, qolganlarida holat almashtirilishi kerak. Bundan
+        tashqari faol xo'jalik VAZIFASI ham tekshiriladi — xona holati
+        "bo'sh" ko'rinsa ham ochiq ish bron qilishga yo'l qo'ymaydi.
         """
         status = room.current_status
         label = ROOM_STATUS_LABELS_UZ.get(status, status)
@@ -699,7 +698,12 @@ class ReservationService:
         # Ish yakunlanmaguncha bron yopiq — vazifa yopilgach o'zi ochiladi.
         blocking = await self._active_blocking_task(room.id)
         if blocking:
-            work = "ta'mirlash" if blocking == "MAINTENANCE" else "tekshiruv"
+            work = {
+                "MAINTENANCE": "ta'mirlash",
+                "INSPECTION": "tekshiruv",
+                "DEEP_CLEANING": "chuqur tozalash",
+                "CLEANING": "tozalash",
+            }.get(blocking, blocking)
             raise ConflictException(
                 f"{room.room_number}-xonada {work} ishi tugallanmagan — ish "
                 "yakunlangach bron qilish mumkin bo'ladi",
@@ -709,28 +713,14 @@ class ReservationService:
         if status not in ROOM_STATUS_BLOCKED_NOW:
             return
 
-        # Bron davri hozirgi paytni qamrab oladimi
-        now_wall = datetime.now(timezone.utc) + timedelta(
-            minutes=settings.APP_TZ_OFFSET_MINUTES
+        # Tozalanayotgan xona endi HAR QANDAY sanaga yopiq — kelgusiga ham.
+        # Tozalash tugab vazifa yopilgach xona o'zi ochiladi, shuning uchun
+        # bu taqiq qisqa umr ko'radi; xabar aynan shuni aytadi.
+        raise ConflictException(
+            f"{room.room_number}-xona hozir {label} — tozalash yakunlangach "
+            "bron qilish mumkin bo'ladi",
+            "ROOM_NOT_AVAILABLE",
         )
-        if booking_type == "HOURLY" and check_in_dt and check_out_dt:
-            start, end = check_in_dt, check_out_dt
-            if start.tzinfo is None:
-                start = start.replace(tzinfo=timezone.utc)
-            if end.tzinfo is None:
-                end = end.replace(tzinfo=timezone.utc)
-            covers_now = start <= now_wall < end
-        else:
-            today = now_wall.date()
-            covers_now = check_in <= today < check_out
-
-        if covers_now:
-            raise ConflictException(
-                f"{room.room_number}-xona hozir {label} — tozalash "
-                "yakunlangach bron qilish mumkin. Kelgusi sanalarga hozir ham "
-                "bron qilsa bo'ladi.",
-                "ROOM_NOT_AVAILABLE",
-            )
 
     async def create_reservation(
         self, hotel_id: UUID, branch_id: UUID, data: dict, created_by: UUID
