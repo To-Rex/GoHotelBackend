@@ -26,6 +26,8 @@ from app.superadmin.models import PanelUser
 from app.superadmin.push_config_service import PushConfigService
 from app.superadmin.service import PanelAuthService
 
+from app.superadmin import api_log
+
 router = APIRouter()
 
 
@@ -549,3 +551,29 @@ async def send_test_push(
     )
     return {"sent": sent}
 
+
+
+# --- So'rovlar jurnali (oxirgi 500 ta, faqat xotirada) -----------------
+
+
+@router.get("/api-logs")
+async def list_api_logs(
+    limit: int = Query(default=api_log.MAX_ENTRIES, ge=1, le=api_log.MAX_ENTRIES),
+    method: str | None = Query(default=None),
+    status: str | None = Query(default=None, description="2xx..5xx yoki aniq kod"),
+    q: str | None = Query(default=None, description="URL bo'yicha qidiruv"),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Backendga kelgan so'rovlar — url, tana, javob, holat, davomiylik.
+
+    Jurnal faqat xotirada: server qayta ko'tarilsa bo'shaydi, 500 tadan
+    eskisi o'z-o'zidan chiqib ketadi. Sir maydonlar niqoblangan.
+    """
+    return api_log.snapshot(limit=limit, method=method, status=status, q=q)
+
+
+@router.delete("/api-logs")
+async def clear_api_logs(_: PanelUser = Depends(current_panel_user)):
+    """Jurnalni tozalash — faqat xotiradagi yozuvlar o'chadi."""
+    api_log.clear()
+    return {"ok": True}

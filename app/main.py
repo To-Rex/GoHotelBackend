@@ -64,6 +64,14 @@ app.add_middleware(
     expose_headers=["X-Total-Count"],
 )
 
+# So'rovlar jurnali — panel uchun oxirgi 500 ta so'rov XOTIRADA turadi
+# (disk/baza yo'q, qayta ishga tushishda bo'shaydi). Faqat kichik JSON
+# tanalari o'qiladi, fayl yuklash va oqimlar tegilmaydi — performansega
+# ta'siri deyarli nol. Batafsil: app/superadmin/api_log.py
+from app.superadmin import api_log  # noqa: E402
+
+app.middleware("http")(api_log.middleware)
+
 
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
