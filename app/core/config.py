@@ -143,6 +143,19 @@ class AutomationSettings(BaseSettings):
     APP_TZ_OFFSET_MINUTES: int = 300
 
 
+class SmsSettings(BaseSettings):
+    """Xabarchi SMS xizmati (o'z Android telefon + SIM orqali yuboradi).
+
+    API kalitlari bu yerda EMAS — har filialning kaliti bazada shifrlangan
+    holda saqlanadi va sozlamalar sahifasidan kiritiladi. Bu yerda faqat
+    xizmat manzili.
+    """
+
+    SMS_API_BASE: str = (
+        "https://manager-xabar-web-udyrjh-9d78c6-13-140-185-49.sslip.io/api/v1"
+    )
+
+
 class Settings(
     AppSettings,
     DatabaseSettings,
@@ -154,6 +167,7 @@ class Settings(
     FirebaseSettings,
     AutomationSettings,
     WebAuthnSettings,
+    SmsSettings,
 ):
     model_config = SettingsConfigDict(
         env_file=".env",

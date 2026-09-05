@@ -27,6 +27,7 @@ from app.application.dto.reservation import (
     SettlePaymentRequest,
 )
 from app.application.dto.common import MessageResponse
+from app.application.services import sms_service
 from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel, require_open_shift
 
@@ -188,9 +189,13 @@ async def create_reservation(
     if not h_id:
         raise ForbiddenException("Hotel context required")
     service = ReservationService(session)
-    return await service.create_reservation(
+    reservation = await service.create_reservation(
         h_id, data.branch_id, data.model_dump(), current_user["id"]
     )
+    # Mijozga tasdiqlash SMS'i (filial kaliti bo'lsa) — fonda ketadi,
+    # xatosi bronni hech qachon buzmaydi
+    await sms_service.notify_booking_created(session, reservation)
+    return reservation
 
 
 @router.get("/calendar")
@@ -364,7 +369,7 @@ async def settle_payment(
     almashtirishdan keyingi narx farqini yopish uchun."""
     h_id = _get_hotel_id(current_user)
     service = ReservationService(session)
-    return await service.settle_payment(
+    updated = await service.settle_payment(
         h_id,
         reservation_id,
         data.amount,
@@ -372,6 +377,10 @@ async def settle_payment(
         data.direction,
         UUID(str(current_user["id"])),
     )
+    # Qo'shimcha to'lovda mijozga kvitansiya SMS'i (qaytarimda emas)
+    if data.direction == "PAY":
+        await sms_service.notify_payment(session, updated, float(data.amount))
+    return updated
 
 
 @router.post("/{reservation_id}/check-in", response_model=ReservationResponse)
