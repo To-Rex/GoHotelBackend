@@ -38,16 +38,17 @@ class FakeTask:
 
 
 class FakeResult:
-    def __init__(self, row):
-        self._row = row
+    def __init__(self, rows):
+        self._rows = rows
 
-    def first(self):
-        return self._row
+    def all(self):
+        return self._rows
 
 
 class FakeSession:
-    def __init__(self, other_active=None):
-        self.other_active = other_active
+    def __init__(self, other_rows=None):
+        #: Xonadagi BOSHQA faol vazifalar — (turi, rejalashtirilgan sana)
+        self.other_rows = list(other_rows or [])
         self.added = []
 
     def add(self, obj):
@@ -57,7 +58,7 @@ class FakeSession:
         pass
 
     async def execute(self, _stmt):
-        return FakeResult((uuid.uuid4(),) if self.other_active else None)
+        return FakeResult(list(self.other_rows))
 
 
 class FakeRoomRepo:
@@ -73,9 +74,9 @@ class FakeRoomRepo:
         return room
 
 
-def service(room, other_active=False):
+def service(room, other_rows=None):
     svc = HousekeepingService.__new__(HousekeepingService)
-    svc.session = FakeSession(other_active)
+    svc.session = FakeSession(other_rows)
     svc.room_repo = FakeRoomRepo(room)
     return svc
 
@@ -137,7 +138,7 @@ check("bugunga rejalashtirilgan", room.current_status, "MAINTENANCE")
 
 print("--- vazifa yopilganda ---")
 room = FakeRoom("MAINTENANCE")
-svc = service(room, other_active=False)
+svc = service(room)
 asyncio.run(
     svc._release_task_room_status(
         FakeTask("MAINTENANCE", room.id, status="COMPLETED"), HOTEL, USER
@@ -146,7 +147,7 @@ asyncio.run(
 check("oxirgi vazifa yopildi", room.current_status, "AVAILABLE")
 
 room = FakeRoom("MAINTENANCE")
-svc = service(room, other_active=True)
+svc = service(room, [("MAINTENANCE", None)])
 asyncio.run(
     svc._release_task_room_status(
         FakeTask("MAINTENANCE", room.id, status="COMPLETED"), HOTEL, USER
@@ -155,7 +156,7 @@ asyncio.run(
 check("boshqa ochiq vazifa bor", room.current_status, "MAINTENANCE")
 
 room = FakeRoom("MAINTENANCE")
-svc = service(room, other_active=False)
+svc = service(room)
 asyncio.run(
     svc._release_task_room_status(
         FakeTask("MAINTENANCE", room.id, status="CANCELLED"), HOTEL, USER
@@ -165,13 +166,109 @@ check("bekor qilindi", room.current_status, "AVAILABLE")
 
 # Xona boshqa holatga o'tib ketgan bo'lsa tegilmaydi
 room = FakeRoom("OCCUPIED")
-svc = service(room, other_active=False)
+svc = service(room)
 asyncio.run(
     svc._release_task_room_status(
         FakeTask("MAINTENANCE", room.id, status="COMPLETED"), HOTEL, USER
     )
 )
 check("xona oralig'ida band bo'lib qolgan", room.current_status, "OCCUPIED")
+
+print("--- tozalash tugadi, boshqa ish davom etmoqda ---")
+# Ta'mir hali ochiq — xona "Bo'sh" emas, "Ta'mirda" bo'ladi: aks holda
+# tugallanmagan ta'mirdagi xonaga bron qilish mumkin bo'lib qolardi
+room = FakeRoom("CLEANING")
+svc = service(room, [("MAINTENANCE", None)])
+asyncio.run(
+    svc._release_task_room_status(
+        FakeTask("CLEANING", room.id, status="COMPLETED"), HOTEL, USER
+    )
+)
+check("tozalash tugadi, ta'mir ochiq", room.current_status, "MAINTENANCE")
+
+room = FakeRoom("CLEANING")
+svc = service(room, [("INSPECTION", None)])
+asyncio.run(
+    svc._release_task_room_status(
+        FakeTask("CLEANING", room.id, status="COMPLETED"), HOTEL, USER
+    )
+)
+check("tozalash tugadi, tekshiruv ochiq", room.current_status, "INSPECTION")
+
+# Kelgusi haftaga rejalashtirilgan ta'mir xonani band qilmaydi
+room = FakeRoom("CLEANING")
+svc = service(room, [("MAINTENANCE", today + timedelta(days=7))])
+asyncio.run(
+    svc._release_task_room_status(
+        FakeTask("CLEANING", room.id, status="COMPLETED"), HOTEL, USER
+    )
+)
+check("kelgusi ta'mir to'sqinlik qilmaydi", room.current_status, "AVAILABLE")
+
+# Ta'mir tugadi, tozalash hali ochiq — xona tozalashga o'tadi
+room = FakeRoom("MAINTENANCE")
+svc = service(room, [("CLEANING", None)])
+asyncio.run(
+    svc._release_task_room_status(
+        FakeTask("MAINTENANCE", room.id, status="COMPLETED"), HOTEL, USER
+    )
+)
+check("ta'mir tugadi, tozalash ochiq", room.current_status, "CLEANING")
+
+# Chuqur tozalash ham CLEANING holatini talab qiladi — xona o'zgarmaydi
+room = FakeRoom("CLEANING")
+svc = service(room, [("DEEP_CLEANING", None)])
+asyncio.run(
+    svc._release_task_room_status(
+        FakeTask("CLEANING", room.id, status="COMPLETED"), HOTEL, USER
+    )
+)
+check("chuqur tozalash davom etmoqda", room.current_status, "CLEANING")
+
+print("--- bron: faol ta'mir vazifasi to'sadi ---")
+from app.application.services.reservation_service import ReservationService
+from app.core.exceptions import ConflictException
+
+
+class FakeBookRoom:
+    def __init__(self, status):
+        self.id = uuid.uuid4()
+        self.room_number = "101"
+        self.current_status = status
+
+
+def res_service(task_rows):
+    svc = ReservationService.__new__(ReservationService)
+    svc.session = FakeSession(task_rows)
+    return svc
+
+
+def try_book(status, task_rows, check_in_delta=3):
+    room = FakeBookRoom(status)
+    svc = res_service(task_rows)
+    try:
+        asyncio.run(
+            svc._assert_room_bookable(
+                room,
+                "DAILY",
+                today + timedelta(days=check_in_delta),
+                today + timedelta(days=check_in_delta + 1),
+            )
+        )
+        return "OK"
+    except ConflictException:
+        return "BLOKLANDI"
+
+
+check("tozalashda + ochiq ta'mir", try_book("CLEANING", [("MAINTENANCE", None)]), "BLOKLANDI")
+check("bo'sh + ochiq tekshiruv", try_book("AVAILABLE", [("INSPECTION", None)]), "BLOKLANDI")
+check("tozalashda, vazifasiz — kelgusiga ochiq", try_book("CLEANING", []), "OK")
+check("bo'sh, vazifasiz", try_book("AVAILABLE", []), "OK")
+check(
+    "kelgusi haftadagi ta'mir to'smaydi",
+    try_book("AVAILABLE", [("MAINTENANCE", today + timedelta(days=7))]),
+    "OK",
+)
 
 print(f"\nJami: {ok} ok, {fail} xato")
 raise SystemExit(1 if fail else 0)

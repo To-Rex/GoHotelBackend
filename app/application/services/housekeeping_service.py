@@ -316,10 +316,17 @@ class HousekeepingService:
     async def _release_task_room_status(
         self, task: HousekeepingTask, hotel_id: UUID, user_id: UUID
     ) -> None:
-        """Vazifa yopilgach xona bo'shaydi — boshqa ochiq vazifa qolmagan bo'lsa.
+        """Vazifa yopilgach xona holati YANGILANADI — shunchaki bo'shamaydi.
 
-        Ikkinchi shart muhim: bitta xonada ikki ta'mir vazifasi bo'lsa,
-        birini yopish xonani ochib yuborsa, ikkinchisi e'tibordan qolardi.
+        Xonada holat talab qiladigan BOSHQA faol vazifa qolgan bo'lsa,
+        xona o'sha vazifaning holatiga o'tadi (ta'mir > tekshiruv >
+        tozalash): tozalash tugadi-yu ta'mir hali ochiq bo'lsa, xona
+        "Bo'sh" emas, "Ta'mirda" bo'ladi — aks holda tugallanmagan
+        ta'mirdagi xonaga bron qilish mumkin bo'lib qolardi. Hech qanday
+        faol vazifa qolmagandagina xona bo'shaydi.
+
+        Kelgusi sanaga rejalashtirilgan vazifa xonani band qilmaydi —
+        `_apply_task_room_status` dagi qoida bilan bir xil.
         """
         target = TASK_ROOM_STATUS.get(task.task_type)
         if target is None:
@@ -329,22 +336,43 @@ class HousekeepingService:
         if room is None or room.current_status != target:
             return
 
-        # Shu holatni talab qiladigan boshqa faol vazifa bormi
-        same_status_types = [t for t, st in TASK_ROOM_STATUS.items() if st == target]
-        other = (
+        # Xonadagi boshqa faol, holat talab qiladigan vazifalar
+        local_today = (
+            datetime.now(timezone.utc)
+            + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
+        ).date()
+        rows = (
             await self.session.execute(
-                sa_select(HousekeepingTask.id)
-                .where(
+                sa_select(
+                    HousekeepingTask.task_type, HousekeepingTask.scheduled_date
+                ).where(
                     HousekeepingTask.room_id == task.room_id,
                     HousekeepingTask.id != task.id,
-                    HousekeepingTask.task_type.in_(same_status_types),
+                    HousekeepingTask.task_type.in_(list(TASK_ROOM_STATUS)),
                     HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
                 )
-                .limit(1)
             )
-        ).first()
-        if other:
+        ).all()
+        active_statuses = {
+            TASK_ROOM_STATUS[t]
+            for t, sched in rows
+            if sched is None or sched <= local_today
+        }
+
+        if target in active_statuses:
+            # Xuddi shu holatni talab qiladigan boshqa vazifa hali faol
             return
+
+        for next_status in ("MAINTENANCE", "INSPECTION", "CLEANING"):
+            if next_status in active_statuses:
+                await self._set_room_status(
+                    room,
+                    next_status,
+                    hotel_id,
+                    user_id,
+                    f"{task.task_type} task {task.id} done; {next_status} work continues",
+                )
+                return
 
         await self._set_room_status(
             room,

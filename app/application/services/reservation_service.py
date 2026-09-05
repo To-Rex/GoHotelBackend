@@ -375,7 +375,7 @@ class ReservationService:
         # Yangi xona holati bu bronni qabul qila oladimi. Ko'chirishda
         # mehmon odatda darhol kiradi, shuning uchun tozalanayotgan xona ham
         # to'siladi — agar bron davri hozirni qamrasa.
-        self._assert_room_bookable(
+        await self._assert_room_bookable(
             new_room,
             booking_type,
             reservation.check_in_date,
@@ -629,7 +629,40 @@ class ReservationService:
         await self.session.refresh(reservation)
         return reservation
 
-    def _assert_room_bookable(
+    async def _active_blocking_task(self, room_id: UUID) -> str | None:
+        """Xonadagi faol ta'mir/tekshiruv vazifasining turi (bo'lsa).
+
+        Xona holati "tozalashda" yoki hatto "bo'sh" bo'lishi mumkin, lekin
+        unda OCHIQ ta'mir yoki tekshiruv VAZIFASI turgan bo'lsa — ish hali
+        tugamagan. Bunday xonaga bron ish yakunlangunga qadar yopiq.
+        Kelgusi sanaga rejalashtirilgan vazifa hisobga olinmaydi — u
+        xonani hozirdan band qilmasligi kerak (mavjud qoida).
+        """
+        local_today = (
+            datetime.now(timezone.utc)
+            + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
+        ).date()
+        rows = (
+            await self.session.execute(
+                select(HousekeepingTask.task_type, HousekeepingTask.scheduled_date)
+                .where(
+                    HousekeepingTask.room_id == room_id,
+                    HousekeepingTask.task_type.in_(["MAINTENANCE", "INSPECTION"]),
+                    HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
+                )
+                .limit(10)
+            )
+        ).all()
+        active = {
+            t for t, sched in rows if sched is None or sched <= local_today
+        }
+        if "MAINTENANCE" in active:
+            return "MAINTENANCE"
+        if "INSPECTION" in active:
+            return "INSPECTION"
+        return None
+
+    async def _assert_room_bookable(
         self,
         room: Room,
         booking_type: str,
@@ -657,6 +690,19 @@ class ReservationService:
             raise ConflictException(
                 f"{room.room_number}-xona {label} — holat o'zgartirilmaguncha "
                 "hech qanday sanaga bron qilib bo'lmaydi",
+                "ROOM_NOT_AVAILABLE",
+            )
+
+        # Holat yumshoq bo'lsa ham xonada faol ta'mir/tekshiruv VAZIFASI
+        # bo'lishi mumkin (masalan, mehmon ichkariligida ochilgan ta'mir
+        # chiqishdan keyin ham davom etadi, xona esa "tozalashda" ko'rinadi).
+        # Ish yakunlanmaguncha bron yopiq — vazifa yopilgach o'zi ochiladi.
+        blocking = await self._active_blocking_task(room.id)
+        if blocking:
+            work = "ta'mirlash" if blocking == "MAINTENANCE" else "tekshiruv"
+            raise ConflictException(
+                f"{room.room_number}-xonada {work} ishi tugallanmagan — ish "
+                "yakunlangach bron qilish mumkin bo'ladi",
                 "ROOM_NOT_AVAILABLE",
             )
 
@@ -722,7 +768,7 @@ class ReservationService:
 
         # Holat tekshiruvi sanalar o'qilgandan keyin: tozalanayotgan xona
         # kelgusi sanalarga ochiq, faqat hozirgi payt uchun yopiq
-        self._assert_room_bookable(
+        await self._assert_room_bookable(
             room, booking_type, check_in, check_out, check_in_dt, check_out_dt
         )
 
@@ -935,7 +981,7 @@ class ReservationService:
                 # demak holat tekshiruvi shu yerda ham kerak. Ilgari faqat
                 # xona mavjudligi tekshirilardi va tahrirlash yo'li bilan
                 # bronni ta'mirdagi xonaga ko'chirib qo'yish mumkin edi.
-                self._assert_room_bookable(
+                await self._assert_room_bookable(
                     new_room,
                     data.get("booking_type") or reservation.booking_type or "DAILY",
                     check_in,
