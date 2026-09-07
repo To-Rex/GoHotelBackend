@@ -41,6 +41,7 @@ from app.infrastructure.database.models.staff_message import StaffMessage
 from app.infrastructure.database.models.guest_face_profile import GuestFaceProfile
 from app.infrastructure.database.models.face_sighting import FaceSighting, VisionDevice
 from app.infrastructure.database.models.vision_camera import VisionCamera
+from app.infrastructure.database.models.guest_feedback import GuestFeedback
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -57,4 +58,5 @@ __all__ = [
     "ShiftSession",
     "StaffMessage",
     "GuestFaceProfile", "FaceSighting", "VisionDevice", "VisionCamera",
+    "GuestFeedback",
 ]

@@ -87,6 +87,26 @@ class TaskPriority(str, Enum):
     URGENT = "URGENT"
 
 
+# --- Talab, taklif va shikoyatlar (mehmon murojaatlari kitobi) ---
+class FeedbackType(str, Enum):
+    REQUEST = "REQUEST"  # talab
+    SUGGESTION = "SUGGESTION"  # taklif
+    COMPLAINT = "COMPLAINT"  # shikoyat
+
+
+class FeedbackStatus(str, Enum):
+    NEW = "NEW"
+    IN_PROGRESS = "IN_PROGRESS"
+    RESOLVED = "RESOLVED"
+    REJECTED = "REJECTED"
+
+
+class FeedbackPriority(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
 class LedgerType(str, Enum):
     ASSET = "ASSET"
     LIABILITY = "LIABILITY"

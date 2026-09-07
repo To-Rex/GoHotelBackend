@@ -93,6 +93,12 @@ PERMISSIONS = [
     ("expense.delete", "Delete Expense", "expense", "Delete hotel expenses"),
     # Shift module (smena va kassa)
     ("shift.force_close", "Force Close Shift", "shift", "Force close another employee's shift/cash session"),
+    # Feedback module (talab, taklif va shikoyatlar). Qabulxona va menejer
+    # bu kodlarsiz ham kiradi (reservation.*/shift.* orqali) — kodlar boshqa
+    # rollarga (masalan buxgalter) alohida berish uchun.
+    ("feedback.view", "View Guest Feedback", "feedback", "View guest requests, suggestions and complaints"),
+    ("feedback.create", "Record Guest Feedback", "feedback", "Record guest requests, suggestions and complaints"),
+    ("feedback.manage", "Manage Guest Feedback", "feedback", "Assign, respond to, close and delete guest feedback"),
 ]
 
 
