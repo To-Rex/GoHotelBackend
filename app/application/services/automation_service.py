@@ -17,10 +17,11 @@ import logging
 from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.application.services.cleaner_assignment import find_cleaner
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
@@ -59,40 +60,11 @@ class AutomationService:
 
     # --------------------------------------------------------------- cleaner --
     async def _find_cleaner(self, hotel_id: UUID, branch_id: UUID) -> UUID | None:
-        """Mehmonxonadagi eng kam yuklamali farroshni topadi.
-
-        Farrosh = housekeeping.* ruxsatiga ega EMPLOYEE (alohida rol maydoni yo'q).
-        Iloji bo'lsa o'sha filialdan tanlanadi. Topilmasa None (tun biriktirilmay
-        yaratiladi va ro'yxatda ko'rinadi)."""
-        employees = await self.user_repo.get_employees(hotel_id, limit=500)
-        candidates: list[User] = []
-        for e in employees:
-            if getattr(e, "is_deleted", False):
-                continue
-            perms = await self.user_repo.get_user_permissions(e.id)
-            if any(str(p.get("code", "")).startswith("housekeeping.") for p in perms):
-                candidates.append(e)
-        if not candidates:
-            return None
-
-        same_branch = [e for e in candidates if e.branch_id == branch_id]
-        pool = same_branch or candidates
-        pool_ids = [e.id for e in pool]
-
-        # Eng kam faol (OPEN/IN_PROGRESS) tunga ega farroshni tanlaymiz
-        counts: dict[UUID, int] = {pid: 0 for pid in pool_ids}
-        rows = await self.session.execute(
-            select(HousekeepingTask.assigned_to, func.count())
-            .where(
-                HousekeepingTask.assigned_to.in_(pool_ids),
-                HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
-            )
-            .group_by(HousekeepingTask.assigned_to)
-        )
-        for assigned_to, cnt in rows.all():
-            if assigned_to in counts:
-                counts[assigned_to] = cnt
-        return min(pool_ids, key=lambda pid: counts.get(pid, 0))  # type: ignore[return-value]
+        """Tozalash vazifasi beriladigan farrosh — qoida cleaner_assignment
+        modulida (reservation_service bilan bitta). Faqat farrosh rolidagi faol
+        xodim; bo'sh farrosh birinchi, keyin navbat bilan. Topilmasa None (tun
+        biriktirilmay yaratiladi va ro'yxatda ko'rinadi)."""
+        return await find_cleaner(self.session, hotel_id, branch_id)
 
     async def _linked_cleaning_task(self, reservation_id: UUID) -> HousekeepingTask | None:
         result = await self.session.execute(

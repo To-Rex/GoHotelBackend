@@ -26,8 +26,9 @@ from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.discount_policy import check_discount
 from app.application.services import reservation_extend as extend_rules
 from app.application.services.notification_service import NotificationService
+from app.application.services.cleaner_assignment import find_cleaner
 from app.shared.utils import generate_code
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 
 def _extend_exception(error: extend_rules.ExtendError):
@@ -1576,37 +1577,11 @@ class ReservationService:
         }
 
     async def _find_cleaner(self, hotel_id: UUID, branch_id: UUID) -> UUID | None:
-        """Eng kam yuklamali farroshni topadi (automation_service bilan bir xil
-        mantiq): farrosh = housekeeping.* ruxsatiga ega EMPLOYEE. Iloji bo'lsa
-        o'sha filialdan. Topilmasa None — vazifa biriktirilmay yaratiladi."""
-        employees = await self.user_repo.get_employees(hotel_id, limit=500)
-        candidates = []
-        for e in employees:
-            if getattr(e, "is_deleted", False):
-                continue
-            perms = await self.user_repo.get_user_permissions(e.id)
-            if any(str(p.get("code", "")).startswith("housekeeping.") for p in perms):
-                candidates.append(e)
-        if not candidates:
-            return None
-
-        same_branch = [e for e in candidates if e.branch_id == branch_id]
-        pool = same_branch or candidates
-        pool_ids = [e.id for e in pool]
-
-        counts: dict[UUID, int] = {pid: 0 for pid in pool_ids}
-        rows = await self.session.execute(
-            select(HousekeepingTask.assigned_to, func.count())
-            .where(
-                HousekeepingTask.assigned_to.in_(pool_ids),
-                HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
-            )
-            .group_by(HousekeepingTask.assigned_to)
-        )
-        for assigned_to, cnt in rows.all():
-            if assigned_to in counts:
-                counts[assigned_to] = cnt
-        return min(pool_ids, key=lambda pid: counts.get(pid, 0))
+        """Tozalash vazifasi beriladigan farrosh — qoida cleaner_assignment
+        modulida (automation_service bilan bitta). Faqat farrosh rolidagi faol
+        xodim; bo'sh farrosh birinchi, keyin navbat bilan. Topilmasa None —
+        vazifa biriktirilmay yaratiladi."""
+        return await find_cleaner(self.session, hotel_id, branch_id)
 
     async def cancellation_quote(
         self, reservation_id: UUID, hotel_id: UUID
