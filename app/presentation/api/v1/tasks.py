@@ -88,7 +88,11 @@ async def update_progress(
 ):
     h_id = _resolve_hotel_id(current_user, hotel_id)
     service = MobileTasksService(session)
-    return await service.update_progress(task_id, h_id, data.progress)
+    # user_id — 100% da yakunlash web bilan bitta yo'ldan o'tadi: xona
+    # tarixi va "mehmon chiqmoqda" bronini yopish kim qilganini yozadi
+    return await service.update_progress(
+        task_id, h_id, data.progress, user_id=current_user["id"]
+    )
 
 
 @router.put("/{task_id}/checklist/{item_id}/toggle", response_model=MobileTaskResponse)

@@ -114,16 +114,37 @@ class MobileTasksService:
             task = await self._get_task(task_id, hotel_id)
         return await self._enrich_task(task, hotel_id)
 
-    async def update_progress(self, task_id: UUID, hotel_id: UUID, progress: int) -> dict:
+    async def update_progress(
+        self,
+        task_id: UUID,
+        hotel_id: UUID,
+        progress: int,
+        user_id: UUID | None = None,
+    ) -> dict:
         task = await self._get_task(task_id, hotel_id)
         task.progress = progress
         if progress >= 100:
-            from datetime import datetime, timezone
-            task.status = "COMPLETED"
-            task.completed_at = datetime.now(timezone.utc)
-            room = await self.session.get(Room, task.room_id)
-            if room and room.current_status == "CLEANING":
-                room.current_status = "AVAILABLE"
+            # 100% = yakunlash. Web'dagi "Xo'jalik ishlari" sahifasi bilan
+            # BITTA yo'l (HousekeepingService.update_task_status): xona
+            # holati xonadagi boshqa faol vazifalarga qarab yangilanadi va
+            # tarixga yoziladi, "mehmon chiqmoqda" deb belgilangan bron esa
+            # o'sha zahoti CHECKED_OUT bo'ladi.
+            #
+            # Ilgari bu yerda status to'g'ridan-to'g'ri yozilardi: xona
+            # bo'shar, lekin bron hook'i ishlamay, mehmon erta chiqqan
+            # soatlik bron rejadagi tugash vaqtigacha "chiqish jarayonida"
+            # turib qolardi (fon rejalashtiruvchisi keyin yopardi).
+            from app.application.services.housekeeping_service import (
+                HousekeepingService,
+            )
+
+            # Eski chaqiruvchilar user_id bermasa — vazifa egasi mas'ul
+            actor = user_id or task.assigned_to or task.created_by
+            await HousekeepingService(self.session).update_task_status(
+                task.id, task.hotel_id, "COMPLETED", actor
+            )
+            # Holat boshqa servisda o'zgardi — javob uchun qayta o'qiymiz
+            task = await self._get_task(task_id, hotel_id)
         await self.session.flush()
         return await self._enrich_task(task, hotel_id)
 

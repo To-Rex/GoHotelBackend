@@ -102,7 +102,10 @@ PUT /api/v1/tasks/{id}/progress
 
 **Response 200:** Yangilangan vazifa obyekti.
 
-> Edge case: `progress >= 100` bo'lsa, `status` avtomatik `completed` bo'ladi.
+> Edge case: `progress >= 100` bo'lsa, `status` avtomatik `completed` bo'ladi —
+> web'dagi yakunlash bilan bitta yo'l: xona holati boshqa faol vazifalarga
+> qarab yangilanadi va tarixga yoziladi; resepsiya "mehmon chiqmoqda" deb
+> belgilagan bron o'sha zahoti `CHECKED_OUT` bo'ladi.
 
 ---
 
