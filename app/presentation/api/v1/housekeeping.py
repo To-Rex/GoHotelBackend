@@ -12,7 +12,9 @@ from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.application.services.housekeeping_service import (
     HousekeepingService,
     HK_AUTO_COMPLETE_DEFAULTS,
+    HK_ENABLED_KEY,
     HK_SETTINGS_KEY,
+    resolve_auto_complete_enabled,
     resolve_auto_complete_minutes,
 )
 from app.application.dto.housekeeping import (
@@ -169,9 +171,26 @@ async def delete_checklist_template(
 
 
 class AutoCompleteSettingsRequest(BaseModel):
-    """Vazifa turlari bo'yicha avtomatik yakunlash vaqtlari (daqiqa, 0=o'chirilgan)."""
+    """Vazifa turlari bo'yicha avtomatik yakunlash vaqtlari (daqiqa, 0=o'chirilgan).
+
+    `enabled` — umumiy o'chirgich: False bo'lsa rejalashtiruvchi hech qanday
+    vazifani o'zi yopmaydi, daqiqalar esa saqlanib qoladi. Yuborilmasa
+    (None) — o'zgartirilmaydi.
+    """
 
     durations: dict[str, int] = Field(default_factory=dict)
+    enabled: bool | None = None
+
+
+def _auto_complete_view(hotel_settings: dict) -> dict:
+    return {
+        "enabled": resolve_auto_complete_enabled(hotel_settings),
+        "durations": {
+            task_type: resolve_auto_complete_minutes(hotel_settings, task_type)
+            for task_type in HK_AUTO_COMPLETE_DEFAULTS
+        },
+        "defaults": HK_AUTO_COMPLETE_DEFAULTS,
+    }
 
 
 @router.get("/auto-complete-settings")
@@ -180,15 +199,11 @@ async def get_auto_complete_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Joriy mehmonxonaning avto-yakunlash vaqtlari (standartlar bilan birga)."""
+    """Joriy mehmonxonaning avto-yakunlash sozlamasi (yoqilganmi + vaqtlar)."""
     h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
     hotel = await session.get(Hotel, h_id) if h_id else None
     hotel_settings = (hotel.settings if hotel else {}) or {}
-    durations = {
-        task_type: resolve_auto_complete_minutes(hotel_settings, task_type)
-        for task_type in HK_AUTO_COMPLETE_DEFAULTS
-    }
-    return {"durations": durations, "defaults": HK_AUTO_COMPLETE_DEFAULTS}
+    return _auto_complete_view(hotel_settings)
 
 
 @router.put("/auto-complete-settings")
@@ -217,15 +232,14 @@ async def save_auto_complete_settings(
     # JSONB ustunini YANGI dict bilan almashtiramiz — SQLAlchemy o'zgarishni
     # sezishi uchun (ichki mutatsiya kuzatilmaydi)
     new_settings = dict(hotel.settings or {})
-    new_settings[HK_SETTINGS_KEY] = {**(new_settings.get(HK_SETTINGS_KEY) or {}), **cleaned}
+    merged = {**(new_settings.get(HK_SETTINGS_KEY) or {}), **cleaned}
+    if data.enabled is not None:
+        merged[HK_ENABLED_KEY] = bool(data.enabled)
+    new_settings[HK_SETTINGS_KEY] = merged
     hotel.settings = new_settings
     await session.flush()
 
-    durations = {
-        task_type: resolve_auto_complete_minutes(new_settings, task_type)
-        for task_type in HK_AUTO_COMPLETE_DEFAULTS
-    }
-    return {"durations": durations, "defaults": HK_AUTO_COMPLETE_DEFAULTS}
+    return _auto_complete_view(new_settings)
 
 
 @router.get("/cleaning-report")

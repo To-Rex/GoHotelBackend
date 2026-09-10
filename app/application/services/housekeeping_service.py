@@ -54,6 +54,13 @@ HK_AUTO_COMPLETE_DEFAULTS: dict[str, int] = {
 
 HK_SETTINGS_KEY = "hk_auto_complete"
 
+# Umumiy o'chirgich — hotels.settings["hk_auto_complete"]["enabled"].
+# Yo'q bo'lsa True (avvalgi xatti-harakat). False — rejalashtiruvchi HECH
+# QANDAY vazifani o'zi yopmaydi: xona holati faqat farrosh yoki
+# menejer/admin vazifani yakunlaganda o'zgaradi. Tur bo'yicha daqiqalar
+# saqlanib qoladi — qayta yoqilganda o'sha qiymatlar tiklanadi.
+HK_ENABLED_KEY = "enabled"
+
 # Vazifa turi -> xona qanday holatga o'tishi.
 #
 # Vazifa ochilishi xona bilan nima bo'layotganini bildiradi, shuning uchun
@@ -88,6 +95,27 @@ def resolve_auto_complete_minutes(
         return max(value, 0)
     except (TypeError, ValueError):
         return HK_AUTO_COMPLETE_DEFAULTS.get(task_type, 0)
+
+
+def resolve_auto_complete_enabled(hotel_settings: dict | None) -> bool:
+    """Avto-yakunlash umuman yoqilganmi (standart — ha)."""
+    overrides = (hotel_settings or {}).get(HK_SETTINGS_KEY) or {}
+    value = overrides.get(HK_ENABLED_KEY, True)
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no", "off")
+    return bool(value)
+
+
+def effective_auto_complete_minutes(
+    hotel_settings: dict | None, task_type: str
+) -> int:
+    """Rejalashtiruvchi ishlatadigan qiymat: o'chirilgan bo'lsa 0 (hech qachon
+    yopilmaydi), aks holda tur bo'yicha daqiqa. Sozlamalar sahifasi esa
+    `resolve_auto_complete_minutes` ni ishlatadi — u yerda o'chirilgan holda ham
+    saqlangan daqiqalar ko'rinib turishi kerak."""
+    if not resolve_auto_complete_enabled(hotel_settings):
+        return 0
+    return resolve_auto_complete_minutes(hotel_settings, task_type)
 
 
 class HousekeepingService:

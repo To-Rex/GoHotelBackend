@@ -210,7 +210,7 @@ class AutomationService:
         """
         from app.application.services.housekeeping_service import (
             HousekeepingService,
-            resolve_auto_complete_minutes,
+            effective_auto_complete_minutes,
         )
         from app.infrastructure.database.models.hotel import Hotel
         from app.infrastructure.database.models.housekeeping import HousekeepingTask
@@ -237,11 +237,13 @@ class AutomationService:
                 if task.hotel_id not in settings_cache:
                     hotel = await self.session.get(Hotel, task.hotel_id)
                     settings_cache[task.hotel_id] = (hotel.settings if hotel else {}) or {}
-                minutes = resolve_auto_complete_minutes(
+                # Mehmonxona umuman o'chirib qo'ygan bo'lsa ham 0 — tegilmaydi:
+                # xona faqat farrosh/menejer yakunlaganda o'zgaradi
+                minutes = effective_auto_complete_minutes(
                     settings_cache[task.hotel_id], task.task_type
                 )
                 if minutes <= 0:
-                    continue  # bu tur uchun avto-yakunlash o'chirilgan
+                    continue  # avto-yakunlash o'chirilgan (umuman yoki shu tur uchun)
 
                 # Boshlangan vazifada — boshlangan vaqtdan, ochiqda — yaratilgandan
                 ref = (
