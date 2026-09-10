@@ -545,3 +545,21 @@ class AutomationService:
                     reservation.id,
                     "cleaned" if cleaning_done else "timeout",
                 )
+                if cleaning_done:
+                    # Farrosh vazifani xona CLEANING ga o'tishidan OLDIN yakunlagan
+                    # bo'lishi mumkin (mehmon erta ketgan yoki qisqa soatlik bron):
+                    # yakunlash hook'i xonaga tegmagan (u hali OCCUPIED edi),
+                    # 2-bosqich esa xonani hozirgina CLEANING qildi — bron
+                    # yopilgach xona faol vazifasiz CLEANING da yetim qolardi
+                    # (yetim tiklovchi 10 daqiqadan keyin yangi vazifa yasardi).
+                    # Xo'jalik xizmatining o'sha "vazifa yopilgach xonani
+                    # bo'shatish" qoidasi: xona CLEANING va boshqa faol vazifa
+                    # yo'q bo'lsa — AVAILABLE (tarix bilan); allaqachon bo'shatilgan
+                    # bo'lsa — hech narsa qilmaydi. Aylanma import — lokal.
+                    from app.application.services.housekeeping_service import (
+                        HousekeepingService,
+                    )
+
+                    await HousekeepingService(self.session)._release_task_room_status(
+                        task, hotel_id, actor
+                    )
