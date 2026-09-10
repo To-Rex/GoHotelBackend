@@ -24,21 +24,29 @@ Endi qoida shunday:
      qoida (istalgan `housekeeping.*` egasi) ishlaydi, vazifa yetim
      qolmasligi uchun. Topilmasa None: vazifa biriktirilmay yaratiladi va
      ro'yxatda ko'rinadi (avvalgidek).
+  5. Faqat ISH VAQTIDAGI farrosh: xodimning `work_start`–`work_end` oralig'i
+     (tungi smena — yarim tundan o'tuvchi ham) mahalliy vaqt bilan
+     tekshiriladi. Hech kim ishda bo'lmasa — None: vazifa biriktirilmaydi,
+     push ketmaydi; farrosh ishga kelishi bilan rejalashtiruvchi
+     (automation_service._assign_pending_tasks) uni biriktiradi. Ish vaqti
+     yozilmagan/buzuq bo'lsa xodim ishda deb hisoblanadi — ma'lumot xatosi
+     vazifani to'sib qo'ymasin.
 
-Qaror mantig'i (`pick_cleaner`) bazaga bog'lanmagan sof funksiya — u alohida
-sinovdan o'tadi (tests/test_cleaner_assignment.py).
+Qaror mantig'i (`pick_cleaner`, `is_on_duty`) bazaga bog'lanmagan sof
+funksiyalar — ular alohida sinovdan o'tadi (tests/test_cleaner_assignment.py).
 """
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time, timedelta, timezone
 from typing import Iterable
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.permission import Permission, UserPermission
 from app.infrastructure.database.models.user import User
@@ -93,6 +101,40 @@ class CleanerCandidate:
     last_assigned_at: datetime | None = None
     #: Barqaror tartib (ishga olinish vaqti) — hamma narsa teng bo'lganda
     order: int = 0
+    #: Hozir ish vaqtidami (work_start–work_end); yuklovchi hisoblaydi
+    on_duty: bool = True
+
+
+def _parse_hhmm(value: str | None) -> time | None:
+    if not value:
+        return None
+    try:
+        hours, minutes = value.strip().split(":")[:2]
+        return time(hour=int(hours), minute=int(minutes))
+    except (ValueError, AttributeError):
+        return None
+
+
+def is_on_duty(work_start: str | None, work_end: str | None, now: time) -> bool:
+    """Xodim `now` (mahalliy soat) da ish vaqtidami.
+
+    "09:00"–"18:00" — kunduzgi smena: boshlanish kirgan, tugash kirmagan.
+    "22:00"–"06:00" — tungi smena, yarim tundan o'tadi.
+    Boshlanish = tugash yoki qiymat buzuq/yo'q — doim ishda (to'sib qo'ymaymiz).
+    """
+    start, end = _parse_hhmm(work_start), _parse_hhmm(work_end)
+    if start is None or end is None or start == end:
+        return True
+    if start < end:
+        return start <= now < end
+    return now >= start or now < end
+
+
+def local_time_now() -> time:
+    """Mehmonxona mahalliy soati (server UTC da, ofset sozlamada)."""
+    return (
+        datetime.now(timezone.utc) + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
+    ).time()
 
 
 def _queue_key(c: CleanerCandidate) -> tuple:
@@ -114,17 +156,26 @@ def pick_cleaner(
     everyone = list(candidates)
     cleaners = [c for c in everyone if classify_role(c.codes) == ROLE_HOUSEKEEPER]
     if cleaners:
-        pool = _prefer_branch(cleaners, branch_id)
+        # Ish vaqtidan tashqaridagi farroshga vazifa ketmaydi — hech kim ishda
+        # bo'lmasa vazifa biriktirilmay qoladi, keyin rejalashtiruvchi
+        # farrosh ishga kelishi bilan biriktiradi
+        on_duty = [c for c in cleaners if c.on_duty]
+        if not on_duty:
+            return None
+        pool = _prefer_branch(on_duty, branch_id)
         # Bo'lim boshlig'i taqsimlovchi — oddiy farrosh bor ekan, vazifa unga
         # emas, bajaruvchiga boradi
         line_staff = [c for c in pool if "housekeeping.task.assign" not in c.codes]
         pool = line_staff or pool
     else:
-        # Farrosh roli yo'q mehmonxona — avvalgi keng qoida AYNAN o'z holicha
-        # (istalgan housekeeping.* egasi, filial, eng kam yuklama), vazifa
-        # yetim qolmasin (masalan, kichik hostelda tozalashni texnik qiladi)
+        # Farrosh roli yo'q mehmonxona — avvalgi keng qoida (istalgan
+        # housekeeping.* egasi, filial, eng kam yuklama), vazifa yetim
+        # qolmasin (masalan, kichik hostelda tozalashni texnik qiladi).
+        # Ish vaqti qoidasi bu yerda ham amal qiladi.
         legacy = [
-            c for c in everyone if any(code.startswith("housekeeping.") for code in c.codes)
+            c
+            for c in everyone
+            if c.on_duty and any(code.startswith("housekeeping.") for code in c.codes)
         ]
         if not legacy:
             return None
@@ -151,7 +202,7 @@ async def find_cleaner(
     natija baza qatorlari tartibiga bog'liq bo'lib qolmasligi uchun.
     """
     staff_rows = await session.execute(
-        select(User.id, User.branch_id)
+        select(User.id, User.branch_id, User.work_start, User.work_end)
         .where(
             User.user_type == "EMPLOYEE",
             User.hotel_id == hotel_id,
@@ -196,6 +247,7 @@ async def find_cleaner(
         if moment is not None:
             last_assigned[user_id] = moment
 
+    now_local = local_time_now()
     candidates = [
         CleanerCandidate(
             user_id=row.id,
@@ -204,6 +256,7 @@ async def find_cleaner(
             active_tasks=active.get(row.id, 0),
             last_assigned_at=last_assigned.get(row.id),
             order=index,
+            on_duty=is_on_duty(row.work_start, row.work_end, now_local),
         )
         for index, row in enumerate(staff)
     ]

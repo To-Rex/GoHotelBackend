@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -33,6 +33,10 @@ from app.application.services.reservation_service import ReservationService
 from app.application.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
+
+#: Yetim CLEANING xona uchun tiklangan vazifaning izohi — kechiktirilgan
+#: biriktirish (_assign_pending_tasks) uni shu izoh bo'yicha taniydi.
+ORPHAN_REPAIR_NOTE = "Xona tozalash holatida vazifasiz qolgan — vazifa avtomatik tiklandi"
 
 
 class AutomationService:
@@ -130,6 +134,70 @@ class AutomationService:
         except Exception:
             await self.session.rollback()
             logger.exception("Orphan CLEANING repair tick failed")
+
+        # Ish vaqtidan tashqarida farroshsiz qolgan avtomatik vazifalar —
+        # farrosh ishga kelishi bilan biriktiriladi. Eng oxirida turadi:
+        # yuqoridagi bosqichlar hozirgina yaratgan vazifalar ham shu tikda
+        # ulgurib qoladi.
+        try:
+            await self._assign_pending_tasks()
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            logger.exception("Pending task assignment tick failed")
+
+    async def _assign_pending_tasks(self) -> None:
+        """Farroshsiz qolgan avtomatik tozalash vazifalarini biriktiradi.
+
+        Farrosh tanlash qoidasi (cleaner_assignment) ish vaqtidan tashqarida
+        hech kimni qaytarmaydi — tunda ochilgan vazifa biriktirilmay qoladi.
+        Bu bosqich har tikda o'sha vazifalarni qayta ko'radi: farrosh ishga
+        kelishi bilan vazifa unga tushadi va push ketadi — vazifa yo'qolmaydi,
+        faqat vaqti to'g'ri bo'ladi.
+
+        Faqat tizim o'zi yaratganlari: bronga bog'langan tozalash vazifalari
+        va yetim xona uchun tiklanganlar. Menejer web'dan ataylab
+        biriktirmasdan ochgan vazifaga (bron yo'q, tiklash izohi yo'q)
+        tegilmaydi — u qo'lda taqsimlanadi, avvalgidek. Oxirgi 24 soat —
+        eski qoldiqlarni bekorga uyg'otmaslik uchun.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        rows = await self.session.execute(
+            select(HousekeepingTask).where(
+                HousekeepingTask.status == "OPEN",
+                HousekeepingTask.assigned_to.is_(None),
+                HousekeepingTask.task_type.in_(["CLEANING", "DEEP_CLEANING"]),
+                HousekeepingTask.created_at >= cutoff,
+                or_(
+                    HousekeepingTask.reservation_id.isnot(None),
+                    HousekeepingTask.notes == ORPHAN_REPAIR_NOTE,
+                ),
+            )
+        )
+        for task in rows.scalars().all():
+            cleaner_id = await self._find_cleaner(task.hotel_id, task.branch_id)
+            if cleaner_id is None:
+                continue  # hali hech kim ishda emas — keyingi tikda
+            task.assigned_to = cleaner_id
+            await self.session.flush()
+            room = await self.session.get(Room, task.room_id)
+            number = room.room_number if room else "?"
+            logger.info("Pending task %s assigned to %s", task.id, cleaner_id)
+            # Push xatosi biriktirishni buzmasin
+            try:
+                await NotificationService(self.session).notify(
+                    hotel_id=task.hotel_id,
+                    user_id=cleaner_id,
+                    title="Sizga tozalash vazifasi biriktirildi",
+                    body=f"{number}-xona — xonani tozalab tekshiring",
+                    entity_type="task",
+                    entity_id=task.id,
+                    send_push=True,
+                )
+            except Exception:
+                logger.exception(
+                    "Pending task notification yuborilmadi (task=%s)", task.id
+                )
 
     async def _auto_complete_tasks(self) -> None:
         """Belgilangan vaqtdan oshib ketgan OPEN/IN_PROGRESS vazifalarni yopadi.
@@ -336,10 +404,7 @@ class AutomationService:
                     status="OPEN",
                     priority="HIGH",
                     assigned_to=cleaner_id,
-                    notes=(
-                        "Xona tozalash holatida vazifasiz qolgan — "
-                        "vazifa avtomatik tiklandi"
-                    ),
+                    notes=ORPHAN_REPAIR_NOTE,
                     scheduled_date=now_utc.date(),
                     created_by=created_by,
                 )

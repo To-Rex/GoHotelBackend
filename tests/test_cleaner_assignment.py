@@ -17,6 +17,7 @@ from app.application.services.cleaner_assignment import (
     ROLE_STAFF,
     CleanerCandidate,
     classify_role,
+    is_on_duty,
     pick_cleaner,
 )
 
@@ -203,3 +204,63 @@ def test_other_branch_used_when_own_branch_has_no_cleaner():
     there = cand(HOUSEKEEPER, active=0, branch=OTHER_BRANCH)
     manager_here = cand(MANAGER, active=0, branch=BRANCH)
     assert pick_cleaner([there, manager_here], BRANCH) == there.user_id
+
+
+# ------------------------------------------------------------- ish vaqti --
+def test_is_on_duty_day_shift():
+    from datetime import time
+
+    assert is_on_duty("09:00", "18:00", time(9, 0))  # boshlanish kiradi
+    assert is_on_duty("09:00", "18:00", time(13, 30))
+    assert not is_on_duty("09:00", "18:00", time(18, 0))  # tugash kirmaydi
+    assert not is_on_duty("09:00", "18:00", time(3, 15))
+
+
+def test_is_on_duty_night_shift_crosses_midnight():
+    from datetime import time
+
+    assert is_on_duty("22:00", "06:00", time(23, 0))
+    assert is_on_duty("22:00", "06:00", time(2, 0))
+    assert not is_on_duty("22:00", "06:00", time(12, 0))
+    assert not is_on_duty("22:00", "06:00", time(6, 0))
+
+
+def test_is_on_duty_bad_or_missing_data_never_blocks():
+    """Ma'lumot xatosi vazifani to'sib qo'ymasin — xodim ishda deb olinadi."""
+    from datetime import time
+
+    assert is_on_duty(None, None, time(3, 0))
+    assert is_on_duty("", "18:00", time(3, 0))
+    assert is_on_duty("abc", "18:00", time(3, 0))
+    assert is_on_duty("09:00", "09:00", time(3, 0))  # 24 soatlik
+
+
+def test_off_duty_cleaner_never_gets_the_task():
+    """Foydalanuvchi talabi: ish vaqtidan tashqarida vazifa yuborilmaydi."""
+    night = CleanerCandidate(
+        user_id=uuid4(), branch_id=BRANCH, codes=frozenset(HOUSEKEEPER),
+        active_tasks=0, on_duty=False,
+    )
+    day = CleanerCandidate(
+        user_id=uuid4(), branch_id=BRANCH, codes=frozenset(HOUSEKEEPER),
+        active_tasks=5, on_duty=True,
+    )
+    # Ishdagi farrosh band bo'lsa ham, ishda bo'lmaganiga bermaydi
+    assert pick_cleaner([night, day], BRANCH) == day.user_id
+
+
+def test_nobody_on_duty_leaves_task_unassigned():
+    """Hech kim ishda emas — None: vazifa biriktirilmay yaratiladi, push yo'q;
+    rejalashtiruvchi farrosh ishga kelishi bilan biriktiradi."""
+    a = CleanerCandidate(
+        user_id=uuid4(), branch_id=BRANCH, codes=frozenset(HOUSEKEEPER), on_duty=False
+    )
+    b = CleanerCandidate(
+        user_id=uuid4(), branch_id=BRANCH, codes=frozenset(HOUSEKEEPER), on_duty=False
+    )
+    assert pick_cleaner([a, b], BRANCH) is None
+    # Eski keng qoidada ham xuddi shunday
+    tech = CleanerCandidate(
+        user_id=uuid4(), branch_id=BRANCH, codes=frozenset(MAINTENANCE), on_duty=False
+    )
+    assert pick_cleaner([tech], BRANCH) is None
