@@ -32,11 +32,24 @@ Endi qoida shunday:
      yozilmagan/buzuq bo'lsa xodim ishda deb hisoblanadi — ma'lumot xatosi
      vazifani to'sib qo'ymasin.
 
-Qaror mantig'i (`pick_cleaner`, `is_on_duty`) bazaga bog'lanmagan sof
-funksiyalar — ular alohida sinovdan o'tadi (tests/test_cleaner_assignment.py).
+TAQSIMLASH REJIMI (mehmonxona sozlamasi, `hotels.settings["hk_assign"]["mode"]`):
+
+  * `queue` (standart) — yuqoridagi qoida bo'yicha BITTA farrosh tanlanadi,
+    vazifa unga biriktiriladi, push faqat unga ketadi.
+  * `claim` — vazifa biriktirilmay yaratiladi, push ish vaqtidagi BARCHA
+    farroshlarga ketadi; kim birinchi "Boshlash"ni bossa, vazifa o'shanga
+    biriktiriladi (`mobile_tasks_service.start_task` atomik egallaydi).
+
+Ikkala rejimda ham nomzodlar doirasi bir xil (`eligible_cleaners`): faqat
+farrosh rolidagi, ish vaqtidagi, iloji bo'lsa o'sha filialdagi xodimlar.
+
+Qaror mantig'i (`pick_cleaner`, `plan_assignment`, `is_on_duty`) bazaga
+bog'lanmagan sof funksiyalar — alohida sinovdan o'tadi
+(tests/test_cleaner_assignment.py).
 """
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
@@ -47,9 +60,33 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.permission import Permission, UserPermission
 from app.infrastructure.database.models.user import User
+
+logger = logging.getLogger(__name__)
+
+#: Vazifa taqsimlash rejimlari
+ASSIGN_MODE_QUEUE = "queue"
+ASSIGN_MODE_CLAIM = "claim"
+ASSIGN_MODES = (ASSIGN_MODE_QUEUE, ASSIGN_MODE_CLAIM)
+
+#: hotels.settings ichidagi kalit va maydon
+HK_ASSIGN_SETTINGS_KEY = "hk_assign"
+ASSIGN_MODE_FIELD = "mode"
+
+
+def resolve_assign_mode(hotel_settings: dict | None) -> str:
+    """Mehmonxona sozlamasidagi rejim; noma'lum/yo'q qiymat — `queue`.
+
+    Standart ataylab `queue`: sozlama qo'shilishidan oldingi mehmonxonalar
+    avvalgidek navbat bilan ishlashda davom etadi.
+    """
+    section = (hotel_settings or {}).get(HK_ASSIGN_SETTINGS_KEY) or {}
+    value = str(section.get(ASSIGN_MODE_FIELD) or "").strip().lower()
+    return value if value in ASSIGN_MODES else ASSIGN_MODE_QUEUE
+
 
 ROLE_MANAGER = "manager"
 ROLE_RECEPTION = "reception"
@@ -146,12 +183,31 @@ def _queue_key(c: CleanerCandidate) -> tuple:
     return (c.active_tasks, 0 if never else 1, ts, c.order)
 
 
-def pick_cleaner(
-    candidates: Iterable[CleanerCandidate], branch_id: UUID | None
-) -> UUID | None:
-    """Nomzodlar ichidan tozalash vazifasi beriladigan farroshni tanlaydi.
+@dataclass(frozen=True)
+class CleanerAssignment:
+    """Vazifa kimga biriktiriladi va kimlarga xabar ketadi.
 
-    Faqat qaror: nomzodlar allaqachon FAOL xodimlar deb hisoblanadi.
+    `queue` rejimida ikkalasi ham bitta odam; `claim` rejimida biriktirish
+    yo'q (`assignee is None`), xabar esa butun nomzodlar doirasiga ketadi.
+    Hech kim ishda bo'lmasa — ikkalasi ham bo'sh.
+    """
+
+    mode: str = ASSIGN_MODE_QUEUE
+    assignee: UUID | None = None
+    notify: tuple[UUID, ...] = ()
+
+    @property
+    def is_claim(self) -> bool:
+        return self.mode == ASSIGN_MODE_CLAIM
+
+
+def eligible_cleaners(
+    candidates: Iterable[CleanerCandidate], branch_id: UUID | None
+) -> list[CleanerCandidate]:
+    """Vazifa tushishi mumkin bo'lgan farroshlar doirasi.
+
+    Ikkala taqsimlash rejimi ham shu doiradan foydalanadi — `queue` undan
+    bittasini tanlaydi, `claim` esa hammasiga xabar beradi.
     """
     everyone = list(candidates)
     cleaners = [c for c in everyone if classify_role(c.codes) == ROLE_HOUSEKEEPER]
@@ -161,27 +217,52 @@ def pick_cleaner(
         # farrosh ishga kelishi bilan biriktiradi
         on_duty = [c for c in cleaners if c.on_duty]
         if not on_duty:
-            return None
+            return []
         pool = _prefer_branch(on_duty, branch_id)
         # Bo'lim boshlig'i taqsimlovchi — oddiy farrosh bor ekan, vazifa unga
         # emas, bajaruvchiga boradi
         line_staff = [c for c in pool if "housekeeping.task.assign" not in c.codes]
-        pool = line_staff or pool
-    else:
-        # Farrosh roli yo'q mehmonxona — avvalgi keng qoida (istalgan
-        # housekeeping.* egasi, filial, eng kam yuklama), vazifa yetim
-        # qolmasin (masalan, kichik hostelda tozalashni texnik qiladi).
-        # Ish vaqti qoidasi bu yerda ham amal qiladi.
-        legacy = [
-            c
-            for c in everyone
-            if c.on_duty and any(code.startswith("housekeeping.") for code in c.codes)
-        ]
-        if not legacy:
-            return None
-        pool = _prefer_branch(legacy, branch_id)
+        return line_staff or pool
 
-    return min(pool, key=_queue_key).user_id
+    # Farrosh roli yo'q mehmonxona — avvalgi keng qoida (istalgan
+    # housekeeping.* egasi, filial, eng kam yuklama), vazifa yetim
+    # qolmasin (masalan, kichik hostelda tozalashni texnik qiladi).
+    # Ish vaqti qoidasi bu yerda ham amal qiladi.
+    legacy = [
+        c
+        for c in everyone
+        if c.on_duty and any(code.startswith("housekeeping.") for code in c.codes)
+    ]
+    if not legacy:
+        return []
+    return _prefer_branch(legacy, branch_id)
+
+
+def plan_assignment(
+    candidates: Iterable[CleanerCandidate],
+    branch_id: UUID | None,
+    mode: str = ASSIGN_MODE_QUEUE,
+) -> CleanerAssignment:
+    """Rejimga qarab: kimga biriktirish va kimlarga xabar berish.
+
+    Faqat qaror — nomzodlar allaqachon FAOL xodimlar deb hisoblanadi.
+    """
+    pool = eligible_cleaners(candidates, branch_id)
+    if not pool:
+        return CleanerAssignment(mode=mode)
+    if mode == ASSIGN_MODE_CLAIM:
+        # Biriktirilmaydi: vazifa hammaga ko'rinadi, kim birinchi boshlasa
+        # o'shaniki bo'ladi
+        return CleanerAssignment(mode=mode, notify=tuple(c.user_id for c in pool))
+    winner = min(pool, key=_queue_key).user_id
+    return CleanerAssignment(mode=mode, assignee=winner, notify=(winner,))
+
+
+def pick_cleaner(
+    candidates: Iterable[CleanerCandidate], branch_id: UUID | None
+) -> UUID | None:
+    """Navbat qoidasi bo'yicha bitta farrosh (rejimdan qat'i nazar)."""
+    return plan_assignment(candidates, branch_id, ASSIGN_MODE_QUEUE).assignee
 
 
 def _prefer_branch(
@@ -192,10 +273,80 @@ def _prefer_branch(
     return same_branch or pool
 
 
+async def load_assign_mode(session: AsyncSession, hotel_id: UUID) -> str:
+    """Mehmonxonaning taqsimlash rejimi (sozlamadan)."""
+    hotel = await session.get(Hotel, hotel_id)
+    return resolve_assign_mode(hotel.settings if hotel else None)
+
+
+async def resolve_assignment(
+    session: AsyncSession,
+    hotel_id: UUID,
+    branch_id: UUID | None,
+    mode: str | None = None,
+) -> CleanerAssignment:
+    """Mehmonxona rejimiga qarab tayyor reja: assignee + xabar oluvchilar.
+
+    `mode` berilmasa sozlamadan o'qiladi.
+    """
+    if mode is None:
+        mode = await load_assign_mode(session, hotel_id)
+    candidates = await load_candidates(session, hotel_id)
+    return plan_assignment(candidates, branch_id, mode)
+
+
+async def notify_cleaners(
+    session: AsyncSession,
+    targets: Iterable[UUID],
+    *,
+    hotel_id: UUID,
+    title: str,
+    body: str,
+    entity_id: UUID | None = None,
+    entity_type: str = "task",
+    send_push: bool = True,
+) -> None:
+    """Farrosh(lar)ga xabar — push xatosi chaqiruvchi oqimni buzmaydi.
+
+    `queue` rejimida ro'yxatda bitta odam bo'ladi, `claim` rejimida bir
+    nechta — chaqiruvchi kod ikkalasida ham bir xil yoziladi.
+    """
+    # Aylanma import bo'lmasligi uchun lokal
+    from app.application.services.notification_service import NotificationService
+
+    service = NotificationService(session)
+    for user_id in targets:
+        try:
+            await service.notify(
+                hotel_id=hotel_id,
+                user_id=user_id,
+                title=title,
+                body=body,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                send_push=send_push,
+            )
+        except Exception:
+            logger.exception(
+                "Farroshga xabar yuborilmadi (user=%s, entity=%s)", user_id, entity_id
+            )
+
+
 async def find_cleaner(
     session: AsyncSession, hotel_id: UUID, branch_id: UUID | None
 ) -> UUID | None:
-    """Mehmonxonadagi faol xodimlarni yuklab, `pick_cleaner` ga beradi.
+    """Navbat qoidasi bo'yicha farrosh (taqsimlash rejimiga qaramay).
+
+    Rejimga bog'liq yo'l uchun `resolve_assignment` ishlatiladi.
+    """
+    candidates = await load_candidates(session, hotel_id)
+    return pick_cleaner(candidates, branch_id)
+
+
+async def load_candidates(
+    session: AsyncSession, hotel_id: UUID
+) -> list[CleanerCandidate]:
+    """Mehmonxonaning faol xodimlarini tanlov uchun yuklaydi.
 
     Ruxsatlar bitta so'rovda olinadi (ilgari har xodim uchun alohida so'rov
     ketardi). Xodimlar ishga olinish tartibida — hamma narsa teng bo'lganda
@@ -213,7 +364,7 @@ async def find_cleaner(
     )
     staff = staff_rows.all()
     if not staff:
-        return None
+        return []
     ids = [row.id for row in staff]
 
     codes: dict[UUID, set[str]] = defaultdict(set)
@@ -248,7 +399,7 @@ async def find_cleaner(
             last_assigned[user_id] = moment
 
     now_local = local_time_now()
-    candidates = [
+    return [
         CleanerCandidate(
             user_id=row.id,
             branch_id=row.branch_id,
@@ -260,4 +411,3 @@ async def find_cleaner(
         )
         for index, row in enumerate(staff)
     ]
-    return pick_cleaner(candidates, branch_id)

@@ -51,7 +51,15 @@ async def list_tasks(
 ):
     h_id = _resolve_hotel_id(current_user, hotel_id)
     service = MobileTasksService(session)
-    return await service.get_tasks(h_id, current_user["id"], status=status, date=date)
+    # Ruxsat kodlari — "bo'sh vazifalar" doirasini hal qilish uchun
+    # (`claim` rejimida farroshga biriktirilmaganlari ham ko'rinadi)
+    return await service.get_tasks(
+        h_id,
+        current_user["id"],
+        status=status,
+        date=date,
+        permissions=current_user.get("permissions") or [],
+    )
 
 
 @router.get("/{task_id}", response_model=MobileTaskResponse)
@@ -75,7 +83,14 @@ async def start_task(
 ):
     h_id = _resolve_hotel_id(current_user, hotel_id)
     service = MobileTasksService(session)
-    return await service.start_task(task_id, h_id, current_user["id"])
+    # Administrator boshqa xodimning vazifasini ham boshlay oladi (avvalgidek);
+    # farrosh esa faqat o'zinikini yoki bo'sh turganini egallaydi
+    return await service.start_task(
+        task_id,
+        h_id,
+        current_user["id"],
+        allow_other_assignee=current_user["user_type"] in ("ADMIN", "SUPER_ADMIN"),
+    )
 
 
 @router.put("/{task_id}/progress", response_model=MobileTaskResponse)

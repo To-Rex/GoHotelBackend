@@ -1,10 +1,17 @@
 from uuid import UUID
 
-from sqlalchemy import select, func
+from sqlalchemy import and_, func, or_, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.application.services.cleaner_assignment import (
+    ASSIGN_MODE_CLAIM,
+    ROLE_HOUSEKEEPER,
+    classify_role,
+    resolve_assign_mode,
+)
 from app.core.exceptions import NotFoundException, ValidationException
+from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.checklist_item import ChecklistItem
 from app.infrastructure.database.models.room import Room
@@ -28,13 +35,46 @@ class MobileTasksService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def claim_pool_visible(
+        self, hotel_id: UUID, permissions: list[str] | None
+    ) -> bool:
+        """Bu xodimga BIRIKTIRILMAGAN vazifalar ham ko'rinadimi.
+
+        Faqat `claim` rejimidagi mehmonxonada va faqat farrosh rolidagi
+        xodimga: ro'yxatdagi bo'sh vazifani kim birinchi boshlasa o'shaniki
+        bo'ladi. Menejer/texnik/qabulxona avvalgidek faqat o'z vazifalarini
+        ko'radi (murojaatda mehmon ma'lumoti bo'lishi mumkin).
+        """
+        if not permissions:
+            return False
+        if classify_role(permissions) != ROLE_HOUSEKEEPER:
+            return False
+        hotel = await self.session.get(Hotel, hotel_id)
+        return resolve_assign_mode(hotel.settings if hotel else None) == ASSIGN_MODE_CLAIM
+
     async def get_tasks(
         self,
         hotel_id: UUID,
         user_id: UUID,
         status: str | None = None,
         date: str | None = None,
+        permissions: list[str] | None = None,
     ) -> list[dict]:
+        # `claim` rejimida bo'sh (biriktirilmagan) OPEN vazifalar ham
+        # ko'rinadi — mobil ilova o'zgarmaydi, ro'yxatni server hal qiladi
+        include_pool = await self.claim_pool_visible(hotel_id, permissions)
+        own = HousekeepingTask.assigned_to == user_id
+        scope = (
+            or_(
+                own,
+                and_(
+                    HousekeepingTask.assigned_to.is_(None),
+                    HousekeepingTask.status == "OPEN",
+                ),
+            )
+            if include_pool
+            else own
+        )
         stmt = (
             select(HousekeepingTask)
             .options(
@@ -42,10 +82,7 @@ class MobileTasksService:
                 selectinload(HousekeepingTask.room).selectinload(Room.room_type),
                 selectinload(HousekeepingTask.checklist_items),
             )
-            .where(
-                HousekeepingTask.hotel_id == hotel_id,
-                HousekeepingTask.assigned_to == user_id,
-            )
+            .where(HousekeepingTask.hotel_id == hotel_id, scope)
         )
 
         if status:
@@ -83,10 +120,45 @@ class MobileTasksService:
             raise NotFoundException("Task not found", "TASK_NOT_FOUND")
         return await self._enrich_task(task, hotel_id)
 
-    async def start_task(self, task_id: UUID, hotel_id: UUID, user_id: UUID) -> dict:
+    async def start_task(
+        self,
+        task_id: UUID,
+        hotel_id: UUID,
+        user_id: UUID,
+        allow_other_assignee: bool = False,
+    ) -> dict:
         task = await self._get_task(task_id, hotel_id)
         if task.status != "OPEN":
             raise ValidationException("Task can only be started from OPEN status", "INVALID_STATUS")
+
+        if task.assigned_to is None:
+            # BO'SH VAZIFANI EGALLASH (`claim` rejimi).
+            #
+            # Shartli UPDATE: ikki farrosh bir vaqtda "Boshlash"ni bossa,
+            # baza darajasida faqat BITTASI yutadi — `assigned_to IS NULL`
+            # sharti ikkinchisiga to'g'ri kelmaydi. Oddiy `task.assigned_to =`
+            # bunday himoya bermaydi: ikkalasi ham o'zini yozib, oxirgisi
+            # g'olib bo'lib qolardi.
+            claimed = await self.session.execute(
+                sa_update(HousekeepingTask)
+                .where(
+                    HousekeepingTask.id == task.id,
+                    HousekeepingTask.assigned_to.is_(None),
+                )
+                .values(assigned_to=user_id)
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount == 0:
+                raise ValidationException(
+                    "Vazifani boshqa farrosh oldi", "TASK_ALREADY_CLAIMED"
+                )
+            # Sessiyadagi nusxa ham yangilansin (UPDATE undan chetlab o'tdi)
+            task.assigned_to = user_id
+        elif task.assigned_to != user_id and not allow_other_assignee:
+            raise ValidationException(
+                "Bu vazifa boshqa farroshga biriktirilgan", "TASK_ASSIGNED_TO_OTHER"
+            )
+
         from datetime import datetime, timezone
         task.status = "IN_PROGRESS"
         task.started_at = datetime.now(timezone.utc)

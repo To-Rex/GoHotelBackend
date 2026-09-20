@@ -27,16 +27,18 @@ class FakeResult:
 
 
 class FakeSession:
-    def __init__(self, tasks, room):
+    def __init__(self, tasks, room, hotel_settings=None):
         self.tasks = tasks
         self.room = room
+        # Taqsimlash rejimi mehmonxona sozlamasidan o'qiladi (standart — navbat)
+        self.hotel = SimpleNamespace(settings=hotel_settings or {})
         self.flushes = 0
 
     async def execute(self, _stmt):
         return FakeResult(list(self.tasks))
 
-    async def get(self, model, key):
-        return self.room
+    async def get(self, model, _key):
+        return self.hotel if model.__name__ == "Hotel" else self.room
 
     async def flush(self):
         self.flushes += 1
@@ -52,11 +54,11 @@ def make_task():
     )
 
 
-def build(monkeypatch, cleaner):
+def build(monkeypatch, cleaner, hotel_settings=None):
     task = make_task()
     room = SimpleNamespace(room_number="205")
     svc = AutomationService.__new__(AutomationService)
-    svc.session = FakeSession([task], room)
+    svc.session = FakeSession([task], room, hotel_settings)
 
     async def fake_find(self, hotel_id, branch_id):
         return cleaner
@@ -94,6 +96,19 @@ def test_task_left_alone_while_nobody_on_duty(monkeypatch):
     assert task.assigned_to is None
     assert sent == []
     assert svc.session.flushes == 0
+
+
+def test_claim_mode_hotel_is_skipped(monkeypatch):
+    """`claim` rejimida vazifa ataylab biriktirilmaydi — farroshlar o'zi oladi."""
+    cleaner = uuid.uuid4()
+    svc, task, sent = build(
+        monkeypatch, cleaner, hotel_settings={"hk_assign": {"mode": "claim"}}
+    )
+
+    asyncio.run(svc._assign_pending_tasks())
+
+    assert task.assigned_to is None
+    assert sent == []
 
 
 def test_orphan_repair_note_is_shared_constant():

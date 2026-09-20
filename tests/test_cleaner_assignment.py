@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from app.application.services.cleaner_assignment import (
+    ASSIGN_MODE_CLAIM,
+    ASSIGN_MODE_QUEUE,
     ROLE_HOUSEKEEPER,
     ROLE_MAINTENANCE,
     ROLE_MANAGER,
@@ -17,8 +19,11 @@ from app.application.services.cleaner_assignment import (
     ROLE_STAFF,
     CleanerCandidate,
     classify_role,
+    eligible_cleaners,
     is_on_duty,
     pick_cleaner,
+    plan_assignment,
+    resolve_assign_mode,
 )
 
 # Frontend'dagi rol shablonlari (permissionTemplates.ts) — yulduzchalar
@@ -247,6 +252,76 @@ def test_off_duty_cleaner_never_gets_the_task():
     )
     # Ishdagi farrosh band bo'lsa ham, ishda bo'lmaganiga bermaydi
     assert pick_cleaner([night, day], BRANCH) == day.user_id
+
+
+# --------------------------------------------------------- taqsimlash rejimi --
+def test_assign_mode_defaults_to_queue():
+    """Sozlama yo'q/buzuq — avvalgi xatti-harakat (navbat)."""
+    for value in (None, {}, {"hk_assign": {}}, {"hk_assign": {"mode": ""}},
+                  {"hk_assign": {"mode": "bogus"}}, {"hk_assign": {"mode": None}}):
+        assert resolve_assign_mode(value) == ASSIGN_MODE_QUEUE
+
+
+def test_assign_mode_parsing():
+    assert resolve_assign_mode({"hk_assign": {"mode": "claim"}}) == ASSIGN_MODE_CLAIM
+    assert resolve_assign_mode({"hk_assign": {"mode": "CLAIM"}}) == ASSIGN_MODE_CLAIM
+    assert resolve_assign_mode({"hk_assign": {"mode": " queue "}}) == ASSIGN_MODE_QUEUE
+
+
+def test_queue_mode_assigns_one_and_notifies_only_that_one():
+    a = cand(HOUSEKEEPER, active=0, order=0)
+    b = cand(HOUSEKEEPER, active=3, order=1)
+    plan = plan_assignment([a, b], BRANCH, ASSIGN_MODE_QUEUE)
+    assert plan.assignee == a.user_id
+    assert plan.notify == (a.user_id,)
+    assert plan.is_claim is False
+
+
+def test_claim_mode_assigns_nobody_and_notifies_the_whole_pool():
+    """Foydalanuvchi talabi: hammaga yuboriladi, biriktirish yo'q."""
+    a = cand(HOUSEKEEPER, active=0, order=0)
+    b = cand(HOUSEKEEPER, active=3, order=1)
+    manager = cand(MANAGER, active=0, order=2)
+    plan = plan_assignment([a, b, manager], BRANCH, ASSIGN_MODE_CLAIM)
+    assert plan.assignee is None
+    assert plan.is_claim is True
+    # Menejer doiraga kirmaydi — faqat farroshlar
+    assert set(plan.notify) == {a.user_id, b.user_id}
+
+
+def test_claim_mode_respects_working_hours_and_branch():
+    here = cand(HOUSEKEEPER, branch=BRANCH, order=0)
+    off = CleanerCandidate(
+        user_id=uuid4(), branch_id=BRANCH, codes=frozenset(HOUSEKEEPER), on_duty=False
+    )
+    there = cand(HOUSEKEEPER, branch=OTHER_BRANCH, order=2)
+    plan = plan_assignment([here, off, there], BRANCH, ASSIGN_MODE_CLAIM)
+    assert plan.notify == (here.user_id,)
+
+
+def test_claim_mode_with_nobody_on_duty_notifies_nobody():
+    off = CleanerCandidate(
+        user_id=uuid4(), branch_id=BRANCH, codes=frozenset(HOUSEKEEPER), on_duty=False
+    )
+    plan = plan_assignment([off], BRANCH, ASSIGN_MODE_CLAIM)
+    assert plan.assignee is None and plan.notify == ()
+
+
+def test_eligible_pool_is_shared_by_both_modes():
+    """Ikkala rejim ham bir xil doiradan foydalanadi — qoida ajralib ketmasin."""
+    people = [cand(HOUSEKEEPER, order=0), cand(MANAGER, order=1), cand(MAINTENANCE, order=2)]
+    pool = {c.user_id for c in eligible_cleaners(people, BRANCH)}
+    queue = plan_assignment(people, BRANCH, ASSIGN_MODE_QUEUE)
+    claim = plan_assignment(people, BRANCH, ASSIGN_MODE_CLAIM)
+    assert queue.assignee in pool
+    assert set(claim.notify) == pool
+
+
+def test_pick_cleaner_is_queue_mode_regardless_of_settings():
+    """pick_cleaner — navbat qoidasi; rejim unga ta'sir qilmaydi."""
+    a = cand(HOUSEKEEPER, active=0, order=0)
+    b = cand(HOUSEKEEPER, active=2, order=1)
+    assert pick_cleaner([a, b], BRANCH) == a.user_id
 
 
 def test_nobody_on_duty_leaves_task_unassigned():

@@ -21,7 +21,14 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.application.services.cleaner_assignment import find_cleaner
+from app.application.services.cleaner_assignment import (
+    ASSIGN_MODE_CLAIM,
+    CleanerAssignment,
+    find_cleaner,
+    notify_cleaners,
+    resolve_assign_mode,
+    resolve_assignment,
+)
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
@@ -69,6 +76,16 @@ class AutomationService:
         xodim; bo'sh farrosh birinchi, keyin navbat bilan. Topilmasa None (tun
         biriktirilmay yaratiladi va ro'yxatda ko'rinadi)."""
         return await find_cleaner(self.session, hotel_id, branch_id)
+
+    async def _plan_assignment(
+        self, hotel_id: UUID, branch_id: UUID | None
+    ) -> CleanerAssignment:
+        """Mehmonxona rejimiga mos reja: kimga biriktirish + kimga xabar.
+
+        `queue` — bitta farrosh; `claim` — biriktirilmaydi, xabar doiradagi
+        hammaga (kim birinchi boshlasa, vazifa o'shanga o'tadi).
+        """
+        return await resolve_assignment(self.session, hotel_id, branch_id)
 
     async def _linked_cleaning_task(self, reservation_id: UUID) -> HousekeepingTask | None:
         result = await self.session.execute(
@@ -160,6 +177,9 @@ class AutomationService:
         biriktirmasdan ochgan vazifaga (bron yo'q, tiklash izohi yo'q)
         tegilmaydi — u qo'lda taqsimlanadi, avvalgidek. Oxirgi 24 soat —
         eski qoldiqlarni bekorga uyg'otmaslik uchun.
+
+        `claim` rejimidagi mehmonxona TASHLAB KETILADI: u yerda vazifa
+        ataylab biriktirilmaydi — farroshlar ro'yxatdan o'zi oladi.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         rows = await self.session.execute(
@@ -174,7 +194,17 @@ class AutomationService:
                 ),
             )
         )
+        from app.infrastructure.database.models.hotel import Hotel
+
+        mode_cache: dict[UUID, str] = {}
         for task in rows.scalars().all():
+            if task.hotel_id not in mode_cache:
+                hotel = await self.session.get(Hotel, task.hotel_id)
+                mode_cache[task.hotel_id] = resolve_assign_mode(
+                    hotel.settings if hotel else None
+                )
+            if mode_cache[task.hotel_id] == ASSIGN_MODE_CLAIM:
+                continue  # bo'sh vazifa — farroshlar o'zi oladi
             cleaner_id = await self._find_cleaner(task.hotel_id, task.branch_id)
             if cleaner_id is None:
                 continue  # hali hech kim ishda emas — keyingi tikda
@@ -376,11 +406,13 @@ class AutomationService:
                     .first()
                 )
 
-                cleaner_id = await self._find_cleaner(room.hotel_id, room.branch_id)
+                plan = await self._plan_assignment(room.hotel_id, room.branch_id)
+                cleaner_id = plan.assignee
                 # created_by NOT NULL — tizim amali uchun mavjud odamni olamiz
                 created_by = (
                     (reservation.created_by if reservation is not None else None)
                     or cleaner_id
+                    or (plan.notify[0] if plan.notify else None)
                     or (
                         await self.session.execute(
                             select(User.id)
@@ -426,26 +458,17 @@ class AutomationService:
                     cleaner_id,
                 )
 
-                if cleaner_id is not None:
-                    try:
-                        await NotificationService(self.session).notify(
-                            hotel_id=room.hotel_id,
-                            user_id=cleaner_id,
-                            title="Tozalanmagan xona",
-                            body=(
-                                f"{room.room_number}-xona tozalash holatida "
-                                f"turibdi — tozalab, vazifani yakunlang"
-                            ),
-                            entity_type="task",
-                            entity_id=task.id,
-                            send_push=True,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Tiklangan vazifa uchun notification yuborilmadi "
-                            "(room=%s)",
-                            room.id,
-                        )
+                await notify_cleaners(
+                    self.session,
+                    plan.notify,
+                    hotel_id=room.hotel_id,
+                    title="Tozalanmagan xona",
+                    body=(
+                        f"{room.room_number}-xona tozalash holatida "
+                        f"turibdi — tozalab, vazifani yakunlang"
+                    ),
+                    entity_id=task.id,
+                )
             except Exception:
                 logger.exception("Orphan CLEANING repair failed for room %s", room.id)
 
@@ -504,35 +527,29 @@ class AutomationService:
             # muammo bo'lsa xabar berishi uchun tozalash vazifasi yaratiladi
             existing = await self._linked_cleaning_task(reservation.id)
             if existing is None:
-                cleaner_id = await self._find_cleaner(hotel_id, reservation.branch_id)
+                plan = await self._plan_assignment(hotel_id, reservation.branch_id)
                 task = await self.res_service._ensure_cleaning_task(
-                    reservation, hotel_id, room, actor, assigned_to=cleaner_id
+                    reservation, hotel_id, room, actor, assigned_to=plan.assignee
                 )
                 logger.info(
                     "Inspection cleaning task created for expired CONFIRMED "
-                    "reservation %s (cleaner=%s)",
+                    "reservation %s (mode=%s, cleaner=%s)",
                     reservation.id,
-                    cleaner_id,
+                    plan.mode,
+                    plan.assignee,
                 )
-                if task is not None and cleaner_id is not None:
-                    try:
-                        await NotificationService(self.session).notify(
-                            hotel_id=hotel_id,
-                            user_id=cleaner_id,
-                            title="Xonani ko'zdan kechiring",
-                            body=(
-                                f"{room.room_number}-xona — bron vaqti tugadi "
-                                f"(mehmon kirmagan), xonani tekshirib chiqing"
-                            ),
-                            entity_type="task",
-                            entity_id=task.id,
-                            send_push=True,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Ko'zdan kechirish notification yuborilmadi (res=%s)",
-                            reservation.id,
-                        )
+                if task is not None:
+                    await notify_cleaners(
+                        self.session,
+                        plan.notify,
+                        hotel_id=hotel_id,
+                        title="Xonani ko'zdan kechiring",
+                        body=(
+                            f"{room.room_number}-xona — bron vaqti tugadi "
+                            f"(mehmon kirmagan), xonani tekshirib chiqing"
+                        ),
+                        entity_id=task.id,
+                    )
             logger.info(
                 "Reservation %s auto CHECKED_OUT (was CONFIRMED, never checked in)",
                 reservation.id,
@@ -543,37 +560,31 @@ class AutomationService:
         if now >= moment - lead:
             existing = await self._linked_cleaning_task(reservation.id)
             if existing is None:
-                cleaner_id = await self._find_cleaner(hotel_id, reservation.branch_id)
+                plan = await self._plan_assignment(hotel_id, reservation.branch_id)
                 task = await self.res_service._ensure_cleaning_task(
-                    reservation, hotel_id, room, actor, assigned_to=cleaner_id
+                    reservation, hotel_id, room, actor, assigned_to=plan.assignee
                 )
                 logger.info(
-                    "Auto cleaning task created for reservation %s (cleaner=%s)",
+                    "Auto cleaning task created for reservation %s (mode=%s, cleaner=%s)",
                     reservation.id,
-                    cleaner_id,
+                    plan.mode,
+                    plan.assignee,
                 )
                 # Mijoz chiqishdan ~LEAD daqiqa oldin — farroshга checkout
-                # ogohlantirishi + biriktirilgan tozalash vazifasi haqida push.
-                if task is not None and cleaner_id is not None:
-                    try:
-                        lead_min = settings.HOUSEKEEPING_LEAD_MINUTES
-                        await NotificationService(self.session).notify(
-                            hotel_id=hotel_id,
-                            user_id=cleaner_id,
-                            title="Mijoz tez orada chiqadi",
-                            body=(
-                                f"{room.room_number}-xona — mijoz ~{lead_min} daqiqada "
-                                f"chiqadi, tozalashga tayyorlaning"
-                            ),
-                            entity_type="task",
-                            entity_id=task.id,
-                            send_push=True,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Checkout ogohlantirish notification yuborilmadi (res=%s)",
-                            reservation.id,
-                        )
+                # ogohlantirishi + tozalash vazifasi haqida push.
+                if task is not None:
+                    lead_min = settings.HOUSEKEEPING_LEAD_MINUTES
+                    await notify_cleaners(
+                        self.session,
+                        plan.notify,
+                        hotel_id=hotel_id,
+                        title="Mijoz tez orada chiqadi",
+                        body=(
+                            f"{room.room_number}-xona — mijoz ~{lead_min} daqiqada "
+                            f"chiqadi, tozalashga tayyorlaning"
+                        ),
+                        entity_id=task.id,
+                    )
 
         # --- 2-bosqich: chiqish vaqti kelganda xona CLEANING ga o'tadi ---
         if now >= moment and room.current_status == "OCCUPIED":

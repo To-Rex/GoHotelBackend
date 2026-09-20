@@ -26,7 +26,13 @@ from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.discount_policy import check_discount
 from app.application.services import reservation_extend as extend_rules
 from app.application.services.notification_service import NotificationService
-from app.application.services.cleaner_assignment import find_cleaner
+from app.application.services.cleaner_assignment import (
+    ASSIGN_MODE_QUEUE,
+    CleanerAssignment,
+    find_cleaner,
+    notify_cleaners,
+    resolve_assignment,
+)
 from app.shared.utils import generate_code
 from sqlalchemy import select
 
@@ -1729,27 +1735,30 @@ class ReservationService:
         # yakunlangan vazifa yangi ochiq vazifa yaratishga to'sqinlik qilmaydi,
         # aks holda xona CLEANING holatida tiqilib qolardi.
         if room and was_checked_in:
-            cleaner_id = await self._find_cleaner(hotel_id, reservation.branch_id)
+            plan = await resolve_assignment(
+                self.session, hotel_id, reservation.branch_id
+            )
             task = await self._ensure_cleaning_task(
                 reservation, hotel_id, room, user_id,
-                assigned_to=cleaner_id, active_only=True,
+                assigned_to=plan.assignee, active_only=True,
             )
-            if task and cleaner_id:
+            if task:
                 # Push/notification xatosi bekor qilish oqimini hech qachon buzmaydi
-                try:
-                    await NotificationService(self.session).notify(
-                        hotel_id=hotel_id,
-                        user_id=cleaner_id,
-                        title="Bron bekor qilindi — tozalash vazifasi",
-                        body=(
-                            f"{room.room_number}-xona bo'shatildi, "
-                            "tozalash vazifasi sizga biriktirildi"
-                        ),
-                        entity_type="task",
-                        entity_id=task.id,
-                    )
-                except Exception:
-                    pass
+                await notify_cleaners(
+                    self.session,
+                    plan.notify,
+                    hotel_id=hotel_id,
+                    title="Bron bekor qilindi — tozalash vazifasi",
+                    body=(
+                        f"{room.room_number}-xona bo'shatildi, "
+                        + (
+                            "tozalash kerak — vazifani ochib boshlang"
+                            if plan.is_claim
+                            else "tozalash vazifasi sizga biriktirildi"
+                        )
+                    ),
+                    entity_id=task.id,
+                )
 
         await self.session.flush()
         return reservation
@@ -1805,13 +1814,22 @@ class ReservationService:
                 )
             )
 
-        cleaner_id = assign_to or await self._find_cleaner(hotel_id, reservation.branch_id)
+        if assign_to:
+            # Farrosh o'zi bosdi — rejimdan qat'i nazar aynan unga
+            plan = CleanerAssignment(
+                mode=ASSIGN_MODE_QUEUE, assignee=assign_to, notify=(assign_to,)
+            )
+        else:
+            plan = await resolve_assignment(
+                self.session, hotel_id, reservation.branch_id
+            )
+        cleaner_id = plan.assignee
         task = await self._ensure_cleaning_task(
             reservation, hotel_id, room, user_id,
             assigned_to=cleaner_id, active_only=True,
         )
         notify_task = task
-        notify_target = cleaner_id if task else None
+        notify_targets: tuple[UUID, ...] = plan.notify if task else ()
         if task is None:
             # Faol vazifa allaqachon mavjud (masalan, avtomatik ogohlantirish
             # yaratgan) — o'sha vazifaning farroshiga xabar beramiz;
@@ -1832,25 +1850,26 @@ class ReservationService:
                     notify_task.assigned_to = assign_to
                 elif notify_task.assigned_to is None and cleaner_id:
                     notify_task.assigned_to = cleaner_id
-                notify_target = notify_task.assigned_to
+                if notify_task.assigned_to is not None:
+                    notify_targets = (notify_task.assigned_to,)
+                else:
+                    # `claim` rejimi: vazifa ataylab biriktirilmagan —
+                    # xabar butun doiraga ketadi
+                    notify_targets = plan.notify
 
-        if notify_task is not None and notify_target:
+        if notify_task is not None and notify_targets:
             # Push xatosi asosiy oqimni hech qachon buzmasin
-            try:
-                await NotificationService(self.session).notify(
-                    hotel_id=hotel_id,
-                    user_id=notify_target,
-                    title="Mijoz chiqmoqda",
-                    body=(
-                        f"{room.room_number}-xona — mijoz chiqmoqda, xonani "
-                        "tozalab tekshiring. Vazifa yakunlangach bron avtomatik yopiladi"
-                    ),
-                    entity_type="task",
-                    entity_id=notify_task.id,
-                    send_push=True,
-                )
-            except Exception:
-                pass
+            await notify_cleaners(
+                self.session,
+                notify_targets,
+                hotel_id=hotel_id,
+                title="Mijoz chiqmoqda",
+                body=(
+                    f"{room.room_number}-xona — mijoz chiqmoqda, xonani "
+                    "tozalab tekshiring. Vazifa yakunlangach bron avtomatik yopiladi"
+                ),
+                entity_id=notify_task.id,
+            )
 
         await self.session.flush()
         # updated_at (server tomonda onupdate) flush'dan keyin eskirgan bo'ladi —

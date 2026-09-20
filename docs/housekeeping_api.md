@@ -48,6 +48,44 @@ Barcha so'rovlar `Authorization: Bearer {access_token}` header talab qiladi.
 
 ---
 
+## Vazifalarni taqsimlash rejimi
+
+Avtomatik yaratilgan tozalash vazifasi qaysi farroshga tushishini mehmonxona
+sozlamasi belgilaydi (Sozlamalar → Xo'jalik ishlari → "Vazifalarni taqsimlash").
+
+| Rejim | Xatti-harakat |
+|---|---|
+| `queue` (standart) | Vazifa BITTA farroshga biriktiriladi: avval bo'sh turgani, band bo'lsa eng kam vazifalisi, teng bo'lsa eng uzoq vaqt vazifa olmagani (navbat). Push faqat o'shanga. |
+| `claim` | Vazifa biriktirilmaydi (`assigned_to: null`). Push va ro'yxat — ish vaqtidagi BARCHA farroshlarga; kim birinchi `PUT /tasks/{id}/start` ni chaqirsa, vazifa o'shanga biriktiriladi. |
+
+Ikkala rejimda ham nomzodlar doirasi bir xil: faqat **farrosh** rolidagi
+(`housekeeping.*`, lekin menejer/qabulxona emas), **ish vaqtidagi**
+(`work_start`–`work_end`), iloji bo'lsa o'sha filialdagi FAOL xodimlar.
+
+### `GET/PUT /housekeeping/assignment-settings`
+
+```json
+{ "mode": "queue", "modes": ["queue", "claim"], "default": "queue" }
+```
+
+PUT faqat ADMIN/SUPER_ADMIN uchun; tanasi — `{"mode": "claim"}`.
+
+### `claim` rejimida mobil ilova
+
+Ilovada o'zgarish shart emas — hammasi server tomonida hal qilinadi:
+
+* `GET /tasks` — farroshga o'z vazifalari **va** biriktirilmagan OPEN
+  vazifalar qaytariladi (menejer/texnik/qabulxona avvalgidek faqat o'zinikini
+  ko'radi).
+* `PUT /tasks/{id}/start` — bo'sh vazifa atomik egallanadi. Kechikkan farrosh
+  `TASK_ALREADY_CLAIMED` xatosini oladi; boshqa farroshga biriktirilgan
+  vazifani boshlashga urinish — `TASK_ASSIGNED_TO_OTHER` (ADMIN cheklanmaydi).
+
+`claim` rejimida rejalashtiruvchining "kechiktirilgan biriktirish" bosqichi
+ishlamaydi — vazifa ataylab bo'sh turadi.
+
+---
+
 ## 1. Barcha Tasklarni Ko'rish
 
 ```
