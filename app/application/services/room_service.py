@@ -547,9 +547,24 @@ class RoomService:
 
         # Bitta turuvchining kartochkasi. Mehmon bazadan topilmasa bronda
         # saqlangan ism qoladi — yozuv yo'qolmaydi.
-        def occupant(guest: Guest | None, *, name: str | None, primary: bool) -> dict:
+        def occupant(
+            guest: Guest | None,
+            *,
+            name: str | None,
+            primary: bool,
+            entry: dict | None = None,
+        ) -> dict:
+            # Turish davomidagi harakat (companion_ops): hamroh qo'shilgan /
+            # ketgan vaqti. Asosiy mehmon doim ichkarida; eski yozuvlarda
+            # belgi yo'q — ular ham "ichkarida".
+            left_at = (entry or {}).get("left_at")
+            movement = {
+                "added_at": (entry or {}).get("added_at"),
+                "left_at": left_at,
+                "is_present": not left_at,
+            }
             if guest is None:
-                return {"name": name, "is_primary": primary}
+                return {"name": name, "is_primary": primary, **movement}
             return {
                 "guest_id": guest.id,
                 "name": full_name(guest.first_name, guest.last_name) or name,
@@ -566,6 +581,7 @@ class RoomService:
                 "address": guest.address,
                 "notes": guest.notes,
                 "has_face": guest.face_consent_at is not None,
+                **movement,
             }
 
         for row in rows:
@@ -584,7 +600,9 @@ class RoomService:
                         card = guest_cards.get(UUID(str(raw)))
                     except (ValueError, AttributeError, TypeError):
                         card = None
-                occupants.append(occupant(card, name=saved_name, primary=False))
+                occupants.append(
+                    occupant(card, name=saved_name, primary=False, entry=companion)
+                )
 
             items.append(
                 {

@@ -24,6 +24,7 @@ from app.application.dto.reservation import (
     ReservationResponse,
     ReservationDetailResponse,
     MoveRoomRequest,
+    CompanionAddRequest,
     SettlePaymentRequest,
 )
 from app.application.dto.common import MessageResponse
@@ -427,6 +428,104 @@ async def check_out(
         raise ForbiddenException("Hotel context required")
     service = ReservationService(session)
     return await service.check_out(reservation_id, h_id, current_user["id"])
+
+
+# ------------------------------------------------ hamrohlar (turish davomida)
+#
+# Mehmon kirib ketgach hamroh ketishi, o'rniga boshqasi kelishi mumkin. Bu
+# shartnomani (sana, narx, mehmonlar soni) o'zgartirmaydi, shuning uchun
+# tahrir oynasi bilan cheklanmaydi — reservation.update ruxsati kifoya.
+# Qoidalar: companion_ops.py.
+
+
+async def _reservation_hotel_id(
+    current_user: dict, hotel_id: UUID | None, reservation_id: UUID, session: AsyncSession
+) -> UUID:
+    """check-in/check-out bilan bir xil: SUPER_ADMIN hotel_id bermasa bronning
+    o'zidan olinadi, qolganlarda — tokendan."""
+    if current_user["user_type"] == "SUPER_ADMIN":
+        if hotel_id:
+            return hotel_id
+        reservation = await session.get(Reservation, reservation_id)
+        if not reservation:
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+        return reservation.hotel_id
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return h_id
+
+
+@router.post("/{reservation_id}/companions", response_model=ReservationResponse)
+async def add_companion(
+    reservation_id: UUID = Path(),
+    data: CompanionAddRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """Xonaga yangi hamroh (CONFIRMED yoki CHECKED_IN bronda). Ichkaridagilar
+    mehmonlar sonidan oshmaydi — joy bo'lmasa 422 ROOM_GUESTS_FULL."""
+    h_id = await _reservation_hotel_id(current_user, hotel_id, reservation_id, session)
+    service = ReservationService(session)
+    return await service.add_companion(
+        reservation_id, h_id, data.guest_id, current_user["id"]
+    )
+
+
+@router.post(
+    "/{reservation_id}/companions/{guest_id}/leave", response_model=ReservationResponse
+)
+async def companion_leave(
+    reservation_id: UUID = Path(),
+    guest_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """Hamroh xonadan ketdi — yozuv qoladi, "ketdi" belgisi qo'yiladi (CHECKED_IN)."""
+    h_id = await _reservation_hotel_id(current_user, hotel_id, reservation_id, session)
+    service = ReservationService(session)
+    return await service.companion_leave(
+        reservation_id, h_id, guest_id, current_user["id"]
+    )
+
+
+@router.post(
+    "/{reservation_id}/companions/{guest_id}/return", response_model=ReservationResponse
+)
+async def companion_return(
+    reservation_id: UUID = Path(),
+    guest_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """"Ketdi" belgisini bekor qilish — adashib bosilgan bo'lsa (CHECKED_IN)."""
+    h_id = await _reservation_hotel_id(current_user, hotel_id, reservation_id, session)
+    service = ReservationService(session)
+    return await service.companion_return(
+        reservation_id, h_id, guest_id, current_user["id"]
+    )
+
+
+@router.delete(
+    "/{reservation_id}/companions/{guest_id}", response_model=ReservationResponse
+)
+async def remove_companion(
+    reservation_id: UUID = Path(),
+    guest_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """Hamrohni ro'yxatdan olib tashlash — faqat kirishdan OLDIN (CONFIRMED).
+    Kirgan bronda ketishni belgilash ishlatiladi: tarix saqlanadi."""
+    h_id = await _reservation_hotel_id(current_user, hotel_id, reservation_id, session)
+    service = ReservationService(session)
+    return await service.remove_companion(
+        reservation_id, h_id, guest_id, current_user["id"]
+    )
 
 
 @router.post("/{reservation_id}/request-checkout", response_model=ReservationResponse)

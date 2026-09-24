@@ -823,6 +823,83 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 
 ---
 
+**Hamrohlar — turish davomida (companions)**
+
+Mehmon kirib ketgach xonadagilar o'zgarishi mumkin: hamroh ketadi, o'rniga
+boshqasi keladi. Hamrohlar `Reservation.companions` JSONB ro'yxatida saqlanadi;
+yozuv hech qachon o'chirilmaydi (faqat kirishdan oldin), ketgani `left_at`
+bilan belgilanadi — mehmon tarixi va kamera moslashuvi saqlanadi. Qoida:
+ichkaridagilar (asosiy mehmon + `left_at` bo'lmagan hamrohlar) `adults` dan
+oshmaydi. Bu amallar shartnomani (sana, narx, mehmonlar soni) o'zgartirmaydi,
+shu sababli tahrir oynasi bilan cheklanmaydi. Hamma javob — yangilangan
+Reservation object. SUPER_ADMIN `hotel_id` query bermasa bronning o'zidan
+olinadi. Qoidalar: `app/application/services/companion_ops.py`.
+
+Yozuv shakli:
+
+```json
+{
+  "guest_id": "uuid", "name": "Ali Valiyev",
+  "added_at": "ISO", "added_by": "user uuid",
+  "left_at": "ISO", "left_by": "user uuid",
+  "returned_at": "ISO", "returned_by": "user uuid"
+}
+```
+
+`added_*` — turish davomida qo'shilgan; `left_*` — xonadan ketgan;
+`returned_*` — ketib, yana qaytgan. Eski yozuvlarda faqat `guest_id`, `name`.
+
+**POST /reservations/{reservation_id}/companions**
+
+- Auth: require_permission("reservation.update")
+- Description: Xonaga yangi hamroh — ketgan o'rniga kelgan yoki bo'sh joyga.
+  Mehmon oldin `POST /guests` bilan yaratiladi. Ilgari ketgan mehmon qaytsa
+  yangi yozuv ochilmaydi: `left_*` tushadi, `returned_at/by` yoziladi.
+- Body: `{"guest_id": "uuid"}`
+- Response 200: Reservation object
+- Errors:
+  - 404 RESERVATION_NOT_FOUND, COMPANION_NOT_FOUND (mehmon bazada yo'q)
+  - 422 INVALID_STATUS (faqat `CONFIRMED` yoki `CHECKED_IN`)
+  - 422 CHECKOUT_IN_PROGRESS (chiqish jarayoni boshlangan)
+  - 422 COMPANION_IS_MAIN_GUEST, COMPANION_ALREADY_PRESENT
+  - 422 ROOM_GUESTS_FULL (ichkaridagilar + 1 > adults)
+
+**POST /reservations/{reservation_id}/companions/{guest_id}/leave**
+
+- Auth: require_permission("reservation.update")
+- Description: Hamroh xonadan ketdi (`CHECKED_IN`). Yozuv qoladi, `left_at`,
+  `left_by` qo'yiladi; bo'shagan joyga yangi hamroh qo'shish mumkin.
+- Body: None
+- Response 200: Reservation object
+- Errors:
+  - 404 COMPANION_NOT_FOUND
+  - 422 INVALID_STATUS, COMPANION_ALREADY_LEFT
+
+**POST /reservations/{reservation_id}/companions/{guest_id}/return**
+
+- Auth: require_permission("reservation.update")
+- Description: "Ketdi" belgisini bekor qilish — adashib bosilgan bo'lsa
+  (`CHECKED_IN`). Joy tekshiriladi: o'rniga boshqasi kirgan bo'lsa rad etiladi.
+- Response 200: Reservation object
+- Errors:
+  - 404 COMPANION_NOT_FOUND
+  - 422 INVALID_STATUS, COMPANION_NOT_LEFT, ROOM_GUESTS_FULL
+
+**DELETE /reservations/{reservation_id}/companions/{guest_id}**
+
+- Auth: require_permission("reservation.update")
+- Description: Hamrohni ro'yxatdan olib tashlash — faqat kirishdan OLDIN
+  (`CONFIRMED`). Kirgan bronda `leave` ishlatiladi: tarix saqlanadi.
+- Response 200: Reservation object
+- Errors:
+  - 404 COMPANION_NOT_FOUND
+  - 422 INVALID_STATUS
+
+`GET /rooms/{room_id}/reservations` javobidagi `occupants[]` yozuvlarida ham
+`added_at`, `left_at`, `is_present` bor (asosiy mehmonda doim `true`).
+
+---
+
 **POST /reservations/{reservation_id}/check-out**
 
 - Auth: require_permission("guest.checkout")

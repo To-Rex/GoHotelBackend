@@ -24,6 +24,7 @@ from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
 from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.discount_policy import check_discount
+from app.application.services import companion_ops
 from app.application.services import reservation_extend as extend_rules
 from app.application.services.notification_service import NotificationService
 from app.application.services.cleaner_assignment import (
@@ -1054,6 +1055,108 @@ class ReservationService:
                     "GUESTS_REQUIRED",
                 )
         return companions
+
+    # -------------------------------------- hamrohlar (turish davomida) --
+    #
+    # Mehmon kirib ketgach xonadagilar o'zgarishi mumkin: hamroh ketadi,
+    # o'rniga boshqasi keladi. Bu bron shartnomasini (sana, narx, mehmonlar
+    # soni) o'zgartirmaydi — shuning uchun tahrir oynasi bilan cheklanmaydi,
+    # `reservation.update` ruxsati kifoya. Qoidalar `companion_ops` da (sof,
+    # sinovdan o'tadi); bu yerda faqat holat tekshiruvi va saqlash.
+
+    async def _companion_target(
+        self,
+        reservation_id: UUID,
+        hotel_id: UUID,
+        allowed: tuple[str, ...],
+        action: str,
+    ) -> Reservation:
+        reservation = await self.repo.get_by_id(reservation_id, hotel_id)
+        if not reservation:
+            raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+        if reservation.status not in allowed:
+            raise ValidationException(
+                f"{action} faqat {' yoki '.join(allowed)} holatidagi bronda "
+                f"mumkin (hozir: {reservation.status})",
+                "INVALID_STATUS",
+            )
+        return reservation
+
+    async def _store_companions(
+        self, reservation: Reservation, companions: list[dict]
+    ) -> Reservation:
+        # JSONB ichki mutatsiyani sezmaydi — YANGI ro'yxat beriladi. Bo'sh
+        # ro'yxat None bo'lib saqlanadi (yaratilgandagi bilan bir xil).
+        reservation.companions = companions or None
+        await self.session.flush()
+        # updated_at flush'dan keyin eskiradi — javob serializatsiyasi uchun
+        await self.session.refresh(reservation)
+        return reservation
+
+    async def add_companion(
+        self, reservation_id: UUID, hotel_id: UUID, guest_id: UUID, user_id: UUID
+    ) -> Reservation:
+        """Yangi hamroh — ketgan o'rniga kelgan yoki bo'sh joyga (bron kirishdan
+        oldin ham, kirgandan keyin ham)."""
+        reservation = await self._companion_target(
+            reservation_id, hotel_id, ("CONFIRMED", "CHECKED_IN"), "Hamroh qo'shish"
+        )
+        # Chiqish boshlangan — farroshga vazifa ketgan, bron yopilmoqda:
+        # yangi odam joylashtirish mantiqsiz (ketishni belgilash mumkin)
+        if getattr(reservation, "checkout_requested_at", None):
+            raise ValidationException(
+                "Chiqish jarayoni boshlangan — bronga yangi hamroh qo'shilmaydi",
+                "CHECKOUT_IN_PROGRESS",
+            )
+        # Mehmonlar bazasi global — yaratishdagi bilan bir xil qoida
+        guest = await self.guest_repo.get_by_id_unscoped(guest_id)
+        if not guest:
+            raise NotFoundException("Hamroh mehmon topilmadi", "COMPANION_NOT_FOUND")
+        name = " ".join(p for p in (guest.first_name, guest.last_name) if p).strip()
+        companions = companion_ops.add_companion(
+            reservation.companions,
+            guest_id=guest_id,
+            name=name or None,
+            main_guest_id=reservation.guest_id,
+            adults=reservation.adults,
+            at=datetime.now(timezone.utc),
+            by=user_id,
+        )
+        return await self._store_companions(reservation, companions)
+
+    async def companion_leave(
+        self, reservation_id: UUID, hotel_id: UUID, guest_id: UUID, user_id: UUID
+    ) -> Reservation:
+        """Hamroh xonadan ketdi — bron davom etadi, joy bo'shaydi."""
+        reservation = await self._companion_target(
+            reservation_id, hotel_id, ("CHECKED_IN",), "Hamroh ketishini belgilash"
+        )
+        companions = companion_ops.mark_left(
+            reservation.companions, guest_id, at=datetime.now(timezone.utc), by=user_id
+        )
+        return await self._store_companions(reservation, companions)
+
+    async def companion_return(
+        self, reservation_id: UUID, hotel_id: UUID, guest_id: UUID, user_id: UUID
+    ) -> Reservation:
+        """"Ketdi" belgisini bekor qilish (adashib bosilgan)."""
+        reservation = await self._companion_target(
+            reservation_id, hotel_id, ("CHECKED_IN",), "Ketishni bekor qilish"
+        )
+        companions = companion_ops.mark_returned(
+            reservation.companions, guest_id, adults=reservation.adults
+        )
+        return await self._store_companions(reservation, companions)
+
+    async def remove_companion(
+        self, reservation_id: UUID, hotel_id: UUID, guest_id: UUID, user_id: UUID
+    ) -> Reservation:
+        """Hamrohni ro'yxatdan olib tashlash — faqat kirishdan OLDIN."""
+        reservation = await self._companion_target(
+            reservation_id, hotel_id, ("CONFIRMED",), "Hamrohni olib tashlash"
+        )
+        companions = companion_ops.remove_companion(reservation.companions, guest_id)
+        return await self._store_companions(reservation, companions)
 
     async def get_reservations(
         self,

@@ -99,6 +99,12 @@ class MoveRoomRequest(BaseModel):
     new_room_id: UUID
 
 
+class CompanionAddRequest(BaseModel):
+    """Turish davomida hamroh qo'shish — mehmon bazada oldin yaratiladi."""
+
+    guest_id: UUID
+
+
 class SettlePaymentRequest(BaseModel):
     """Bron balansi bo'yicha hisob-kitob (xona almashtirishdan keyin):
     PAY — qo'shimcha to'lov (qisman ham mumkin), REFUND — ortiqcha

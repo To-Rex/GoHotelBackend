@@ -155,6 +155,11 @@ class ReservationOccupant(BaseModel):
     notes: str | None = None
     #: Yuz biriktirilgan mehmon — kamera uni taniydi
     has_face: bool = False
+    #: Turish davomidagi harakat (hamrohlarda): qo'shilgan / ketgan vaqti.
+    #: `is_present` — hozir xonadami; asosiy mehmonda doim True.
+    added_at: datetime | None = None
+    left_at: datetime | None = None
+    is_present: bool = True
 
 
 class RoomReservationResponse(BaseModel):
