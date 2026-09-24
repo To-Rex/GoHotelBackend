@@ -20,16 +20,19 @@ Sana chegaralari mahalliy kun bo'yicha (APP_TZ_OFFSET_MINUTES): xodim uchun
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from typing import Iterable
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.guest import Guest
+from app.infrastructure.database.models.invoice import Invoice
 from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
@@ -87,6 +90,27 @@ def _empty_methods() -> dict:
 
 def _money(bucket: dict) -> dict:
     return {key: float(value) for key, value in bucket.items()}
+
+
+def summarize_payment_methods(payments: Iterable[tuple[str | None, object]]) -> list[dict]:
+    """Bitta bron to'lovlarini usul bo'yicha yig'adi — "To'lov turi" ustuni.
+
+    Kirish: (payment_method, amount) juftliklari. Eski kodlar (CREDIT_CARD,
+    TRANSFER...) kanonik ustunga yig'iladi. Qaytarim manfiy `Payment` bo'lgani
+    uchun yig'indi o'zi kamayadi; nolga tushgan usul (to'liq qaytarilgan)
+    ro'yxatdan chiqadi — aks holda "Naqd 0" bo'lib ko'rinardi.
+    Tartib: summasi kattasi birinchi, teng bo'lsa ustunlar tartibida.
+    """
+    by_method: dict[str, Decimal] = defaultdict(Decimal)
+    for method, amount in payments:
+        by_method[bucket_of(method)] += _dec(amount)
+    return [
+        {"method": method, "amount": float(amount)}
+        for method, amount in sorted(
+            by_method.items(), key=lambda kv: (-kv[1], METHODS.index(kv[0]))
+        )
+        if amount != 0
+    ]
 
 
 class PersonalReportService:
@@ -175,6 +199,11 @@ class PersonalReportService:
             stmt = stmt.where(Reservation.hotel_id == hotel_id)
 
         rows = (await self.session.execute(stmt)).all()
+        # To'lov usullari — barcha bronlar uchun BITTA so'rov (har qator uchun
+        # alohida so'rov ketmasin)
+        methods = await self._payment_methods_by_reservation(
+            [reservation.id for reservation, _, _ in rows]
+        )
         total = Decimal("0")
         cancelled = 0
         items = []
@@ -196,6 +225,9 @@ class PersonalReportService:
                     "status": reservation.status,
                     "total_amount": float(_dec(reservation.total_amount)),
                     "paid_amount": float(_dec(reservation.paid_amount)),
+                    # `paid_amount` bilan bir xil manba — bronning BARCHA
+                    # to'lovlari, kim qabul qilganidan qat'i nazar
+                    "payment_methods": methods.get(reservation.id, []),
                     "check_in_date": reservation.check_in_date.isoformat()
                     if reservation.check_in_date
                     else None,
@@ -210,6 +242,34 @@ class PersonalReportService:
             "cancelled_count": cancelled,
             "total_amount": float(total),
             "items": items,
+        }
+
+    async def _payment_methods_by_reservation(
+        self, reservation_ids: list[UUID]
+    ) -> dict[UUID, list[dict]]:
+        """Har bron uchun to'lov usullari: bron → hisob-faktura → to'lovlar.
+
+        Bazada usul va summa bo'yicha guruhlanadi, keyin kanonik ustunlarga
+        yig'iladi (`summarize_payment_methods`).
+        """
+        if not reservation_ids:
+            return {}
+        rows = await self.session.execute(
+            select(
+                Invoice.reservation_id,
+                Payment.payment_method,
+                func.sum(Payment.amount),
+            )
+            .join(Payment, Payment.invoice_id == Invoice.id)
+            .where(Invoice.reservation_id.in_(reservation_ids))
+            .group_by(Invoice.reservation_id, Payment.payment_method)
+        )
+        grouped: dict[UUID, list[tuple[str | None, object]]] = defaultdict(list)
+        for reservation_id, method, amount in rows.all():
+            grouped[reservation_id].append((method, amount))
+        return {
+            reservation_id: summarize_payment_methods(pairs)
+            for reservation_id, pairs in grouped.items()
         }
 
     # -------------------------------------------------------------- to'lovlar
