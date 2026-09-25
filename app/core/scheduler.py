@@ -13,6 +13,7 @@ import logging
 
 from app.core.config import settings
 from app.core.database import _get_session_factory
+from app.core.db_errors import is_connection_lost, short_error
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +40,16 @@ async def _run_loop() -> None:
         except asyncio.CancelledError:
             logger.info("Auto-checkout scheduler stopping")
             break
-        except Exception:
-            # Bitta tik xatosi loop'ni to'xtatmaydi
-            logger.exception("Auto-checkout scheduler tick failed")
+        except Exception as exc:
+            # Bitta tik xatosi loop'ni to'xtatmaydi. Baza yotgan bo'lsa —
+            # bir qator ogohlantirish (har daqiqada to'liq traceback emas)
+            if is_connection_lost(exc):
+                logger.warning(
+                    "Auto-checkout tiki o'tkazib yuborildi — baza mavjud emas: %s",
+                    short_error(exc),
+                )
+            else:
+                logger.exception("Auto-checkout scheduler tick failed")
 
 
 
@@ -81,8 +89,14 @@ async def _purge_sightings_loop() -> None:
         except asyncio.CancelledError:
             logger.info("Yuz ko'rinishlarini tozalash to'xtatilmoqda")
             break
-        except Exception:
-            logger.exception("Yuz ko'rinishlarini tozalash tiki muvaffaqiyatsiz")
+        except Exception as exc:
+            if is_connection_lost(exc):
+                logger.warning(
+                    "Yuz ko'rinishlarini tozalash o'tkazib yuborildi — baza mavjud emas: %s",
+                    short_error(exc),
+                )
+            else:
+                logger.exception("Yuz ko'rinishlarini tozalash tiki muvaffaqiyatsiz")
 
 
 def start_scheduler() -> None:

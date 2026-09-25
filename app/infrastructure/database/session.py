@@ -1,14 +1,11 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.core.config import settings
+from app.core.database import engine_options
 
-engine = create_async_engine(
-    str(settings.DATABASE_URL),
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_recycle=settings.DB_POOL_RECYCLE,
-    echo=settings.APP_DEBUG,
-)
+# Ulanish sozlamalari asosiy engine bilan bir xil (pre_ping, timeoutlar) —
+# app/core/database.py:engine_options
+engine = create_async_engine(str(settings.DATABASE_URL), **engine_options())
 
 async_session_factory = async_sessionmaker(
     engine,

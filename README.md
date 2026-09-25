@@ -214,6 +214,12 @@ Global modellar (`room_types`, `amenities`) SUPER_ADMIN tomonidan yaratiladi va 
 |-------------|--------|---------|
 | `DATABASE_URL` | PostgreSQL async URL | `postgresql+asyncpg://...` |
 | `DATABASE_URL_SYNC` | PostgreSQL sync URL | `postgresql://...` |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | Ulanishlar puli: doimiy / qo'shimcha | 20 / 10 |
+| `DB_POOL_RECYCLE` | Ulanish shu yoshga (s) yetsa yangilanadi | 1800 |
+| `DB_POOL_TIMEOUT` | Pool to'la bo'lsa kutish (s) | 30 |
+| `DB_POOL_PRE_PING` | Pool'dan olishdan oldin ulanishni tekshirish | `true` |
+| `DB_CONNECT_TIMEOUT` | Bazaga ulanish muddati (s) | 10 |
+| `DB_APPLICATION_NAME` | `pg_stat_activity` dagi nom | `gohotel-backend` |
 | `JWT_SECRET_KEY` | JWT imzo kaliti | — |
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access token muddati | 120 |
 | `JWT_REFRESH_TOKEN_EXPIRE_DAYS` | Refresh token muddati | 7 |
@@ -222,6 +228,17 @@ Global modellar (`room_types`, `amenities`) SUPER_ADMIN tomonidan yaratiladi va 
 | `MINIO_BUCKET_DOCUMENTS` | Hujjatlar bucket | `hotel-documents` |
 | `MINIO_BUCKET_GUESTS` | Mehmon bucket | `hotel-guests` |
 | `CORS_ORIGINS` | Ruxsat etilgan origin'lar | `["http://localhost:3000"]` |
+
+### Baza bilan aloqa uzilganda
+
+Baza serveri qayta ishga tushsa, tarmoq uzilsa yoki pool'dagi ulanishni
+server yopib qo'ysa, so'rov **503 `DB_UNAVAILABLE`** qaytaradi (ilgari 500
+`INTERNAL_ERROR` va "connection is closed" matni edi). Klient buni "qayta
+urinib ko'ring" deb ko'rsatadi. Pool har ulanishni berishdan oldin tekshiradi
+(`pool_pre_ping`), shu sababli baza tiklangach so'rovlar o'zi ishlab ketadi —
+serverni qayta ishga tushirish shart emas. `GET /health` javobidagi
+`database` maydoni (`ok` / `down`) baza holatini ko'rsatadi. Aniqlash
+qoidalari: `app/core/db_errors.py`.
 
 ## Migratsiyalar
 

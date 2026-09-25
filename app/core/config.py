@@ -21,7 +21,19 @@ class DatabaseSettings(BaseSettings):
     DATABASE_URL_SYNC: str = "postgresql://postgres:toor@localhost:5432/hotels-db"
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10
-    DB_POOL_RECYCLE: int = 3600
+    # Ulanish shu yoshga yetsa keyingi olishda yangilanadi. 30 daqiqa —
+    # ko'p serverlar/NAT'lar bo'sh ulanishni 1 soatdan oldin uzadi.
+    DB_POOL_RECYCLE: int = 1800
+    # Pool to'la bo'lsa bo'sh ulanishni shuncha soniya kutish
+    DB_POOL_TIMEOUT: int = 30
+    # Pool'dan olinayotgan ulanish avval "ping" bilan tekshiriladi — server
+    # yopib qo'ygan ulanish so'rovga berilmaydi (app/core/database.py)
+    DB_POOL_PRE_PING: bool = True
+    # Bazaga ulanish shuncha soniyada bo'lmasa xato (asyncpg standarti 60 s —
+    # baza yotganda har so'rov bir daqiqa osilib qolardi)
+    DB_CONNECT_TIMEOUT: int = 10
+    # pg_stat_activity'da ulanishlar kimniki ekani ko'rinadi
+    DB_APPLICATION_NAME: str = "gohotel-backend"
 
 
 class JWTSettings(BaseSettings):
