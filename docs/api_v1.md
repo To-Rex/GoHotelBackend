@@ -118,6 +118,27 @@ For `SUPER_ADMIN`, pass `hotel_id` as a query parameter to scope requests to a s
   - `allow_outside_work_hours` — the per-user exemption set by an admin.
   - `work_hours_enforced` — the hotel setting; always `false` for `ADMIN`/`SUPER_ADMIN` and users without a hotel.
   - `work_hours_blocked` — `true` when any non-allowlisted request by this user would be rejected right now with 403 `OUTSIDE_WORK_HOURS`. Computed on the server clock (`APP_TZ_OFFSET_MINUTES`) with the same function as the gate, so clients should rely on it instead of the browser/device clock.
+- `CONFIGURATOR` / `SUPER_ADMIN`: `hotel_id`, `hotel_name`, `branch_id` and `branch_name` are the hotel/branch chosen with `POST /auth/context` (taken from the token), not the user row.
+
+---
+
+### Configurator (CONFIGURATOR)
+
+A configurator is a hotel-less account (`users.user_type = "CONFIGURATOR"`, `hotel_id` NULL) created only in the superadmin panel (`/superadmin/configurators`). It signs in to the main app with `POST /auth/login`, chooses a hotel and branch, and in the chosen hotel works like a hotel `ADMIN` (`require_permission` bypass, admin-only actions). It is exempt from trusted-device approval and from the "hotel suspended" block (like `SUPER_ADMIN`).
+
+**Settings are configurator-only.** Every settings write (`PUT /hotels/{nav,booking,discount,move-discount,work-hours}-settings`, `PUT /reservations/{edit-window,cancellation}-settings`, `PUT /guests/{scan,blacklist}-settings`, `PUT /shifts/settings`, `PUT /housekeeping/{assignment,auto-complete}-settings`, checklist template writes, `PUT /shop/receipt-settings`, vision device create/revoke and camera update, branch SMS key save/delete/test, `POST /maintenance/reset-data`) is allowed only to `CONFIGURATOR` and `SUPER_ADMIN`; everyone else (hotel `ADMIN` included) gets 403 `SETTINGS_CONFIGURATOR_ONLY`. Reading settings is unchanged.
+
+**GET /auth/context/options**
+
+- Auth: `CONFIGURATOR` or `SUPER_ADMIN` (others: 403 `CONTEXT_FORBIDDEN`)
+- Response 200: `{"hotels": [{"id", "name", "code", "status", "branches": [{"id", "name", "code", "is_main", "status"}]}]}` — main branch first.
+
+**POST /auth/context**
+
+- Auth: `CONFIGURATOR` or `SUPER_ADMIN` (checked against the user row, not only the token)
+- Body: `{"hotel_id": "uuid", "branch_id": "uuid | null"}` — without `branch_id` the main (or first) branch is used. `SUPER_ADMIN` may send `hotel_id: null` to go back to "all hotels"; a configurator may not (422 `HOTEL_REQUIRED`).
+- Response 200: a new token pair (same shape as `/auth/refresh`). The choice lives in the token claims and is kept by `/auth/refresh`; the current session is revoked.
+- Errors: 403 `CONTEXT_FORBIDDEN`, 404 `HOTEL_NOT_FOUND`, 422 `BRANCH_NOT_IN_HOTEL`, 401 `USER_INACTIVE`
 
 ---
 
@@ -261,7 +282,7 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 
 **PUT /hotels/work-hours-settings**
 
-- Auth: ADMIN / SUPER_ADMIN (others: 403 `FORBIDDEN`)
+- Auth: CONFIGURATOR / SUPER_ADMIN (others, hotel ADMIN included: 403 `SETTINGS_CONFIGURATOR_ONLY`)
 - Query: `?hotel_id=` (SUPER_ADMIN only)
 - Description: Turn work-hours enforcement on/off (stored in `hotel.settings.work_hours`; other settings keys are untouched).
 - Body:
@@ -297,7 +318,7 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 
 **PUT /hotels/move-discount-settings**
 
-- Auth: ADMIN / SUPER_ADMIN (others: 403 `FORBIDDEN`)
+- Auth: CONFIGURATOR / SUPER_ADMIN (others, hotel ADMIN included: 403 `SETTINGS_CONFIGURATOR_ONLY`)
 - Description: Save the setting (stored in `hotel.settings.room_move_discount`; other settings keys are untouched).
 - Body: `{"enabled": true, "max_percent": 50, "max_amount": 0}` (`max_percent` 0–100, `max_amount` ≥ 0)
 - Response 200: the saved setting

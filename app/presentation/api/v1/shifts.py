@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
 from app.application.services.shift_service import ShiftService
@@ -75,8 +76,7 @@ async def save_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException("Faqat administrator rejimni o'zgartira oladi")
+    assert_can_manage_settings(current_user)
     return await ShiftService(session).save_settings(
         _hotel_id(current_user), data.mode, data.day_close, data.day_close_required
     )

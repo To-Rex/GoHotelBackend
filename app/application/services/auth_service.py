@@ -9,6 +9,10 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import (
+    CONFIGURATOR_TYPE,
+    CONTEXT_SWITCH_TYPES,
+)
 from app.application.services.hotel_access import assert_hotel_active
 from app.application.services.work_hours_access import (
     EMPLOYEE_TYPE,
@@ -16,7 +20,12 @@ from app.application.services.work_hours_access import (
     resolve_work_hours_settings,
 )
 from app.core.config import settings
-from app.core.exceptions import UnauthorizedException, ForbiddenException
+from app.core.exceptions import (
+    ForbiddenException,
+    NotFoundException,
+    UnauthorizedException,
+    ValidationException,
+)
 from app.infrastructure.auth.jwt import (
     FACE_CHALLENGE_EXPIRE_MINUTES,
     create_access_token,
@@ -171,11 +180,16 @@ class AuthService:
         ip_address: str | None = None,
         user_agent: str | None = None,
         device_id: str | None = None,
+        context: tuple | None = None,
     ) -> dict:
         """Access/refresh token juftligini yaratib, sessiya yozuvini saqlaydi.
 
         Parol bilan login va WebAuthn (Face ID/passkey) login uchun umumiy —
         ikkalasi ham foydalanuvchi allaqachon tekshirilgach shu yerga keladi.
+
+        `context` — (hotel_id, branch_id): sozlovchi yoki tizim ma'muri
+        tanlagan mehmonxona va filial (`switch_context`). Berilmasa —
+        foydalanuvchi yozuvidagi mehmonxona (avvalgidek).
         """
         # Yuz orqali kirish parol bosqichini chetlab o'tadi — mehmonxona
         # holati bu yerda ham tekshiriladi
@@ -185,14 +199,18 @@ class AuthService:
         if user.user_type == "EMPLOYEE":
             permissions = [p["code"] for p in await self.user_repo.get_user_permissions(user.id)]
 
-        user.last_login_at = datetime.now(timezone.utc)
+        if context is None:
+            user.last_login_at = datetime.now(timezone.utc)
+            token_hotel_id, token_branch_id = user.hotel_id, user.branch_id
+        else:
+            token_hotel_id, token_branch_id = context
 
         jti = generate_jti()
         token_data = {
             "sub": str(user.id),
             "user_type": user.user_type,
-            "hotel_id": str(user.hotel_id) if user.hotel_id else None,
-            "branch_id": str(user.branch_id) if user.branch_id else None,
+            "hotel_id": str(token_hotel_id) if token_hotel_id else None,
+            "branch_id": str(token_branch_id) if token_branch_id else None,
             "permissions": permissions,
             "jti": jti,
             # Qurilma tokenga bog'lanadi. Sarlavhaga tayanib bo'lmaydi:
@@ -224,8 +242,8 @@ class AuthService:
                 "username": user.username,
                 "first_name": user.first_name,
                 "last_name": user.last_name,
-                "hotel_id": str(user.hotel_id) if user.hotel_id else None,
-                "branch_id": str(user.branch_id) if user.branch_id else None,
+                "hotel_id": str(token_hotel_id) if token_hotel_id else None,
+                "branch_id": str(token_branch_id) if token_branch_id else None,
                 "permissions": permissions,
             },
         }
@@ -254,14 +272,26 @@ class AuthService:
         if user.user_type == "EMPLOYEE":
             permissions = [p["code"] for p in await self.user_repo.get_user_permissions(user.id)]
 
+        # Sozlovchi / tizim ma'muri tanlagan mehmonxona yangilanishda
+        # yo'qolmasin — u imzolangan refresh tokenda turadi. Mehmonxona yoki
+        # filial o'chirilgan bo'lsa — tanlov bekor, qaytadan tanlanadi.
+        token_hotel_id, token_branch_id = user.hotel_id, user.branch_id
+        if user.user_type in CONTEXT_SWITCH_TYPES:
+            token_hotel_id, token_branch_id = await self._valid_context(
+                payload.get("hotel_id"), payload.get("branch_id")
+            )
+
         new_jti = generate_jti()
         token_data = {
             "sub": str(user.id),
             "user_type": user.user_type,
-            "hotel_id": str(user.hotel_id) if user.hotel_id else None,
-            "branch_id": str(user.branch_id) if user.branch_id else None,
+            "hotel_id": str(token_hotel_id) if token_hotel_id else None,
+            "branch_id": str(token_branch_id) if token_branch_id else None,
             "permissions": permissions,
             "jti": new_jti,
+            # Qurilma yangilangan tokenda ham qoladi — aks holda yangilashdan
+            # keyin qurilma tekshiruvi faqat sarlavhaga tayanib qolardi
+            "device_id": payload.get("device_id"),
         }
 
         new_access = create_access_token(token_data)
@@ -284,10 +314,174 @@ class AuthService:
     async def logout(self, jti: str) -> None:
         await self.session_repo.revoke_session(jti)
 
-    async def get_me(self, user_id: UUID) -> dict:
+    # ------------------------------------------- mehmonxona/filial tanlash --
+
+    async def _valid_context(self, hotel_id, branch_id) -> tuple:
+        """Tokendagi tanlovni tekshiradi: mehmonxona hamon bormi, filial shu
+        mehmonxonaniki va o'chirilmaganmi. Yaroqsiz bo'lsa — (None, None)
+        yoki faqat mehmonxona (filial qaytadan tanlanadi)."""
+        from app.infrastructure.database.models.branch import Branch
+        from app.infrastructure.database.models.hotel import Hotel
+
+        try:
+            hotel_uuid = UUID(str(hotel_id)) if hotel_id else None
+        except (ValueError, TypeError):
+            hotel_uuid = None
+        if hotel_uuid is None or await self.session.get(Hotel, hotel_uuid) is None:
+            return None, None
+        try:
+            branch_uuid = UUID(str(branch_id)) if branch_id else None
+        except (ValueError, TypeError):
+            branch_uuid = None
+        if branch_uuid is not None:
+            branch = await self.session.get(Branch, branch_uuid)
+            if branch is None or branch.hotel_id != hotel_uuid or getattr(branch, "is_deleted", False):
+                branch_uuid = None
+        return hotel_uuid, branch_uuid
+
+    async def context_options(self) -> list[dict]:
+        """Tanlash uchun mehmonxonalar va ularning filiallari."""
+        from sqlalchemy import select
+
+        from app.infrastructure.database.models.branch import Branch
+        from app.infrastructure.database.models.hotel import Hotel
+
+        hotels = (await self.session.execute(select(Hotel).order_by(Hotel.name))).scalars().all()
+        branches = (
+            await self.session.execute(select(Branch).order_by(Branch.name))
+        ).scalars().all()
+        by_hotel: dict = {}
+        for branch in branches:
+            if getattr(branch, "is_deleted", False):
+                continue
+            by_hotel.setdefault(branch.hotel_id, []).append(
+                {
+                    "id": str(branch.id),
+                    "name": branch.name,
+                    "code": branch.code,
+                    "is_main": bool(branch.is_main_branch),
+                    "status": branch.status,
+                }
+            )
+        result = []
+        for hotel in hotels:
+            items = by_hotel.get(hotel.id, [])
+            # Asosiy filial birinchi
+            items.sort(key=lambda b: (not b["is_main"], b["name"] or ""))
+            result.append(
+                {
+                    "id": str(hotel.id),
+                    "name": hotel.name,
+                    "code": getattr(hotel, "code", None),
+                    "status": hotel.status,
+                    "branches": items,
+                }
+            )
+        return result
+
+    async def switch_context(
+        self,
+        current_user: dict,
+        hotel_id: UUID | None,
+        branch_id: UUID | None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict:
+        """Sozlovchi / tizim ma'muri mehmonxona va filialni tanlaydi.
+
+        Yangi token juftligi beriladi (tanlov tokenda turadi), joriy sessiya
+        yopiladi. Filial berilmasa — mehmonxonaning asosiy (yoki birinchi)
+        filiali. Sozlovchi mehmonxonasiz qola olmaydi; tizim ma'muri
+        `hotel_id=None` bilan avvalgi "barcha mehmonxonalar" holatiga qaytadi.
+        """
+        from sqlalchemy import select
+
+        from app.infrastructure.database.models.branch import Branch
+        from app.infrastructure.database.models.hotel import Hotel
+
+        actual = current_user.get("actual_user_type") or current_user.get("user_type")
+        if actual not in CONTEXT_SWITCH_TYPES:
+            raise ForbiddenException(
+                "Mehmonxonani faqat sozlovchi tanlay oladi", "CONTEXT_FORBIDDEN"
+            )
+        user = await self.user_repo.get_by_id(current_user["id"])
+        if not user or user.status != "ACTIVE" or user.is_deleted:
+            raise UnauthorizedException("User not active", "USER_INACTIVE")
+        if user.user_type not in CONTEXT_SWITCH_TYPES:
+            raise ForbiddenException(
+                "Mehmonxonani faqat sozlovchi tanlay oladi", "CONTEXT_FORBIDDEN"
+            )
+
+        if hotel_id is None:
+            if user.user_type == CONFIGURATOR_TYPE:
+                raise ValidationException("Mehmonxonani tanlang", "HOTEL_REQUIRED")
+            branch_id = None
+        else:
+            hotel = await self.session.get(Hotel, hotel_id)
+            if hotel is None:
+                raise NotFoundException("Mehmonxona topilmadi", "HOTEL_NOT_FOUND")
+            branches = [
+                b
+                for b in (
+                    await self.session.execute(
+                        select(Branch).where(Branch.hotel_id == hotel_id)
+                    )
+                ).scalars().all()
+                if not getattr(b, "is_deleted", False)
+            ]
+            if branch_id is not None:
+                if not any(b.id == branch_id for b in branches):
+                    raise ValidationException(
+                        "Filial bu mehmonxonaga tegishli emas", "BRANCH_NOT_IN_HOTEL"
+                    )
+            elif branches:
+                branches.sort(key=lambda b: (not b.is_main_branch, b.name or ""))
+                branch_id = branches[0].id
+
+        # Faqat OCHIQ sessiya bilan: yopilgan (masalan oldingi tanlovdagi)
+        # yoki o'g'irlangan eski access token bilan yangi 7 kunlik sessiya
+        # ochib bo'lmasin. Eski sessiya yopiladi — tanlov faqat yangi tokenda.
+        jti = current_user.get("jti") or ""
+        live = await self.session_repo.get_by_jti(jti) if jti else None
+        if (
+            live is None
+            or live.revoked_at is not None
+            or str(live.user_id) != str(user.id)
+        ):
+            raise UnauthorizedException("Session revoked", "SESSION_REVOKED")
+        live.revoked_at = datetime.now(timezone.utc)
+        return await self.issue_tokens(
+            user,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device_id=current_user.get("device_id"),
+            context=(hotel_id, branch_id),
+        )
+
+    async def get_me(
+        self,
+        user_id: UUID,
+        context_hotel_id: UUID | None = None,
+        context_branch_id: UUID | None = None,
+    ) -> dict:
+        """Joriy foydalanuvchi.
+
+        Sozlovchi va tizim ma'muri uchun mehmonxona/filial — TOKENDAGI tanlov
+        (`switch_context`), foydalanuvchi yozuvidagi emas (u bo'sh).
+        """
         user = await self.user_repo.get_by_id(user_id)
         if not user:
             raise UnauthorizedException("User not found", "USER_NOT_FOUND")
+
+        own_hotel_id, own_branch_id = user.hotel_id, user.branch_id
+        branch_name: str | None = None
+        if user.user_type in CONTEXT_SWITCH_TYPES:
+            own_hotel_id, own_branch_id = context_hotel_id, context_branch_id
+            if own_branch_id:
+                from app.infrastructure.database.models.branch import Branch
+
+                branch = await self.session.get(Branch, own_branch_id)
+                branch_name = branch.name if branch is not None else None
 
         permissions: list[str] = []
         if user.user_type == "EMPLOYEE":
@@ -298,10 +492,10 @@ class AuthService:
         # Mehmonxona to'liq o'qiladi: ish vaqti sozlamasi ham kerak.
         hotel_name: str | None = None
         hotel = None
-        if user.hotel_id:
+        if own_hotel_id:
             from app.infrastructure.database.models.hotel import Hotel
 
-            hotel = await self.session.get(Hotel, user.hotel_id)
+            hotel = await self.session.get(Hotel, own_hotel_id)
             hotel_name = hotel.name if hotel is not None else None
 
         # Ish vaqtidan tashqarida ishlash — `get_current_user` dagi to'siq
@@ -325,9 +519,10 @@ class AuthService:
         return {
             "id": str(user.id),
             "user_type": user.user_type,
-            "hotel_id": str(user.hotel_id) if user.hotel_id else None,
+            "hotel_id": str(own_hotel_id) if own_hotel_id else None,
             "hotel_name": hotel_name,
-            "branch_id": str(user.branch_id) if user.branch_id else None,
+            "branch_id": str(own_branch_id) if own_branch_id else None,
+            "branch_name": branch_name,
             "username": user.username,
             "first_name": user.first_name,
             "last_name": user.last_name,

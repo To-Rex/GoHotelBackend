@@ -455,6 +455,130 @@ class EstateService:
             "last_login_at": None,
         }
 
+    # ----------------------------------------------------- sozlovchilar --
+    #
+    # Sozlovchi (CONFIGURATOR) — mehmonxonaga BOG'LANMAGAN hisob: istalgan
+    # mehmonxona va filialga o'tib, uni sozlab beradi (configurator_access).
+    # Faqat panelda yaratiladi; holati va paroli xodimlarniki kabi
+    # `/staff/{id}/status` va `/staff/{id}/password` orqali boshqariladi.
+
+    @staticmethod
+    def _configurator_dict(u: User) -> dict:
+        return {
+            "id": str(u.id),
+            "username": u.username,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+            "user_type": u.user_type,
+            "status": u.status,
+            "email": u.email,
+            "phone": u.phone,
+            "created_at": u.created_at.isoformat() if getattr(u, "created_at", None) else None,
+            "last_login_at": (
+                u.last_login_at.isoformat() if u.last_login_at else None
+            ),
+        }
+
+    async def list_configurators(self) -> list[dict]:
+        rows = (
+            (
+                await self.session.execute(
+                    select(User)
+                    .where(
+                        User.user_type == "CONFIGURATOR",
+                        User.is_deleted.is_(False),
+                    )
+                    .order_by(User.first_name, User.username)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [self._configurator_dict(u) for u in rows]
+
+    async def create_configurator(self, data: dict) -> dict:
+        """Yangi sozlovchi — mehmonxonasiz va filialsiz hisob."""
+        from app.infrastructure.auth.password import (
+            hash_password as hash_staff_password,
+        )
+
+        username = (data.get("username") or "").strip().lower()
+        password = data.get("password") or ""
+        first_name = _clean(data.get("first_name"))
+        last_name = _clean(data.get("last_name"))
+        if len(username) < 3:
+            raise ValidationException(
+                "Login kamida 3 belgidan iborat bo'lsin", "USERNAME_TOO_SHORT"
+            )
+        if len(password) < 6:
+            raise ValidationException(
+                "Parol kamida 6 belgidan iborat bo'lsin", "PASSWORD_TOO_SHORT"
+            )
+        if not first_name:
+            raise ValidationException("Ism kerak", "NAME_REQUIRED")
+        taken = (
+            await self.session.execute(
+                select(User.id).where(User.username == username)
+            )
+        ).first()
+        if taken:
+            raise ConflictException("Bu login band", "USERNAME_TAKEN")
+
+        user = User(
+            hotel_id=None,
+            branch_id=None,
+            username=username,
+            password_hash=hash_staff_password(password),
+            first_name=first_name,
+            last_name=last_name or "",
+            email=_clean(data.get("email")),
+            phone=_clean(data.get("phone")),
+            user_type="CONFIGURATOR",
+            status="ACTIVE",
+        )
+        self.session.add(user)
+        await self.session.flush()
+        await self.session.refresh(user)
+        return self._configurator_dict(user)
+
+    async def delete_configurator(self, user_id: UUID) -> dict:
+        """Sozlovchini o'chirish (yumshoq: tarixdagi ismi saqlanadi).
+
+        Login bo'shatiladi — xuddi shu login bilan yangisini ochish mumkin
+        bo'lsin. Ochiq sessiyalari token muddati tugaguncha ishlaydi (boshqa
+        hisoblardagi kabi), lekin yangilanmaydi.
+        """
+        from datetime import datetime, timezone
+
+        user = await self.session.get(User, user_id)
+        if user is None or user.is_deleted or user.user_type != "CONFIGURATOR":
+            raise NotFoundException("Sozlovchi topilmadi", "USER_NOT_FOUND")
+        user.is_deleted = True
+        user.status = "INACTIVE"
+        await self._revoke_sessions(user.id)
+        if hasattr(user, "deleted_at"):
+            user.deleted_at = datetime.now(timezone.utc)
+        suffix = f"#deleted-{str(user.id)[:8]}"
+        user.username = f"{user.username[: 100 - len(suffix)]}{suffix}"
+        await self.session.flush()
+        return {"id": str(user.id), "deleted": True}
+
+    async def _revoke_sessions(self, user_id: UUID) -> None:
+        """Hisobning barcha ochiq sessiyalarini yopadi (sozlovchi uchun:
+        `get_current_user` sozlovchi tokenini sessiya bilan tekshiradi,
+        ya'ni u darhol ishlamay qoladi)."""
+        from datetime import datetime, timezone
+
+        from sqlalchemy import update
+
+        from app.infrastructure.database.models.user_session import UserSession
+
+        await self.session.execute(
+            update(UserSession)
+            .where(UserSession.user_id == user_id, UserSession.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(timezone.utc))
+        )
+
     async def set_user_status(self, user_id: UUID, status: str) -> dict:
         """Xodimni faollashtirish yoki to'xtatish."""
         value = (status or "").upper()
@@ -464,6 +588,10 @@ class EstateService:
         if user is None or user.is_deleted:
             raise NotFoundException("Xodim topilmadi", "USER_NOT_FOUND")
         user.status = value
+        # To'xtatilgan sozlovchi istalgan mehmonxonaga kira olgani uchun —
+        # ochiq sessiyalari darhol yopiladi (boshqa xodimlarda avvalgidek)
+        if user.user_type == "CONFIGURATOR" and value != "ACTIVE":
+            await self._revoke_sessions(user.id)
         await self.session.flush()
         return {"id": str(user.id), "status": user.status}
 

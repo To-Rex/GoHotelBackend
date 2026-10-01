@@ -285,6 +285,34 @@ almashtirishda chegirma" (`GET/PUT /api/v1/hotels/move-discount-settings`,
 Kod: `app/application/services/move_discount_policy.py`, migratsiya
 `b1e2f3a4b5c6`, test: `pytest tests/test_move_discount_policy.py`.
 
+### Sozlovchi (CONFIGURATOR) roli
+
+Sozlovchi — mehmonxonaga bog'lanmagan hisob (`users.user_type =
+"CONFIGURATOR"`, `hotel_id` bo'sh). U **faqat boshqaruv panelida**
+yaratiladi (Panel → Obyektlar → Sozlovchilar; `GET/POST
+/superadmin/configurators`, `DELETE /superadmin/configurators/{id}`, holati
+va paroli `/superadmin/staff/{id}/status|password`).
+
+- Asosiy tizimga login/parol bilan kiradi, mehmonxona va filialni tanlaydi
+  (`GET /auth/context/options`, `POST /auth/context` — yangi token
+  juftligi). Tanlov tokenda turadi va `/auth/refresh` da saqlanadi; veb
+  Navbar'dagi tugma orqali istalgan payt almashtiradi.
+- Tanlangan mehmonxonada ADMINISTRATOR kabi ishlaydi: `get_current_user`
+  uning `user_type` ini "ADMIN" qilib beradi, haqiqiy turi
+  `actual_user_type` da (`configurator_access.py`). Qurilma tasdig'i va
+  "mehmonxona to'xtatilgan" to'sig'i unga qo'llanmaydi.
+- **Sozlamalar faqat sozlovchi va SUPER_ADMIN da.** Sozlamalarni yozuvchi
+  barcha endpointlar (`assert_can_manage_settings`) mehmonxona
+  administratoriga ham 403 `SETTINGS_CONFIGURATOR_ONLY` qaytaradi; o'qish
+  hammaga ochiq. Vebda Sozlamalar sahifasi boshqa rollarda umuman
+  ko'rinmaydi. SUPER_ADMIN ham mehmonxona tanlay oladi (ixtiyoriy) —
+  `hotel_id: null` bilan avvalgi "barcha mehmonxonalar" holatiga qaytadi.
+- Mobil ilovada sozlovchiga faqat "veb-ilovada ishlang" sahifasi chiqadi.
+
+Kod: `app/application/services/configurator_access.py`, test:
+`pytest tests/test_configurator_access.py`. Migratsiya kerak emas
+(`users.user_type` oddiy satr).
+
 ### Mijozga SMS (Xabarchi)
 
 Mijozga SMS [Xabarchi](https://github.com/To-Rex/Xabarchi-Backend) orqali

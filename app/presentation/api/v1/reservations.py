@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.infrastructure.database.models.reservation import Reservation
@@ -70,8 +71,7 @@ async def save_edit_window_settings(
     """Vaqt oynasini saqlash — faqat ADMIN/SUPER_ADMIN."""
     from app.infrastructure.database.models.hotel import Hotel
 
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException("Faqat administrator o'zgartira oladi")
+    assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user)
     hotel = await session.get(Hotel, h_id) if h_id else None
     if not hotel:
@@ -124,8 +124,7 @@ async def save_cancellation_settings(
         DEFAULT_CANCELLATION_FEE_PERCENT,
     )
 
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException("Faqat administrator o'zgartira oladi")
+    assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user)
     hotel = await session.get(Hotel, h_id) if h_id else None
     if not hotel:

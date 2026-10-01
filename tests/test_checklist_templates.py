@@ -139,9 +139,13 @@ def admin_ok(user):
         return e.error_code
 
 
-check("administrator", admin_ok(ADMIN), None)
+# Bandlar ro'yxati — mehmonxona sozlamasi: faqat sozlovchi va tizim ma'muri
+# (configurator_access). Mehmonxona administratori endi faqat o'qiydi.
+CONFIG = {"user_type": "ADMIN", "actual_user_type": "CONFIGURATOR", "id": uuid.uuid4()}
+check("sozlovchi (mehmonxona tanlagan)", admin_ok(CONFIG), None)
 check("super administrator", admin_ok(SUPER), None)
-check("oddiy xodim", admin_ok(STAFF), "ADMIN_ONLY")
+check("administrator", admin_ok(ADMIN), "SETTINGS_CONFIGURATOR_ONLY")
+check("oddiy xodim", admin_ok(STAFF), "SETTINGS_CONFIGURATOR_ONLY")
 
 
 print("\n--- nom tekshiruvi ---")

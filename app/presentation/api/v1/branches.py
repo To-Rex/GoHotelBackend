@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.application.services.branch_service import BranchService
@@ -157,6 +158,7 @@ async def save_branch_sms(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("branch.update")),
 ):
+    assert_can_manage_settings(current_user)
     branch = await _sms_branch(session, branch_id, current_user)
     key = data.api_key.strip()
     if not key:
@@ -172,6 +174,7 @@ async def delete_branch_sms(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("branch.update")),
 ):
+    assert_can_manage_settings(current_user)
     branch = await _sms_branch(session, branch_id, current_user)
     branch.sms_api_key = None
     await session.flush()
@@ -187,6 +190,7 @@ async def test_branch_sms(
 ):
     """Saqlangan kalit bilan sinov SMS'i — natija DARHOL qaytadi (fonda
     emas): xodim kalit ishlayotganini shu yerning o'zida ko'radi."""
+    assert_can_manage_settings(current_user)
     branch = await _sms_branch(session, branch_id, current_user)
     key = sms_service.decrypt_key(branch.sms_api_key) if branch.sms_api_key else None
     if not key:

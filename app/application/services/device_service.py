@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 #: Sabab oddiy: tasdiqlaydigan odamning o'zi tasdiq kutib qolsa, tizimga
 #: hech kim kira olmay qolardi — yangi mehmonxonada birinchi kirish ham
 #: mumkin bo'lmasdi. Administrator baribir login, parol va (biriktirgan
-#: bo'lsa) yuz tekshiruvidan o'tadi.
-DEVICE_CHECK_EXEMPT_TYPES = ("ADMIN", "SUPER_ADMIN")
+#: bo'lsa) yuz tekshiruvidan o'tadi. Sozlovchi (CONFIGURATOR) ham ozod: u
+#: ko'p mehmonxonaga o'tib ishlaydi, har birida qurilma tasdig'ini kutib
+#: qolsa ishlay olmasdi (configurator_access).
+DEVICE_CHECK_EXEMPT_TYPES = ("ADMIN", "SUPER_ADMIN", "CONFIGURATOR")
 
 VALID_STATUSES = ("PENDING", "APPROVED", "BLOCKED")
 

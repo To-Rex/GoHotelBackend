@@ -22,8 +22,12 @@ async def require_active_hotel(
     klient "xizmat to'xtatilgan" ekranini ko'rsatadi, aks holda ekran
     cheksiz "yuklanmoqda" holatida qolardi.
     """
+    # Haqiqiy tur: mehmonxona tanlagan sozlovchi ADMIN bo'lib ko'rinadi,
+    # lekin to'xtatilgan mehmonxona to'sig'idan ozod (configurator_access)
     await assert_hotel_active(
-        session, current_user.get("hotel_id"), current_user.get("user_type")
+        session,
+        current_user.get("hotel_id"),
+        current_user.get("actual_user_type") or current_user.get("user_type"),
     )
 
 

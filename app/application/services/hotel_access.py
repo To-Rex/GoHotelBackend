@@ -72,9 +72,12 @@ async def assert_hotel_active(
     """Mehmonxona faol bo'lmasa 403 ko'taradi.
 
     `SUPER_ADMIN` mustasno: uning mehmonxonasi yo'q va u to'xtatilgan
-    obyektni tiklash uchun ham kira olishi kerak.
+    obyektni tiklash uchun ham kira olishi kerak. Sozlovchi (`CONFIGURATOR`)
+    ham — u to'xtatilgan mehmonxonani ham sozlashi kerak bo'lishi mumkin
+    (configurator_access). Sozlovchi mehmonxona tanlamagan bo'lsa ham bu
+    yerdan o'tadi, lekin endpointning o'zi "Hotel context required" beradi.
     """
-    if user_type == "SUPER_ADMIN":
+    if user_type in ("SUPER_ADMIN", "CONFIGURATOR"):
         return
     if not hotel_id:
         raise ForbiddenException("Hotel context required")

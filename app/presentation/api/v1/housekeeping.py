@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.application.services.cleaner_assignment import (
     ASSIGN_MODE_FIELD,
     ASSIGN_MODE_QUEUE,
@@ -212,9 +213,8 @@ async def save_assignment_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Taqsimlash rejimini saqlash — faqat ADMIN/SUPER_ADMIN."""
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException("Only admins can change assignment mode")
+    """Taqsimlash rejimini saqlash — faqat sozlovchi (configurator_access)."""
+    assert_can_manage_settings(current_user)
     h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
     hotel = await session.get(Hotel, h_id) if h_id else None
     if not hotel:
@@ -279,9 +279,8 @@ async def save_auto_complete_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Avto-yakunlash vaqtlarini saqlash — faqat ADMIN/SUPER_ADMIN."""
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException("Only admins can change auto-complete settings")
+    """Avto-yakunlash vaqtlarini saqlash — faqat sozlovchi (configurator_access)."""
+    assert_can_manage_settings(current_user)
     h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
     hotel = await session.get(Hotel, h_id) if h_id else None
     if not hotel:

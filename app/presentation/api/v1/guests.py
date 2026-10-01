@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.application.dto.guest_stay import GuestHistoryResponse
 from app.application.services.document_ocr import intake
 from app.application.services.blacklist_service import BlacklistService
@@ -109,11 +110,8 @@ async def save_scan_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Rejimni o'zgartirish — faqat administrator."""
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException(
-            "Faqat administrator skaner rejimini o'zgartira oladi", "FORBIDDEN"
-        )
+    """Rejimni o'zgartirish — faqat sozlovchi (configurator_access)."""
+    assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user)
     hotel = await session.get(Hotel, h_id) if h_id else None
     if not hotel:
@@ -268,8 +266,7 @@ async def save_blacklist_settings(
         DEFAULT_BLOCK_BOOKING,
     )
 
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException("Faqat administrator o'zgartira oladi")
+    assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user)
     hotel = await session.get(Hotel, h_id) if h_id else None
     if not hotel:

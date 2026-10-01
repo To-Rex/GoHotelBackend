@@ -68,6 +68,9 @@ class FakeResult:
     def first(self):
         return self.value
 
+    def scalar_one_or_none(self):
+        return self.value
+
 
 class FakeSession:
     """Faqat to'siq, /auth/me va sozlama endpointlari uchun yetarli sessiya.
@@ -83,6 +86,8 @@ class FakeSession:
         self.gets: list[str] = []
         self.statements: list[str] = []
         self.flushed = False
+        # Sozlovchi tokeni sessiya bilan tekshiriladi (configurator_access)
+        self.live_session = None
 
     async def get(self, model, _key):
         self.gets.append(model.__name__)
@@ -95,6 +100,8 @@ class FakeSession:
         self.statements.append(sql)
         if "shift_sessions" in sql:
             return FakeResult(uuid.uuid4() if self.active_session else None)
+        if "FROM user_sessions" in sql:
+            return FakeResult(self.live_session)
         if "FROM users" in sql:
             return FakeResult(self.user_row)
         raise AssertionError(f"Kutilmagan so'rov: {sql}")
@@ -696,21 +703,26 @@ def test_http_settings_routes_before_hotel_catch_all(clock):
     assert response.json() == {"enforce": False}
 
 
-def test_http_only_admin_saves_setting(clock):
+def test_http_only_configurator_saves_setting(clock):
+    """Sozlamani faqat sozlovchi (va tizim ma'muri) o'zgartiradi —
+    mehmonxona administratori ham, xodim ham faqat o'qiydi."""
     clock(NOON)
     hotel = make_hotel({"shift": {"mode": "cash"}})
     session = FakeSession(hotel)
-    response = http(
-        session, "PUT", "/api/v1/hotels/work-hours-settings",
-        token_for("EMPLOYEE", hotel.id), json={"enforce": True},
-    )
-    assert response.status_code == 403
-    assert response.json()["error_code"] == "FORBIDDEN"
-    assert WORK_HOURS_SETTINGS_KEY not in hotel.settings
+    for user_type in ("EMPLOYEE", "ADMIN"):
+        response = http(
+            session, "PUT", "/api/v1/hotels/work-hours-settings",
+            token_for(user_type, hotel.id), json={"enforce": True},
+        )
+        assert response.status_code == 403
+        assert response.json()["error_code"] == "SETTINGS_CONFIGURATOR_ONLY"
+        assert WORK_HOURS_SETTINGS_KEY not in hotel.settings
 
+    configurator_id = uuid.uuid4()
+    session.live_session = SimpleNamespace(user_id=configurator_id, revoked_at=None)
     response = http(
         session, "PUT", "/api/v1/hotels/work-hours-settings",
-        token_for("ADMIN", hotel.id), json={"enforce": True},
+        token_for("CONFIGURATOR", hotel.id, user_id=configurator_id), json={"enforce": True},
     )
     assert response.status_code == 200
     assert response.json() == {"enforce": True}

@@ -20,6 +20,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
 from app.core.exceptions import (
     ConflictException,
@@ -288,8 +289,8 @@ async def save_receipt_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Dizaynni saqlash — faqat admin/menejer (do'kon boshqaruvi ruxsati)."""
-    _ensure_manage(current_user)
+    """Dizaynni saqlash — faqat sozlovchi (Sozlamalar → Chek, configurator_access)."""
+    assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user, hotel_id)
     hotel = await session.get(Hotel, h_id)
     if not hotel:

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, ValidationException
 from app.application.services.maintenance_service import MaintenanceService
@@ -33,11 +34,8 @@ async def reset_data(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    # Bu huquq faqat administratorlarda
-    if current_user["user_type"] not in ("SUPER_ADMIN", "ADMIN"):
-        raise ForbiddenException(
-            "Ma'lumotlarni tozalash faqat administratorlar uchun", "ADMIN_ONLY"
-        )
+    # Bu huquq faqat sozlovchi va tizim ma'murida (Sozlamalar → Xavfli hudud)
+    assert_can_manage_settings(current_user)
 
     # Tasodifiy chaqiruvdan himoya
     if data.confirm != "RESET":

@@ -592,19 +592,22 @@ def test_invoice_creation_subtracts_the_move_discount():
 
 
 # ---------------------------------------------------- sozlama API --
-def test_settings_api_round_trip_and_admin_only():
+def test_settings_api_round_trip_and_configurator_only():
     session = FakeSession({"discount": {"daily": {"max_percent": 5}}})
     employee = {"user_type": "EMPLOYEE", "hotel_id": HOTEL_ID}
     admin = {"user_type": "ADMIN", "hotel_id": HOTEL_ID}
+    # Mehmonxona tanlagan sozlovchi (get_current_user uni ADMIN qilib beradi)
+    configurator = {"user_type": "ADMIN", "actual_user_type": "CONFIGURATOR", "hotel_id": HOTEL_ID}
 
     got = asyncio.run(hotels_api.get_move_discount_settings(session=session, current_user=employee))
     assert got == OFF
 
     body = hotels_api.MoveDiscountSettingsRequest(enabled=True, max_percent=30, max_amount=50_000)
-    with pytest.raises(ForbiddenException):
-        asyncio.run(hotels_api.save_move_discount_settings(body, session=session, current_user=employee))
+    for actor in (employee, admin):
+        with pytest.raises(ForbiddenException):
+            asyncio.run(hotels_api.save_move_discount_settings(body, session=session, current_user=actor))
 
-    saved = asyncio.run(hotels_api.save_move_discount_settings(body, session=session, current_user=admin))
+    saved = asyncio.run(hotels_api.save_move_discount_settings(body, session=session, current_user=configurator))
     assert saved == {"enabled": True, "max_percent": 30.0, "max_amount": 50_000.0}
     # Boshqa sozlamalarga tegilmaydi
     assert session.hotel.settings["discount"] == {"daily": {"max_percent": 5}}

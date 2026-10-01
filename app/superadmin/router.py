@@ -324,6 +324,48 @@ async def reset_staff_password(
     return await EstateService(session).reset_user_password(user_id, data.password)
 
 
+# --------------------------------------------------------- sozlovchilar --
+
+
+class ConfiguratorCreateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=6, max_length=200)
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(default="", max_length=100)
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=50)
+
+
+@router.get("/configurators")
+async def list_configurators(
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Sozlovchilar — istalgan mehmonxonaga o'tib sozlay oladigan hisoblar.
+    Holati va paroli: `/staff/{id}/status`, `/staff/{id}/password`."""
+    return await EstateService(session).list_configurators()
+
+
+@router.post("/configurators")
+async def create_configurator(
+    data: ConfiguratorCreateRequest,
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    return await EstateService(session).create_configurator(
+        data.model_dump(exclude_none=True)
+    )
+
+
+@router.delete("/configurators/{user_id}")
+async def delete_configurator(
+    user_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    return await EstateService(session).delete_configurator(user_id)
+
+
 # ------------------------------------------- nazorat: bron, pul, tarix --
 
 

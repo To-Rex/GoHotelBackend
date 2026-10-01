@@ -26,6 +26,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
@@ -89,10 +90,9 @@ MAX_TITLE_LENGTH = 255
 
 
 def _require_admin(current_user: dict) -> None:
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException(
-            "Vazifa bandlarini faqat administrator boshqaradi", "ADMIN_ONLY"
-        )
+    """Bandlar ro'yxati — mehmonxona sozlamasi: faqat sozlovchi va tizim
+    ma'muri o'zgartiradi (configurator_access)."""
+    assert_can_manage_settings(current_user)
 
 
 def _clean_title(title: str) -> str:

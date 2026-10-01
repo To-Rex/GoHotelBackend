@@ -38,6 +38,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.application.dto.vision import (
     EnrollSightingRequest,
     FaceEventRequest,
@@ -1069,6 +1070,7 @@ async def create_device(
     Token javobda BIR MARTA ochiq ko'rsatiladi va bazada faqat xeshi qoladi.
     Yo'qolsa qayta ko'rsatib bo'lmaydi — yangisini yaratish kerak.
     """
+    assert_can_manage_settings(current_user)
     hotel_id = _hotel_id(current_user)
     token = secrets.token_urlsafe(32)
     device = VisionDevice(
@@ -1094,6 +1096,7 @@ async def revoke_device(
     current_user: dict = Depends(require_permission("employee.manage")),
 ):
     """Qurilma tokenini bekor qiladi (o'chirmaydi — tarix qoladi)."""
+    assert_can_manage_settings(current_user)
     hotel_id = _hotel_id(current_user)
     device = await session.get(VisionDevice, device_id)
     if device is None or device.hotel_id != hotel_id:
@@ -1167,6 +1170,7 @@ async def update_camera(
     xodim FAQAT o'z filialining kameralaridan kelgan suratlarni ko'radi, va
     surat qaysi filialga tegishli ekani aynan shu yerda hal bo'ladi.
     """
+    assert_can_manage_settings(current_user)
     hotel_id = _hotel_id(current_user)
     camera = await session.get(VisionCamera, camera_pk)
     if camera is None or camera.hotel_id != hotel_id:

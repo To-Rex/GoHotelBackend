@@ -49,6 +49,17 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class ContextSwitchRequest(BaseModel):
+    """Sozlovchi / tizim ma'muri: qaysi mehmonxona va filialda ishlash.
+
+    `branch_id` berilmasa — mehmonxonaning asosiy filiali. Tizim ma'muri
+    `hotel_id` siz yuborsa — "barcha mehmonxonalar" holatiga qaytadi.
+    """
+
+    hotel_id: UUID | None = None
+    branch_id: UUID | None = None
+
+
 class UserProfileResponse(BaseModel):
     id: UUID
     user_type: str
@@ -56,6 +67,8 @@ class UserProfileResponse(BaseModel):
     # Mehmonxona nomi — frontend brauzer tab sarlavhasida ko'rsatiladi
     hotel_name: str | None = None
     branch_id: UUID | None
+    # Filial nomi — sozlovchi tanlagan filial (boshqalarda bo'sh)
+    branch_name: str | None = None
     username: str
     first_name: str
     last_name: str

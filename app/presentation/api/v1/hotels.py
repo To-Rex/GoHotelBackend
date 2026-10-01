@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
 from pydantic import BaseModel, Field
 
@@ -97,11 +98,8 @@ async def save_nav_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Tartibni saqlash — faqat administrator."""
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException(
-            "Faqat administrator menyu tartibini o'zgartira oladi", "FORBIDDEN"
-        )
+    """Tartibni saqlash — faqat sozlovchi (configurator_access)."""
+    assert_can_manage_settings(current_user)
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
@@ -173,11 +171,8 @@ async def save_booking_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Bandlov sozlamalarini saqlash — faqat administrator."""
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException(
-            "Faqat administrator bandlov sozlamalarini o'zgartira oladi", "FORBIDDEN"
-        )
+    """Bandlov sozlamalarini saqlash — faqat sozlovchi (configurator_access)."""
+    assert_can_manage_settings(current_user)
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
@@ -236,11 +231,8 @@ async def save_discount_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Qoidalarni saqlash — faqat administrator."""
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException(
-            "Faqat administrator chegirma qoidalarini o'zgartira oladi", "FORBIDDEN"
-        )
+    """Qoidalarni saqlash — faqat sozlovchi (configurator_access)."""
+    assert_can_manage_settings(current_user)
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
@@ -291,11 +283,8 @@ async def save_move_discount_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Sozlamani saqlash — faqat administrator."""
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException(
-            "Faqat administrator bu sozlamani o'zgartira oladi", "FORBIDDEN"
-        )
+    """Sozlamani saqlash — faqat sozlovchi (configurator_access)."""
+    assert_can_manage_settings(current_user)
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
@@ -354,11 +343,8 @@ async def save_work_hours_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Sozlamani saqlash — faqat administrator."""
-    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
-        raise ForbiddenException(
-            "Faqat administrator ish vaqti sozlamasini o'zgartira oladi", "FORBIDDEN"
-        )
+    """Sozlamani saqlash — faqat sozlovchi (configurator_access)."""
+    assert_can_manage_settings(current_user)
     h_id = _work_hours_hotel_id(current_user, hotel_id)
     if not h_id:
         raise ForbiddenException("Hotel context required")

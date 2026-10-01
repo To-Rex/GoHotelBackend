@@ -8,6 +8,7 @@ from app.application.services.auth_service import AuthService
 from app.application.services.webauthn_service import WebAuthnService
 from app.application.dto.auth import (
     FaceSkipRequest,
+    ContextSwitchRequest,
     LoginRequest,
     LoginResponse,
     RefreshRequest,
@@ -111,8 +112,58 @@ async def get_me(
     current_user: dict = Depends(get_current_user),
 ):
     service = AuthService(session)
-    profile = await service.get_me(current_user["id"])
+    # Sozlovchi / tizim ma'muri uchun mehmonxona — tokendagi tanlov
+    profile = await service.get_me(
+        current_user["id"],
+        context_hotel_id=current_user.get("hotel_id"),
+        context_branch_id=current_user.get("branch_id"),
+    )
     return profile
+
+
+# --- Sozlovchi: mehmonxona va filialni tanlash --------------------------------
+
+
+def _assert_context_user(current_user: dict) -> None:
+    from app.application.services.configurator_access import can_switch_context
+    from app.core.exceptions import ForbiddenException
+
+    if not can_switch_context(current_user):
+        raise ForbiddenException(
+            "Mehmonxonani faqat sozlovchi tanlay oladi", "CONTEXT_FORBIDDEN"
+        )
+
+
+@router.get("/context/options")
+async def context_options(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Sozlovchi va tizim ma'muri uchun: barcha mehmonxonalar va filiallari."""
+    _assert_context_user(current_user)
+    return {"hotels": await AuthService(session).context_options()}
+
+
+@router.post("/context", response_model=TokenResponse)
+async def switch_context(
+    data: ContextSwitchRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Mehmonxona va filialni tanlash — yangi token juftligi qaytadi.
+
+    Tanlangan mehmonxonada sozlovchi administrator kabi ishlaydi va
+    sozlamalarni o'zgartira oladi (configurator_access).
+    """
+    _assert_context_user(current_user)
+    return await AuthService(session).switch_context(
+        current_user,
+        data.hotel_id,
+        data.branch_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
 
 
 # --- WebAuthn (Face ID / Windows Hello / Touch ID) ---------------------------

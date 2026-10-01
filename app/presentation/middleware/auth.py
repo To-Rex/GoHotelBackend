@@ -4,6 +4,10 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.application.services.configurator_access import (
+    CONFIGURATOR_TYPE,
+    effective_user_type,
+)
 from app.application.services.work_hours_access import assert_within_work_hours
 from app.core.database import get_db
 from app.infrastructure.auth.jwt import decode_token
@@ -42,6 +46,22 @@ async def get_current_user(
     user_type = payload.get("user_type", "")
     hotel_id = _safe_uuid(payload.get("hotel_id"))
 
+    # --- Sozlovchi: sessiya hamon ochiqmi ---
+    #
+    # Sozlovchi istalgan mehmonxonaga kira oladi, shuning uchun uning tokeni
+    # boshqalarnikidan qat'iyroq tekshiriladi: panelda to'xtatilsa/o'chirilsa
+    # yoki boshqa mehmonxonaga o'tsa (eski sessiya yopiladi), eski token
+    # muddati tugashini kutmay DARHOL ishlamay qoladi. Bitta indeksli so'rov,
+    # faqat sozlovchi uchun.
+    if user_type == CONFIGURATOR_TYPE:
+        live = await SessionRepository(session).get_by_jti(payload.get("jti") or "")
+        if (
+            live is None
+            or live.revoked_at is not None
+            or str(live.user_id) != str(user_id)
+        ):
+            raise HTTPException(status_code=401, detail="Session revoked")
+
     # --- Qurilma hamon ruxsat etilganmi ---
     #
     # Faqat kirishda tekshirish yetarli emas: administrator qurilmani
@@ -62,7 +82,10 @@ async def get_current_user(
 
     current_user = {
         "id": _safe_uuid(user_id),
-        "user_type": user_type,
+        # Mehmonxona tanlagan sozlovchi shu mehmonxonada administrator kabi
+        # ishlaydi; haqiqiy turi `actual_user_type` da (configurator_access)
+        "user_type": effective_user_type(user_type, hotel_id),
+        "actual_user_type": user_type,
         "hotel_id": hotel_id,
         "branch_id": _safe_uuid(payload.get("branch_id")),
         "permissions": payload.get("permissions", []),
