@@ -1653,6 +1653,23 @@ Yozuv shakli:
 
 ### Finance
 
+**GET /finance/daily**
+
+- Auth: required (same rule as `/finance/summary`; `?hotel_id=` for SUPER_ADMIN)
+- Query: `?date_from=2026-10-01&date_to=2026-10-31` (both required, at most 366 days)
+- Description: One row per day of the range — booking payments, refunds, expenses and paid shop sales — for charts in a single request. Days are defined exactly as in `/finance/summary` (payment `payment_date`, expense `expense_date`, shop sale paid day), so the rows add up to the summary. Days without activity are included with zeros.
+- Response 200:
+
+```json
+[
+  {"date": "2026-10-01", "income": 500000.0, "payment_count": 3, "refunds": 0.0, "expense": 120000.0, "shop": 30000.0}
+]
+```
+
+- Errors: 422 `INVALID_RANGE` (from after to), 422 `RANGE_TOO_LONG`
+
+---
+
 **GET /finance/ledgers**
 
 - Auth: required
@@ -1836,6 +1853,33 @@ Yozuv shakli:
 
 - Response 201: JournalEntry object with lines (status: `DRAFT`)
 - Errors: 422 Debits do not equal credits
+
+---
+
+### Shifts — cash overview
+
+**GET /shifts/cash-overview**
+
+- Auth: ADMIN / SUPER_ADMIN or an employee with `shift.force_close` (others: 403 `FORBIDDEN`)
+- Description: How much cash should be in every open drawer right now (ACTIVE and PENDING_HANDOVER sessions of the whole hotel), with the same breakdown as the handover count: opening cash + cash payments + cash shop sales − cash expenses. The blind-count rule is kept — the amount is shown to the supervisor, not to the session owner. In `simple` shift mode the list is empty.
+- Response 200:
+
+```json
+{
+  "mode": "cash",
+  "total_expected": 3480000.0,
+  "active_count": 1,
+  "pending_count": 1,
+  "sessions": [
+    {
+      "id": "uuid", "user_name": "Dilnoza Karimova", "branch_name": "Yunusobod",
+      "status": "PENDING_HANDOVER", "started_at": "2026-10-15T03:30:00+00:00",
+      "opening_cash": 100000.0, "payments_cash": 700000.0, "shop_cash": 0.0,
+      "expenses_cash": 50000.0, "expected_cash": 750000.0, "counted_cash": 720000.0
+    }
+  ]
+}
+```
 
 ---
 

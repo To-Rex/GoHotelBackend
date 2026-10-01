@@ -355,6 +355,68 @@ class ShiftService:
     async def compute_expected_cash(self, s: ShiftSession) -> Decimal:
         return (await self.cash_breakdown(s))["expected_cash"]
 
+    async def cash_overview(self, hotel_id: UUID, current: dict) -> dict:
+        """Admin/menejer uchun: HOZIR kassalarda qancha pul bo'lishi kerak.
+
+        Har ochiq (ishlayotgan yoki topshirilayotgan) sessiya — tarkibi bilan:
+        boshlang'ich kassa + naqd to'lovlar + do'kon naqd savdosi − naqd
+        xarajatlar (`cash_breakdown`, topshirish bilan AYNAN bir hisob).
+
+        "Ko'r sanash" buzilmaydi: kutilgan summa sessiya EGASIGA emas,
+        uni nazorat qiluvchiga ko'rsatiladi (admin yoki `shift.force_close`
+        egasi — ular kassa sessiyasi ochmaydi). Oddiy rejimda kassa
+        sessiyasi yo'q — bo'sh ro'yxat.
+        """
+        is_admin = current.get("user_type") in ("ADMIN", "SUPER_ADMIN")
+        has_perm = "shift.force_close" in (current.get("permissions") or [])
+        if not (is_admin or has_perm):
+            raise ForbiddenException(
+                "Kassalar holatini faqat administrator yoki menejer ko'radi",
+                "FORBIDDEN",
+            )
+        settings = await self.get_settings(hotel_id)
+        result: dict = {
+            "mode": settings["mode"],
+            "sessions": [],
+            "total_expected": 0.0,
+            "active_count": 0,
+            "pending_count": 0,
+        }
+        if settings["mode"] != "cash":
+            return result
+
+        rows = await self._open_sessions(hotel_id, None)
+        branch_ids = {s.branch_id for s, _ in rows if s.branch_id}
+        branch_names: dict = {}
+        if branch_ids:
+            from app.infrastructure.database.models.branch import Branch
+
+            for branch in (
+                await self.session.execute(select(Branch).where(Branch.id.in_(branch_ids)))
+            ).scalars():
+                branch_names[branch.id] = branch.name
+
+        total = Decimal("0")
+        for s, u in rows:
+            breakdown = await self.cash_breakdown(s)
+            item = self._serialize(s, u)
+            item.update({key: float(value) for key, value in breakdown.items()})
+            item["branch_name"] = branch_names.get(s.branch_id)
+            # Topshirilayotgan smenada xodim sanab kiritgan summa ham
+            item["counted_cash"] = (
+                float(s.counted_cash)
+                if s.status == "PENDING_HANDOVER" and s.counted_cash is not None
+                else None
+            )
+            result["sessions"].append(item)
+            total += breakdown["expected_cash"]
+            if s.status == "ACTIVE":
+                result["active_count"] += 1
+            else:
+                result["pending_count"] += 1
+        result["total_expected"] = float(total)
+        return result
+
     async def my_expected_cash(self, hotel_id: UUID, current: dict) -> dict:
         """Joriy xodimning FAOL sessiyasi uchun kassada bo'lishi kerak bo'lgan
         summa (tarkibi bilan) — topshirish dialogida ko'rsatiladi."""

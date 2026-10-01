@@ -313,6 +313,22 @@ Kod: `app/application/services/configurator_access.py`, test:
 `pytest tests/test_configurator_access.py`. Migratsiya kerak emas
 (`users.user_type` oddiy satr).
 
+### Mobil "Moliya" sahifasi (admin/menejer)
+
+Mobil ilovada puls sahifasidagi moliya kartasi bosilsa alohida sahifa
+ochiladi: bugun / kecha / 7 kun / shu oy / ixtiyoriy davr, oldingi davr
+bilan solishtirish, xarajat, sof natija (tushum + do'kon − xarajat — veb
+bilan bir xil), qarzdorlik, qaytarimlar, kassada hozir qancha pul, naqd
+pul harakati, kunlik grafik, to'lov usullari, xarajat toifalari,
+qarzdorlar va smenalardagi kamomad/ortiqcha. Ikkita yangi endpoint:
+
+- `GET /finance/daily?date_from&date_to` — kunlik qator bitta so'rovda
+  (`/finance/summary` bilan bir xil kun ta'rifi, ko'pi bilan 366 kun).
+- `GET /shifts/cash-overview` — ochiq kassalarda hozir bo'lishi kerak
+  bo'lgan naqd pul (tarkibi bilan; admin yoki `shift.force_close`).
+
+Test: `pytest tests/test_finance_overview.py`.
+
 ### Mijozga SMS (Xabarchi)
 
 Mijozga SMS [Xabarchi](https://github.com/To-Rex/Xabarchi-Backend) orqali

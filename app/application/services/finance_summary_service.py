@@ -21,7 +21,7 @@ o'zgarmasligi kerak, faqat qayerda hisoblangani o'zgardi.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from uuid import UUID
 
 from sqlalchemy import case, func, select
@@ -44,6 +44,9 @@ UNKNOWN_METHOD = "UNKNOWN"
 #: qarz bo'lib qoladi.
 SHOP_PAID = "PAID"
 SHOP_PENDING = "PENDING"
+
+#: Kunlik qatorning eng uzun davri — bir yil (kabisa bilan)
+MAX_DAILY_DAYS = 366
 
 
 def _num(value) -> float:
@@ -94,6 +97,78 @@ class FinanceSummaryService:
             **shop,
             "methods": [{"key": key, **values} for key, values in methods.items()],
         }
+
+    # ------------------------------------------------- kunlik qatorlar --
+
+    async def daily(self, hotel_id: UUID | None, date_from: date, date_to: date) -> list[dict]:
+        """Davrning HAR KUNI uchun: bron tushumi, to'lovlar soni, qaytarim,
+        xarajat va do'kon savdosi — grafik uchun bitta so'rovda.
+
+        Kun ta'rifi `build` bilan AYNAN bir xil (to'lov — `payment_date`,
+        xarajat — `expense_date`, do'kon — to'langan kun), ya'ni kunlar
+        yig'indisi davr yig'masiga teng bo'ladi. Harakat bo'lmagan kun ham
+        qatorga kiradi (nollar bilan) — grafikda bo'shliq bo'lmasin.
+        """
+        days: dict[date, dict] = {}
+        cursor = date_from
+        while cursor <= date_to:
+            days[cursor] = {
+                "date": cursor.isoformat(),
+                "income": 0.0,
+                "payment_count": 0,
+                "refunds": 0.0,
+                "expense": 0.0,
+                "shop": 0.0,
+            }
+            cursor += timedelta(days=1)
+
+        pay = select(
+            Payment.payment_date,
+            func.coalesce(func.sum(Payment.amount), 0),
+            func.count(Payment.id),
+            func.coalesce(
+                func.sum(case((Payment.amount < 0, -Payment.amount), else_=0)), 0
+            ),
+        ).where(Payment.payment_date >= date_from, Payment.payment_date <= date_to)
+        if hotel_id is not None:
+            pay = pay.where(Payment.hotel_id == hotel_id)
+        for day, total, count, refunds in (
+            await self.session.execute(pay.group_by(Payment.payment_date))
+        ).all():
+            row = days.get(day)
+            if row is not None:
+                row["income"] += _num(total)
+                row["payment_count"] += int(count or 0)
+                row["refunds"] += _num(refunds)
+
+        exp = select(
+            Expense.expense_date, func.coalesce(func.sum(Expense.amount), 0)
+        ).where(Expense.expense_date >= date_from, Expense.expense_date <= date_to)
+        if hotel_id is not None:
+            exp = exp.where(Expense.hotel_id == hotel_id)
+        for day, total in (
+            await self.session.execute(exp.group_by(Expense.expense_date))
+        ).all():
+            row = days.get(day)
+            if row is not None:
+                row["expense"] += _num(total)
+
+        paid_day = func.date(ShopSale.paid_at)
+        shop = select(paid_day, func.coalesce(func.sum(ShopSale.total_amount), 0)).where(
+            ShopSale.status == SHOP_PAID,
+            ShopSale.paid_at >= datetime.combine(date_from, time.min),
+            ShopSale.paid_at <= datetime.combine(date_to, time.max),
+        )
+        if hotel_id is not None:
+            shop = shop.where(ShopSale.hotel_id == hotel_id)
+        for day, total in (await self.session.execute(shop.group_by(paid_day))).all():
+            if isinstance(day, datetime):
+                day = day.date()
+            row = days.get(day)
+            if row is not None:
+                row["shop"] += _num(total)
+
+        return list(days.values())
 
     # ------------------------------------------------------ to'lovlar --
 

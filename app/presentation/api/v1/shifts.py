@@ -101,6 +101,18 @@ async def expected_cash(
     )
 
 
+@router.get("/cash-overview")
+async def cash_overview(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Admin/menejer: hozir har ochiq kassada qancha pul bo'lishi kerak
+    (tarkibi bilan) va jami. Oddiy rejimda — bo'sh."""
+    return await ShiftService(session).cash_overview(
+        _hotel_id(current_user), current_user
+    )
+
+
 @router.post("/open")
 async def open_shift(
     data: OpenShiftRequest,

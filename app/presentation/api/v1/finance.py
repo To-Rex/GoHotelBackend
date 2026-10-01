@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Path, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException, NotFoundException
+from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.invoice import Invoice
 from app.application.services import sms_service
 from app.application.services.finance_service import FinanceService
@@ -95,6 +95,39 @@ async def finance_summary(
     return await FinanceSummaryService(session).build(
         h_id, date_from=date_from, date_to=date_to, status=status
     )
+
+
+@router.get("/daily")
+async def finance_daily(
+    date_from: date = Query(),
+    date_to: date = Query(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Davrning har kuni bo'yicha tushum, xarajat va do'kon — grafik uchun.
+
+    `/finance/summary` bilan bir xil kun ta'rifi va ruxsat. Davr ko'pi
+    bilan bir yil (366 kun).
+    """
+    from app.application.services.finance_summary_service import (
+        MAX_DAILY_DAYS,
+        FinanceSummaryService,
+    )
+
+    if date_from > date_to:
+        raise ValidationException(
+            "Boshlanish sanasi tugash sanasidan keyin bo'lmasin", "INVALID_RANGE"
+        )
+    if (date_to - date_from).days + 1 > MAX_DAILY_DAYS:
+        raise ValidationException(
+            "Davr bir yildan oshmasligi kerak", "RANGE_TOO_LONG"
+        )
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    return await FinanceSummaryService(session).daily(h_id, date_from, date_to)
 
 
 @router.get("/invoices", response_model=list[InvoiceResponse])
