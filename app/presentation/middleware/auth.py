@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.application.services.work_hours_access import assert_within_work_hours
 from app.core.database import get_db
 from app.infrastructure.auth.jwt import decode_token
 from app.infrastructure.database.repositories.user_repo import UserRepository, SessionRepository
@@ -59,7 +60,7 @@ async def get_current_user(
             hotel_id, device_id, user_type
         )
 
-    return {
+    current_user = {
         "id": _safe_uuid(user_id),
         "user_type": user_type,
         "hotel_id": hotel_id,
@@ -68,6 +69,24 @@ async def get_current_user(
         "jti": payload.get("jti", ""),
         "device_id": device_id,
     }
+
+    # --- Ish vaqtidan tashqarida xodim ishlamaydi (sozlama yoqilgan bo'lsa) ---
+    #
+    # Shu yerda, chunki faqat bu nuqta BARCHA autentifikatsiyali so'rovlarni
+    # qamraydi. Administrator, ruxsat belgisi bor xodim va ochiq smenadagi
+    # qabulxona to'silmaydi; mehmonxona to'xtatilgan bo'lsa HOTEL_* ustun.
+    # Batafsil: app/application/services/work_hours_access.py
+    #
+    # Yo'l `scope["path"]` dan olinadi — marshrutlash aynan shuni solishtiradi.
+    # `request.url.path` URL'ni qayta tahlil qiladi: `%3F`/`%23` (dekodlangan
+    # `?`/`#`) dan keyingi qismni kesib tashlaydi, shunda
+    # `/notifications/register-device%3F/...` kabi so'rov ochiq yo'l bo'lib
+    # ko'rinib, to'siqni chetlab o'tardi.
+    await assert_within_work_hours(
+        session, current_user, request.scope.get("path") or request.url.path
+    )
+
+    return current_user
 
 
 def require_permission(permission_code: str):

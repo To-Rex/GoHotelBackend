@@ -42,6 +42,12 @@ class User(FullMixin, SoftDeleteMixin, Base):
     work_end: Mapped[str] = mapped_column(
         String(5), nullable=False, default="18:00", server_default="18:00"
     )
+    # Mehmonxonada "ish vaqtidan tashqarida ishlamaslik" yoqilgan bo'lsa ham
+    # bu xodim to'silmaydi. Faqat administrator belgilaydi
+    # (app/application/services/work_hours_access.py).
+    allow_outside_work_hours: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     termination_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

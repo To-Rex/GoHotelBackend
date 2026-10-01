@@ -229,6 +229,33 @@ Global modellar (`room_types`, `amenities`) SUPER_ADMIN tomonidan yaratiladi va 
 | `MINIO_BUCKET_GUESTS` | Mehmon bucket | `hotel-guests` |
 | `CORS_ORIGINS` | Ruxsat etilgan origin'lar | `["http://localhost:3000"]` |
 | `SMS_API_BASE` | Xabarchi **backend** (API) manzili — veb-sayt emas | `https://manager-xabarchi-backend-…sslip.io/api/v1` |
+| `APP_TZ_OFFSET_MINUTES` | Mehmonxona mahalliy vaqti ofseti (daqiqa, UTC'ga nisbatan) — ish vaqti, vazifa taqsimlash va ish vaqtidan tashqarida to'sish shu soat bilan hisoblanadi | `300` (UTC+5) |
+
+### Ish vaqtidan tashqarida ishlash (sozlama)
+
+Veb: Sozlamalar → "Xodimlar" guruhi (`GET/PUT /api/v1/hotels/work-hours-settings`, `{"enforce": bool}`,
+saqlanadi: `hotels.settings["work_hours"]`). **Standart — o'chiq**: yoqilmaguncha
+hech narsa o'zgarmaydi.
+
+- Yoqilganda `EMPLOYEE` o'z ish vaqti (`work_start`–`work_end`, mahalliy
+  soat `APP_TZ_OFFSET_MINUTES` bilan; tungi smena ham) dan tashqarida har
+  so'rovga **403 `OUTSIDE_WORK_HOURS`** oladi — klient "ish vaqtingiz emas"
+  ekranini ko'rsatadi va vaqt kelganda o'zi tiklanadi.
+- To'silMAYDI: `ADMIN`/`SUPER_ADMIN`; "Ish vaqtidan tashqari ham ishlay
+  oladi" belgili xodim (`users.allow_outside_work_hours`, faqat administrator
+  qo'yadi — `POST/PUT /employees`); FAOL smena sessiyasi bor xodim
+  (qabulxonaning "Davom etish" oqimi o'zgarmaydi); ish vaqti 24 soatlik
+  (boshlanish = tugash) yoki yozilmagan xodim. Mehmonxona to'xtatilgan bo'lsa
+  `HOTEL_*` xatosi ustun.
+- Ochiq yo'llar: `/auth/me`, `/auth/logout`, `/notifications/register-device`,
+  `/hotels/work-hours-settings`, `/auth/face/status`, `/auth/webauthn/*`.
+  Kirish (login) va `/auth/refresh` hech qachon to'silmaydi.
+- `GET /auth/me` qo'shimcha qaytaradi: `allow_outside_work_hours`,
+  `work_hours_enforced`, `work_hours_blocked` (server soati bilan).
+
+Kod: `app/application/services/work_hours_access.py` (`get_current_user`
+oxirida chaqiriladi), migratsiya `a0d1e2f3a4b5`, test:
+`pytest tests/test_work_hours_access.py`.
 
 ### Mijozga SMS (Xabarchi)
 

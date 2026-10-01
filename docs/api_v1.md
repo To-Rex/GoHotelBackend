@@ -104,9 +104,43 @@ For `SUPER_ADMIN`, pass `hotel_id` as a query parameter to scope requests to a s
   "phone": null,
   "status": "ACTIVE",
   "permissions": [],
+  "work_hours_per_day": 8,
+  "work_start": "09:00",
+  "work_end": "18:00",
+  "allow_outside_work_hours": false,
+  "work_hours_enforced": false,
+  "work_hours_blocked": false,
   "last_login_at": "2026-06-22T12:00:00Z"
 }
 ```
+
+- Work-hours fields (see [Work-hours enforcement](#work-hours-enforcement)):
+  - `allow_outside_work_hours` — the per-user exemption set by an admin.
+  - `work_hours_enforced` — the hotel setting; always `false` for `ADMIN`/`SUPER_ADMIN` and users without a hotel.
+  - `work_hours_blocked` — `true` when any non-allowlisted request by this user would be rejected right now with 403 `OUTSIDE_WORK_HOURS`. Computed on the server clock (`APP_TZ_OFFSET_MINUTES`) with the same function as the gate, so clients should rely on it instead of the browser/device clock.
+
+---
+
+### Work-hours enforcement
+
+Hotel setting `settings.work_hours.enforce` (default `false` — nothing changes until an admin turns it on). When it is on, every authenticated request by an `EMPLOYEE` is rejected with:
+
+```json
+{
+  "detail": "Ish vaqtingiz emas (09:00–18:00). Ish vaqti boshlanganda tizimdan foydalanishingiz mumkin.",
+  "error_code": "OUTSIDE_WORK_HOURS"
+}
+```
+
+(status 403) when ALL of the following hold:
+
+- the hotel exists and is `ACTIVE` (a blocked hotel keeps returning `HOTEL_*` instead);
+- the user's `allow_outside_work_hours` is `false`;
+- the current hotel-local time (UTC + `APP_TZ_OFFSET_MINUTES`) is outside `work_start`–`work_end` (start inclusive, end exclusive, schedules crossing midnight such as `22:00`–`06:00` are supported). A missing/invalid schedule or `start == end` means round-the-clock and is never blocked;
+- the employee has no `ACTIVE` shift session in the hotel (a receptionist whose time ended keeps working with the open cash session — the existing "work ended" → "Davom etish" flow — and can still close the cash and hand over the shift);
+- the path is not one of: `GET /auth/me`, `POST /auth/logout`, `POST /notifications/register-device`, `GET /hotels/work-hours-settings`, `GET /auth/face/status`, `/auth/webauthn/*` (passkey management).
+
+`ADMIN` and `SUPER_ADMIN` are never blocked. Unauthenticated endpoints (login, `/auth/refresh`, face/passkey login) are not affected: an employee can log in outside hours, the client shows a waiting screen (`work_hours_blocked` in `/auth/me`) and recovers by itself when the working time starts. Implementation: `app/application/services/work_hours_access.py`, called at the end of `get_current_user`.
 
 ---
 
@@ -207,6 +241,39 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 - Valid statuses: `ACTIVE`, `SUSPENDED`, `CLOSED`
 - Response 200: Updated Hotel object
 - Errors: 404 Not found
+
+---
+
+**GET /hotels/work-hours-settings**
+
+- Auth: any authenticated user (also open to an employee blocked by work hours)
+- Query: `?hotel_id=` (SUPER_ADMIN only; others always get their own hotel)
+- Description: Work-hours enforcement setting of the current hotel. Without a hotel context the default is returned.
+- Response 200:
+
+```json
+{
+  "enforce": false
+}
+```
+
+---
+
+**PUT /hotels/work-hours-settings**
+
+- Auth: ADMIN / SUPER_ADMIN (others: 403 `FORBIDDEN`)
+- Query: `?hotel_id=` (SUPER_ADMIN only)
+- Description: Turn work-hours enforcement on/off (stored in `hotel.settings.work_hours`; other settings keys are untouched).
+- Body:
+
+```json
+{
+  "enforce": true
+}
+```
+
+- Response 200: `{"enforce": true}`
+- Errors: 403 `FORBIDDEN`, 403 Hotel context required, 404 `HOTEL_NOT_FOUND`
 
 ---
 
@@ -1042,6 +1109,10 @@ Yozuv shakli:
     "phone": null,
     "status": "ACTIVE",
     "hire_date": "2026-01-01",
+    "work_hours_per_day": 8,
+    "work_start": "09:00",
+    "work_end": "18:00",
+    "allow_outside_work_hours": false,
     "termination_date": null,
     "is_deleted": false,
     "last_login_at": null,
@@ -1068,12 +1139,16 @@ Yozuv shakli:
   "last_name": "Manager",
   "email": "aidar@test.kz",
   "phone": "+77001112233",
-  "hire_date": "2026-01-01"
+  "hire_date": "2026-01-01",
+  "work_start": "09:00",
+  "work_end": "18:00",
+  "allow_outside_work_hours": false
 }
 ```
 
+- `allow_outside_work_hours` (optional): the employee is not blocked by [work-hours enforcement](#work-hours-enforcement). Only ADMIN/SUPER_ADMIN may send `true`; anyone else gets 403 `FORBIDDEN`.
 - Response 201: Employee object
-- Errors: 409 Username already exists
+- Errors: 409 Username already exists, 403 `FORBIDDEN`
 
 ---
 
@@ -1095,12 +1170,14 @@ Yozuv shakli:
 ```json
 {
   "first_name": "Aidar Updated",
-  "status": "ACTIVE"
+  "status": "ACTIVE",
+  "allow_outside_work_hours": true
 }
 ```
 
+- `allow_outside_work_hours` (optional): only ADMIN/SUPER_ADMIN may change it. A non-admin may send it only with the current value (e.g. when the edit form posts the whole object); a different value gives 403 `FORBIDDEN`. `username`/`password` are admin-only as well.
 - Response 200: Updated Employee object
-- Errors: 404 Not found
+- Errors: 404 Not found, 403 `FORBIDDEN`
 
 ---
 
@@ -1940,6 +2017,8 @@ Yozuv shakli:
 | 400    | `BAD_REQUEST`     | Invalid request                     |
 | 401    | `UNAUTHORIZED`    | Missing or invalid token            |
 | 403    | `FORBIDDEN`       | Insufficient permissions            |
+| 403    | `OUTSIDE_WORK_HOURS` | Employee outside working hours (see [Work-hours enforcement](#work-hours-enforcement)) |
+| 403    | `HOTEL_INACTIVE` / `HOTEL_SUSPENDED` | Hotel service stopped        |
 | 404    | `NOT_FOUND`       | Resource not found                  |
 | 409    | `CONFLICT`        | Duplicate or conflicting resource   |
 | 422    | `VALIDATION_ERROR`| Invalid input data                  |

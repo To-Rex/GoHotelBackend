@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class EmployeeCreateRequest(BaseModel):
@@ -18,6 +18,9 @@ class EmployeeCreateRequest(BaseModel):
     work_hours_per_day: int | None = Field(None, ge=1, le=24)
     work_start: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
     work_end: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
+    # Ish vaqtidan tashqari ham ishlay oladi — faqat ADMIN/SUPER_ADMIN
+    # qo'ya oladi (endpointda tekshiriladi)
+    allow_outside_work_hours: bool | None = None
 
 
 class EmployeeUpdateRequest(BaseModel):
@@ -33,6 +36,9 @@ class EmployeeUpdateRequest(BaseModel):
     work_hours_per_day: int | None = Field(None, ge=1, le=24)
     work_start: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
     work_end: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
+    # Ish vaqtidan tashqari ham ishlay oladi — o'zgartirishni faqat
+    # ADMIN/SUPER_ADMIN qila oladi (endpointda tekshiriladi)
+    allow_outside_work_hours: bool | None = None
 
 
 class AdminCreateRequest(BaseModel):
@@ -68,12 +74,19 @@ class UserResponse(BaseModel):
     work_hours_per_day: int = 8
     work_start: str = "09:00"
     work_end: str = "18:00"
+    allow_outside_work_hours: bool = False
     termination_date: date | None
     is_deleted: bool
     last_login_at: datetime | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("allow_outside_work_hours", mode="before")
+    @classmethod
+    def _none_is_false(cls, value):
+        # Hali flush qilinmagan obyektda ustun None bo'lishi mumkin
+        return bool(value) if value is not None else False
 
 
 class UserPermissionsResponse(BaseModel):

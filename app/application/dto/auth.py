@@ -67,4 +67,13 @@ class UserProfileResponse(BaseModel):
     work_hours_per_day: int = 8
     work_start: str = "09:00"
     work_end: str = "18:00"
+    # Ish vaqtidan tashqarida ishlash (work_hours_access):
+    #  * allow_outside_work_hours — xodimga administrator bergan ruxsat;
+    #  * work_hours_enforced — mehmonxona sozlamasi (xodim bo'lmasa false);
+    #  * work_hours_blocked — xodimning (ruxsat etilgan yo'llardan boshqa)
+    #    so'rovi HOZIR 403 OUTSIDE_WORK_HOURS bilan qaytadimi. Server soati
+    #    bilan hisoblanadi — klient brauzer soatiga tayanmasin.
+    allow_outside_work_hours: bool = False
+    work_hours_enforced: bool = False
+    work_hours_blocked: bool = False
     last_login_at: datetime | None

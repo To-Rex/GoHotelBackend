@@ -8,6 +8,10 @@ from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.infrastructure.database.models.user import User
 from app.application.services.user_service import UserService
+from app.application.services.work_hours_access import (
+    ADMIN_TYPES,
+    outside_flag_change_error,
+)
 from app.application.dto.user import EmployeeCreateRequest, EmployeeUpdateRequest, UserResponse
 from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
@@ -53,6 +57,12 @@ async def create_employee(
         raise ForbiddenException("Cannot create employee for another hotel")
     if not h_id:
         h_id = data.hotel_id
+    # «Ish vaqtidan tashqari ham ishlay oladi» — faqat administrator qo'yadi
+    flag_error = outside_flag_change_error(
+        current_user["user_type"], data.allow_outside_work_hours, current=False
+    )
+    if flag_error is not None:
+        raise flag_error
     service = UserService(session)
     payload = data.model_dump()
     payload["hotel_id"] = h_id
@@ -103,6 +113,20 @@ async def update_employee(
             "Faqat administrator login va parolni o'zgartira oladi", "FORBIDDEN"
         )
     service = UserService(session)
+    # «Ish vaqtidan tashqari ham ishlay oladi» — faqat administrator
+    # o'zgartiradi. Menejer belgini o'zgartirmasdan qaytarib yuborsa (tahrir
+    # oynasi butun formani yuboradi) — xato emas.
+    if data.allow_outside_work_hours is not None and current_user[
+        "user_type"
+    ] not in ADMIN_TYPES:
+        existing = await service.get_employee(employee_id, h_id)
+        flag_error = outside_flag_change_error(
+            current_user["user_type"],
+            data.allow_outside_work_hours,
+            current=bool(existing.allow_outside_work_hours),
+        )
+        if flag_error is not None:
+            raise flag_error
     return await service.update_employee(employee_id, h_id, data.model_dump(exclude_none=True))
 
 

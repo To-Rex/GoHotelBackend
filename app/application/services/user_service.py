@@ -53,6 +53,8 @@ class UserService:
             work_hours_per_day=data.get("work_hours_per_day") or 8,
             work_start=data.get("work_start") or "09:00",
             work_end=data.get("work_end") or "18:00",
+            # Huquq (faqat administrator) endpointda tekshiriladi
+            allow_outside_work_hours=bool(data.get("allow_outside_work_hours") or False),
             status="ACTIVE",
         )
         return await self.repo.create(user)
@@ -88,9 +90,12 @@ class UserService:
         if data.get("password"):
             user.password_hash = hash_password(data["password"])
 
+        # `allow_outside_work_hours` — False ham saqlanadi (faqat None tashlanadi);
+        # o'zgartirish huquqi (faqat administrator) endpointda tekshiriladi
         updatable = [
             "first_name", "last_name", "email", "phone", "branch_id", "status",
             "work_hours_per_day", "work_start", "work_end",
+            "allow_outside_work_hours",
         ]
         update_data = {k: v for k, v in data.items() if k in updatable and v is not None}
         return await self.repo.update(user, **update_data)

@@ -27,6 +27,10 @@ from app.application.services.discount_policy import (
     DISCOUNT_SETTINGS_KEY,
     resolve_discount_rules,
 )
+from app.application.services.work_hours_access import (
+    WORK_HOURS_SETTINGS_KEY,
+    resolve_work_hours_settings,
+)
 
 router = APIRouter()
 
@@ -247,6 +251,69 @@ async def save_discount_settings(
     hotel.settings = new_settings
     await session.flush()
     return resolve_discount_rules(new_settings)
+
+
+# ------------------------------------- ish vaqtidan tashqarida ishlash --
+
+
+class WorkHoursSettingsRequest(BaseModel):
+    """Ish vaqtidan tashqarida xodimlar tizimdan foydalana olmaydi."""
+
+    enforce: bool
+
+
+def _work_hours_hotel_id(current_user: dict, hotel_id: UUID | None) -> UUID | None:
+    # SUPER_ADMIN boshqa sozlamalar kabi `?hotel_id=` bilan tanlay oladi
+    if current_user.get("user_type") == "SUPER_ADMIN" and hotel_id:
+        return hotel_id
+    return current_user.get("hotel_id")
+
+
+@router.get("/work-hours-settings")
+async def get_work_hours_settings(
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Ish vaqti sozlamasi — HAR QANDAY foydalanuvchi o'qiydi.
+
+    To'silgan xodimga ham ochiq (work_hours_access.ALLOWED_PATHS): to'siq
+    ekrani nima uchun to'silganini ko'rsatishi mumkin. Mehmonxona konteksti
+    bo'lmasa — xato emas, standart (o'chiq).
+    """
+    h_id = _work_hours_hotel_id(current_user, hotel_id)
+    if not h_id:
+        return resolve_work_hours_settings(None)
+    hotel = await session.get(Hotel, h_id)
+    return resolve_work_hours_settings(hotel.settings if hotel else None)
+
+
+@router.put("/work-hours-settings")
+async def save_work_hours_settings(
+    data: WorkHoursSettingsRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Sozlamani saqlash — faqat administrator."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException(
+            "Faqat administrator ish vaqti sozlamasini o'zgartira oladi", "FORBIDDEN"
+        )
+    h_id = _work_hours_hotel_id(current_user, hotel_id)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    hotel = await session.get(Hotel, h_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[WORK_HOURS_SETTINGS_KEY] = resolve_work_hours_settings(
+        {WORK_HOURS_SETTINGS_KEY: data.model_dump()}
+    )
+    hotel.settings = new_settings
+    await session.flush()
+    return resolve_work_hours_settings(new_settings)
 
 
 def _get_hotel_id(current_user: dict) -> UUID | None:

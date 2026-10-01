@@ -10,6 +10,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.hotel_access import assert_hotel_active
+from app.application.services.work_hours_access import (
+    EMPLOYEE_TYPE,
+    evaluate_work_hours_block,
+    resolve_work_hours_settings,
+)
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedException, ForbiddenException
 from app.infrastructure.auth.jwt import (
@@ -290,15 +295,32 @@ class AuthService:
 
         # Foydalanuvchi mehmonxonasining nomi (frontend tab sarlavhasi uchun).
         # SUPER_ADMIN da hotel_id bo'lmasligi mumkin — None qoladi.
+        # Mehmonxona to'liq o'qiladi: ish vaqti sozlamasi ham kerak.
         hotel_name: str | None = None
+        hotel = None
         if user.hotel_id:
-            from sqlalchemy import select
             from app.infrastructure.database.models.hotel import Hotel
 
-            result = await self.session.execute(
-                select(Hotel.name).where(Hotel.id == user.hotel_id)
+            hotel = await self.session.get(Hotel, user.hotel_id)
+            hotel_name = hotel.name if hotel is not None else None
+
+        # Ish vaqtidan tashqarida ishlash — `get_current_user` dagi to'siq
+        # bilan AYNAN bir xil qaror (bitta funksiya)
+        work_hours_enforced = False
+        work_hours_blocked = False
+        if user.user_type == EMPLOYEE_TYPE and hotel is not None:
+            work_hours_enforced = resolve_work_hours_settings(hotel.settings)["enforce"]
+            work_hours_blocked = (
+                await evaluate_work_hours_block(
+                    self.session,
+                    user_type=user.user_type,
+                    hotel_id=user.hotel_id,
+                    user_id=user.id,
+                    hotel=hotel,
+                    user=user,
+                )
+                is not None
             )
-            hotel_name = result.scalar_one_or_none()
 
         return {
             "id": str(user.id),
@@ -316,5 +338,8 @@ class AuthService:
             "work_hours_per_day": user.work_hours_per_day or 8,
             "work_start": user.work_start or "09:00",
             "work_end": user.work_end or "18:00",
+            "allow_outside_work_hours": bool(getattr(user, "allow_outside_work_hours", False)),
+            "work_hours_enforced": work_hours_enforced,
+            "work_hours_blocked": work_hours_blocked,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
         }
