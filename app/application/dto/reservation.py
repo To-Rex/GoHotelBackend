@@ -97,6 +97,9 @@ class ReservationCancelRequest(BaseModel):
 
 class MoveRoomRequest(BaseModel):
     new_room_id: UUID
+    #: Qimmatroq xonaga o'tishda narx farqidan chegirma (so'm). Berilmasa —
+    #: chegirmasiz (avvalgi xatti-harakat). Qoida: move_discount_policy
+    discount_amount: float | None = Field(default=None, ge=0, le=1_000_000_000_000)
 
 
 class CompanionAddRequest(BaseModel):
@@ -144,6 +147,9 @@ class ReservationResponse(BaseModel):
     payment_status: str
     discount_amount: float
     discount_percent: float
+    # Qimmatroq xonaga ko'chirishda berilgan chegirma (so'm), bron
+    # chegirmasidan alohida
+    move_discount_amount: float = 0
     notes: str | None
     cancelled_reason: str | None
     cancelled_at: datetime | None

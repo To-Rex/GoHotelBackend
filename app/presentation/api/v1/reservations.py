@@ -300,10 +300,20 @@ async def move_room(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("reservation.update")),
 ):
-    """Bronni boshqa xonaga ko'chirish (vaqt oynasi va bandlik tekshiruvi bilan)."""
+    """Bronni boshqa xonaga ko'chirish (vaqt oynasi va bandlik tekshiruvi bilan).
+
+    Qimmatroq xonaga o'tishda `discount_amount` — narx farqidan chegirma
+    (so'm); ruxsat va chegara mehmonxona sozlamasida (move_discount_policy).
+    """
     h_id = _get_hotel_id(current_user)
     service = ReservationService(session)
-    return await service.move_room(h_id, reservation_id, data.new_room_id, current_user)
+    return await service.move_room(
+        h_id,
+        reservation_id,
+        data.new_room_id,
+        current_user,
+        discount=data.discount_amount,
+    )
 
 
 def _extend_hotel_id(current_user: dict, hotel_id: UUID | None) -> UUID:

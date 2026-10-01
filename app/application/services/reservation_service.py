@@ -24,6 +24,14 @@ from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
 from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.discount_policy import check_discount
+from app.application.services.move_discount_policy import (
+    carry_over_move_discount,
+    check_move_discount,
+    clamp_move_discount,
+    discount_baseline,
+    net_increase,
+    resolve_move_discount_settings,
+)
 from app.application.services import companion_ops
 from app.application.services import reservation_extend as extend_rules
 from app.application.services.notification_service import NotificationService
@@ -307,6 +315,31 @@ class ReservationService:
         await self.session.flush()
         return payment
 
+    async def _effective_move_discount(self, reservation, room_charge: float) -> float:
+        """Ko'chirish chegirmasi — joriy xona narxi (`room_charge`) bilan qayta
+        hisoblanganda boshlang'ich xona narxi farqidan oshmaydi
+        (move_discount_policy.clamp_move_discount)."""
+        stored = float(getattr(reservation, "move_discount_amount", 0) or 0)
+        if stored <= 0:
+            return 0.0
+        baseline = discount_baseline(reservation.room_moves)
+        if baseline is None:
+            return stored
+        baseline_charge, _ = await self._calculate_price(
+            baseline,
+            reservation.booking_type or "DAILY",
+            reservation.check_in_date,
+            reservation.check_out_date,
+            reservation.check_in_datetime,
+            reservation.check_out_datetime,
+        )
+        return clamp_move_discount(
+            stored,
+            room_charge=room_charge,
+            baseline_charge=baseline_charge,
+            discount_percent=reservation.discount_percent,
+        )
+
     async def _compute_discount(self, room_charge: float, discount_amount: float, discount_percent: float) -> tuple[float, float]:
         # Bazadan kelgan qiymatlar Decimal bo'ladi — float arifmetikasi bilan
         # aralashsa TypeError beradi, shuning uchun kirishda bir xillashtiriladi
@@ -323,6 +356,7 @@ class ReservationService:
         reservation_id: UUID,
         new_room_id: UUID,
         current: dict,
+        discount: float | None = None,
     ) -> Reservation:
         """Bronni boshqa xonaga ko'chirish.
 
@@ -336,6 +370,11 @@ class ReservationService:
             da yashab bo'lingan kunlar eski narxda, qolganlari yangi narxda
             (soatlik bron — yangi xonaning yaxlit narxi). Farq bron balansida
             qo'shimcha to'lov/kamayish sifatida ko'rinadi;
+          - qimmatroq xonaga o'tishda `discount` — narx farqidan
+            chegirma (so'm). Xodimga ruxsat va chegara mehmonxona
+            sozlamasida, administrator faqat farq bilan cheklanadi
+            (move_discount_policy). Chegirma `move_discount_amount` da
+            to'planadi; arzonroq xonaga qaytilsa avval shu chegirma kamayadi;
           - tozalash vazifasi AVTOMATIK ochilmaydi;
           - har ko'chirish room_moves auditiga yoziladi (o'chirilmaydi).
         """
@@ -353,7 +392,10 @@ class ReservationService:
         # Tahrir oynasi: oddiy xodim faqat belgilangan daqiqalar ichida
         is_admin = current.get("user_type") in ("ADMIN", "SUPER_ADMIN")
         if not is_admin:
-            from app.infrastructure.database.models.hotel import Hotel
+            # Hotel modul boshida import qilingan — bu yerda qayta import
+            # qilinsa funksiya ichida lokal nomga aylanib, administrator
+            # yo'lida (import ishlamaganda) quyidagi chegirma qoidasini
+            # o'qishni buzardi
             hotel = await self.session.get(Hotel, hotel_id)
             window = resolve_edit_window_minutes(hotel.settings if hotel else None)
             if window > 0 and reservation.created_at:
@@ -436,12 +478,58 @@ class ReservationService:
             else:
                 new_charge = float(new_base) * nights
 
+        # Shu ko'chirishning narx farqi: qolgan davr eski xonada qolsa
+        # qancha bo'lardi (yashab bo'lingan kunlar ikkala hisobda bir xil)
+        if booking_type == "HOURLY":
+            old_charge = float(round(old_base))
+        else:
+            old_charge = float(old_base) * nights
+        # Mehmon AMALDA qancha ko'p to'laydi: bron chegirmasi foizda bo'lsa,
+        # farq ham shu foizga kamayadi
+        increase = net_increase(new_charge - old_charge, reservation.discount_percent)
+
+        # Ko'chirish chegirmasi — HAMMA o'zgarishdan oldin tekshiriladi
+        policy_hotel = await self.session.get(Hotel, hotel_id)
+        move_rule = resolve_move_discount_settings(
+            policy_hotel.settings if policy_hotel else None
+        )
+        given_discount = check_move_discount(
+            move_rule,
+            actor_type=current.get("user_type"),
+            increase=increase,
+            discount=discount,
+        )
+        carried = carry_over_move_discount(reservation.move_discount_amount, increase)
+        # Boshlang'ich (arzon) xona narxi: chegirma davom etsa — avvalgisi,
+        # yangidan berilsa — hozir chiqilayotgan xona narxi
+        if carried > 0:
+            # None faqat nomuvofiq yozuvda — u holda cheklanmaydi
+            baseline_price = discount_baseline(reservation.room_moves)
+        elif given_discount > 0:
+            baseline_price = float(old_base)
+        else:
+            baseline_price = None
+        move_discount = carried + given_discount
+        if baseline_price is not None:
+            if booking_type == "HOURLY":
+                baseline_charge = float(round(baseline_price))
+            else:
+                baseline_charge = baseline_price * nights
+            move_discount = clamp_move_discount(
+                move_discount,
+                room_charge=new_charge,
+                baseline_charge=baseline_charge,
+                discount_percent=reservation.discount_percent,
+            )
+        if move_discount <= 0:
+            baseline_price = None
+
         discount_amount, _ = await self._compute_discount(
             new_charge,
             reservation.discount_amount or 0,
             reservation.discount_percent or 0,
         )
-        new_room_total = max(new_charge - discount_amount, 0)
+        new_room_total = max(new_charge - discount_amount - move_discount, 0)
 
         # Invoice bilan sinxronlash: xizmat qatorlari saqlanadi, xona qatori yangilanadi
         service_total = 0.0
@@ -464,12 +552,13 @@ class ReservationService:
                 elif li.line_type == "SERVICE_CHARGE":
                     service_total += float(li.total_price or 0)
             invoice.subtotal = new_charge
-            invoice.discount_amount = discount_amount
+            invoice.discount_amount = discount_amount + move_discount
             invoice.total_amount = max(new_room_total + service_total, 0)
 
         old_total = float(reservation.total_amount or 0)
         new_total = max(new_room_total + service_total, 0)
         reservation.total_amount = new_total
+        reservation.move_discount_amount = move_discount
 
         # To'lov holati yangi jamiga ko'ra
         paid = float(reservation.paid_amount or 0)
@@ -496,6 +585,12 @@ class ReservationService:
             "to_room_number": new_room.room_number,
             "old_total": old_total,
             "new_total": new_total,
+            # Narx farqi, shu ko'chirishda berilgan chegirma va undan keyingi
+            # jami ko'chirish chegirmasi (eski yozuvlarda bu kalitlar yo'q)
+            "price_increase": increase,
+            "discount_amount": given_discount,
+            "move_discount_total": move_discount,
+            "discount_baseline_price": baseline_price,
             "moved_by": str(current["id"]),
             "moved_by_name": f"{mover.first_name} {mover.last_name}" if mover else None,
             "moved_at": now_utc.isoformat(),
@@ -560,7 +655,10 @@ class ReservationService:
                         (reservation.check_out_date - reservation.check_in_date).days, 1
                     )
                 )
-                discount_amount = float(reservation.discount_amount or 0)
+                # Ko'chirish chegirmasi ham — xona qatori to'liq narxda chiqsin
+                discount_amount = float(reservation.discount_amount or 0) + float(
+                    reservation.move_discount_amount or 0
+                )
                 invoice = await self._create_invoice(
                     hotel_id=hotel_id,
                     reservation_id=reservation.id,
@@ -1546,6 +1644,13 @@ class ReservationService:
             reservation.discount_amount or 0,
             reservation.discount_percent or 0,
         )
+        # Qimmatroq xonaga ko'chirishda berilgan chegirma ham saqlanadi —
+        # hisob-fakturada umumiy chegirma bo'lib ko'rinadi. Muddat
+        # qisqartirilgan bo'lsa, boshlang'ich xona narxi farqigacha qisqaradi
+        move_discount = await self._effective_move_discount(reservation, room_charge)
+        if move_discount != float(reservation.move_discount_amount or 0):
+            reservation.move_discount_amount = move_discount
+        discount_amount += move_discount
         total_amount = max(room_charge - discount_amount, 0)
 
         hotel_code = await self._get_hotel_code(hotel_id)

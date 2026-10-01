@@ -27,6 +27,10 @@ from app.application.services.discount_policy import (
     DISCOUNT_SETTINGS_KEY,
     resolve_discount_rules,
 )
+from app.application.services.move_discount_policy import (
+    MOVE_DISCOUNT_SETTINGS_KEY,
+    resolve_move_discount_settings,
+)
 from app.application.services.work_hours_access import (
     WORK_HOURS_SETTINGS_KEY,
     resolve_work_hours_settings,
@@ -251,6 +255,61 @@ async def save_discount_settings(
     hotel.settings = new_settings
     await session.flush()
     return resolve_discount_rules(new_settings)
+
+
+# ---------------------------------- xona almashtirishda chegirma --
+
+
+class MoveDiscountSettingsRequest(BaseModel):
+    """Qimmatroq xonaga ko'chirishda xodim chegirma bera oladimi va qancha."""
+
+    enabled: bool = False
+    #: Narx farqidan eng ko'p foiz (0 — cheklovsiz)
+    max_percent: float = Field(default=0, ge=0, le=100)
+    #: Bir ko'chirishda eng ko'p summa, so'm (0 — cheklovsiz)
+    max_amount: float = Field(default=0, ge=0, le=1_000_000_000_000)
+
+
+@router.get("/move-discount-settings")
+async def get_move_discount_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Sozlama — HAR QANDAY xodim o'qiydi: ko'chirish oynasi chegarani
+    ko'rsatishi va undan oshirishga yo'l qo'ymasligi uchun. Haqiqiy
+    tekshiruv serverda (move_room)."""
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        return resolve_move_discount_settings(None)
+    hotel = await session.get(Hotel, hotel_id)
+    return resolve_move_discount_settings(hotel.settings if hotel else None)
+
+
+@router.put("/move-discount-settings")
+async def save_move_discount_settings(
+    data: MoveDiscountSettingsRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Sozlamani saqlash — faqat administrator."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        raise ForbiddenException(
+            "Faqat administrator bu sozlamani o'zgartira oladi", "FORBIDDEN"
+        )
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        raise ForbiddenException("Hotel context required")
+    hotel = await session.get(Hotel, hotel_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
+    new_settings = dict(hotel.settings or {})
+    new_settings[MOVE_DISCOUNT_SETTINGS_KEY] = resolve_move_discount_settings(
+        {MOVE_DISCOUNT_SETTINGS_KEY: data.model_dump()}
+    )
+    hotel.settings = new_settings
+    await session.flush()
+    return resolve_move_discount_settings(new_settings)
 
 
 # ------------------------------------- ish vaqtidan tashqarida ishlash --

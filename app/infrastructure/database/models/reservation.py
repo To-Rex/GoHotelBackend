@@ -76,6 +76,12 @@ class Reservation(FullMixin, SoftDeleteMixin, Base):
     discount_percent: Mapped[float] = mapped_column(
         Numeric(5, 2), nullable=False, default=0
     )
+    # Qimmatroq xonaga ko'chirishda berilgan chegirma (so'm) — bron
+    # chegirmasidan alohida, qayta hisoblarda (chiqish, hisob-faktura) ham
+    # ayiriladi. Qoida: move_discount_policy
+    move_discount_amount: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0, server_default="0"
+    )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

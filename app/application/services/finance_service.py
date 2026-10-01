@@ -14,6 +14,10 @@ from app.infrastructure.database.repositories.finance_repo import (
     InvoiceRepository,
     PaymentRepository,
 )
+from app.application.services.move_discount_policy import (
+    clamp_move_discount,
+    discount_baseline,
+)
 from app.shared.utils import generate_code
 
 
@@ -122,6 +126,25 @@ class FinanceService:
         # Bazadan kelgan chegirma Decimal — float bilan ayirishda TypeError
         # bermasligi uchun bir xillashtiriladi
         discount = float(reservation.discount_amount or 0)
+        # Qimmatroq xonaga ko'chirishda berilgan chegirma ham ayiriladi —
+        # boshlang'ich xona narxi farqidan oshmagan holda (reservation_service
+        # .check_out bilan bir xil)
+        move_discount = float(getattr(reservation, "move_discount_amount", 0) or 0)
+        baseline = discount_baseline(getattr(reservation, "room_moves", None))
+        if move_discount > 0 and baseline is not None:
+            if duration_label == "hour(s)":
+                baseline_charge = float(round(baseline))
+            else:
+                baseline_charge = baseline * max(
+                    (reservation.check_out_date - reservation.check_in_date).days, 1
+                )
+            move_discount = clamp_move_discount(
+                move_discount,
+                room_charge=room_charge,
+                baseline_charge=baseline_charge,
+                discount_percent=getattr(reservation, "discount_percent", 0),
+            )
+        discount += move_discount
 
         invoice = Invoice(
             hotel_id=hotel_id,

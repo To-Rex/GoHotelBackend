@@ -277,6 +277,34 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 
 ---
 
+**GET /hotels/move-discount-settings**
+
+- Auth: any authenticated user (the room-change panel shows the limit to staff)
+- Description: Whether staff may give a discount when a guest moves to a MORE EXPENSIVE room, and the maximum. Without a hotel context (or never saved) the default is returned — switched OFF.
+- Response 200:
+
+```json
+{
+  "enabled": false,
+  "max_percent": 0,
+  "max_amount": 0
+}
+```
+
+- `max_percent` — of the price difference (0 = no limit, i.e. up to the whole difference); `max_amount` — so'm per move (0 = no limit). Both apply together.
+
+---
+
+**PUT /hotels/move-discount-settings**
+
+- Auth: ADMIN / SUPER_ADMIN (others: 403 `FORBIDDEN`)
+- Description: Save the setting (stored in `hotel.settings.room_move_discount`; other settings keys are untouched).
+- Body: `{"enabled": true, "max_percent": 50, "max_amount": 0}` (`max_percent` 0–100, `max_amount` ≥ 0)
+- Response 200: the saved setting
+- Errors: 403 `FORBIDDEN`, 403 Hotel context required, 404 `HOTEL_NOT_FOUND`, 422 validation
+
+---
+
 ### Branches
 
 **GET /branches**
@@ -1084,6 +1112,25 @@ Yozuv shakli:
   "message": "Service removed"
 }
 ```
+
+---
+
+**POST /reservations/{reservation_id}/move-room**
+
+- Auth: require_permission("reservation.update"); staff only within the edit window (`/reservations/edit-window-settings`), ADMIN/SUPER_ADMIN any time
+- Description: Move an active booking (PENDING / CONFIRMED / CHECKED_IN) to another free room; the price is recalculated (CHECKED_IN: nights already stayed keep the old price). Every move is appended to `room_moves`.
+- Body:
+
+```json
+{
+  "new_room_id": "uuid",
+  "discount_amount": 50000
+}
+```
+
+- `discount_amount` (optional, so'm) — discount off the price difference when moving to a MORE EXPENSIVE room. Omitted or 0 — no discount (previous behaviour). Staff: only if `move-discount-settings.enabled` and within `max_percent` / `max_amount`; ADMIN/SUPER_ADMIN: any amount up to the difference. The discount accumulates in `reservations.move_discount_amount`, is subtracted again at check-out / invoice creation and is added to `invoice.discount_amount`. Moving back to a cheaper room reduces the earlier move discount first. "Difference" is what the guest actually pays extra: with a percentage booking discount it is reduced by that percentage. On every recalculation the move discount is clamped to the difference between the current room and the room the discount started from (`discount_baseline_price`), so shortening the stay never lets the guest pay below that room's price.
+- Response 200: Reservation (`move_discount_amount`; the new `room_moves` entry also has `price_increase`, `discount_amount`, `move_discount_total`, `discount_baseline_price`)
+- Errors: 422 `MOVE_DISCOUNT_DISABLED`, `MOVE_DISCOUNT_NOT_UPGRADE`, `MOVE_DISCOUNT_MAX_PERCENT`, `MOVE_DISCOUNT_MAX_AMOUNT`, `MOVE_DISCOUNT_EXCEEDS_DIFFERENCE`, `SAME_ROOM`, `INVALID_STATUS`; 403 `EDIT_WINDOW_EXPIRED`; 409 `ROOM_ALREADY_BOOKED`, `ROOM_NOT_AVAILABLE`
 
 ---
 

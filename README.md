@@ -257,6 +257,34 @@ Kod: `app/application/services/work_hours_access.py` (`get_current_user`
 oxirida chaqiriladi), migratsiya `a0d1e2f3a4b5`, test:
 `pytest tests/test_work_hours_access.py`.
 
+### Xona almashtirishda chegirma (sozlama)
+
+Mehmon xonani yoqtirmay QIMMATROQ xonaga o'tsa, resepshn narx farqidan
+chegirma bera oladi. Veb: Sozlamalar → "Bron va mehmonlar" → "Xona
+almashtirishda chegirma" (`GET/PUT /api/v1/hotels/move-discount-settings`,
+`{"enabled": bool, "max_percent": 0-100, "max_amount": so'm}`, saqlanadi:
+`hotels.settings["room_move_discount"]`). **Standart — o'chiq**.
+
+- `max_percent` — narx FARQIDAN foiz, `max_amount` — bir ko'chirishda so'm;
+  0 — cheklovsiz (farqning hammasigacha). Ikkalasi birga ishlaydi. "Farq" —
+  mehmon AMALDA qancha ko'p to'lashi: bron chegirmasi foizda bo'lsa, farq
+  ham shu foizga kamayadi (mehmon avvalgi xonadagidan kam to'lamaydi).
+- Xodim: `POST /reservations/{id}/move-room` ga `discount_amount` (so'm)
+  yuboradi — sozlama o'chiq bo'lsa yoki chegaradan oshsa rad etiladi.
+  `ADMIN`/`SUPER_ADMIN` sozlamaga bog'lanmaydi, lekin chegirma hech qachon
+  narx farqidan oshmaydi; arzonroq xonaga chegirma yo'q.
+- Chegirma `reservations.move_discount_amount` da to'planadi (bron
+  chegirmasidan alohida), chiqishda va hisob-faktura yaratishda ham
+  ayiriladi, `invoice.discount_amount` ga qo'shiladi. Arzonroq xonaga
+  qaytilsa avval shu chegirma kamayadi. Qayta hisoblarda chegirma
+  boshlang'ich (arzon) xona narxi farqidan oshmaydi — muddat qisqartirilsa
+  ham mehmon o'sha xona narxidan kam to'lamaydi. Har ko'chirish
+  `room_moves` da `price_increase`, `discount_amount`, `move_discount_total`,
+  `discount_baseline_price` bilan yoziladi.
+
+Kod: `app/application/services/move_discount_policy.py`, migratsiya
+`b1e2f3a4b5c6`, test: `pytest tests/test_move_discount_policy.py`.
+
 ### Mijozga SMS (Xabarchi)
 
 Mijozga SMS [Xabarchi](https://github.com/To-Rex/Xabarchi-Backend) orqali

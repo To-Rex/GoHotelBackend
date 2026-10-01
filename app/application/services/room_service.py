@@ -625,6 +625,9 @@ class RoomService:
                     "payment_status": reservation.payment_status,
                     "discount_amount": float(reservation.discount_amount or 0),
                     "discount_percent": float(reservation.discount_percent or 0),
+                    "move_discount_amount": float(
+                        getattr(reservation, "move_discount_amount", 0) or 0
+                    ),
                     "notes": reservation.notes,
                     "cancelled_reason": reservation.cancelled_reason,
                     "companions": reservation.companions,
