@@ -88,6 +88,139 @@ async def _quiet_events():
 print("Hodisalar:")
 check("kalitsiz filial jim o'tadi", asyncio.run(_quiet_events()), True)
 
+
+# --- Xabarchi manzili ---------------------------------------------------
+#
+# 2026-09: standart manzil Xabarchi VEB-SAYTIGA qarab qolgan edi — sayt
+# POST'ga 405 qaytarardi va SMS umuman ketmasdi (faqat logda ko'rinardi).
+
+import httpx  # noqa: E402
+
+from app.core.config import settings  # noqa: E402
+
+print("Xabarchi manzili:")
+check(
+    "standart manzil veb-saytga qaramaydi",
+    "xabar-web" in settings.SMS_API_BASE,
+    False,
+)
+check(
+    "/api/v1 bilan",
+    sms_service.api_url("https://x.uz/api/v1"),
+    "https://x.uz/api/v1/public/messages",
+)
+check(
+    "oxirida / bo'lsa",
+    sms_service.api_url("https://x.uz/api/v1/"),
+    "https://x.uz/api/v1/public/messages",
+)
+check(
+    "/api/v1 yozilmagan bo'lsa qo'shiladi",
+    sms_service.api_url("https://x.uz"),
+    "https://x.uz/api/v1/public/messages",
+)
+
+
+# --- Javoblarni talqin qilish -------------------------------------------
+
+class _FakeClient:
+    """httpx.AsyncClient o'rnida: tayyor javobni qaytaradi yoki xato otadi."""
+
+    reply: object = None
+    sent: dict = {}
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, headers=None, json=None):
+        _FakeClient.sent = {"url": url, "headers": headers, "json": json}
+        if isinstance(_FakeClient.reply, Exception):
+            raise _FakeClient.reply
+        return _FakeClient.reply
+
+
+def _send(reply):
+    """send_sms ni soxta javob bilan chaqiradi -> natija yoki xato kodi."""
+    _FakeClient.reply = reply
+    real = httpx.AsyncClient
+    httpx.AsyncClient = _FakeClient
+    try:
+        return asyncio.run(sms_service.send_sms("xab_live_TEST", "+998901234567", "Salom"))
+    except sms_service.SmsError as exc:
+        return f"{exc.code}|{exc}"
+    finally:
+        httpx.AsyncClient = real
+
+
+print("Xabarchi javoblari:")
+queued = _send(httpx.Response(201, json=[{"id": 42, "status": "queued", "to": "998901234567"}]))
+check("201 -> navbatdagi xabar qaytadi", (queued or {}).get("id") if isinstance(queued, dict) else queued, 42)
+check("kalit X-API-Key sarlavhasida", _FakeClient.sent["headers"]["X-API-Key"], "xab_live_TEST")
+check("raqam ro'yxat ichida", _FakeClient.sent["json"]["to"], ["+998901234567"])
+check("so'rov /public/messages ga", _FakeClient.sent["url"].endswith("/api/v1/public/messages"), True)
+
+check(
+    "405 (veb-sayt) -> manzil noto'g'ri",
+    _send(httpx.Response(405, text="")).split("|")[0],
+    "bad_api_url",
+)
+check(
+    "200 HTML -> 'yuborildi' deb aldamaydi",
+    _send(httpx.Response(200, text="<!doctype html><html></html>")).split("|")[0],
+    "bad_api_url",
+)
+auth = _send(httpx.Response(401, json={"code": "auth_error", "message": "Invalid API key"}))
+check("401 -> auth_error", auth.split("|")[0], "auth_error")
+check("401 sababi xodim tilida", "kalit noto'g'ri" in auth, True)
+check(
+    "402 -> oylik limit",
+    _send(httpx.Response(402, json={"code": "quota_exceeded", "message": "x"})).split("|")[0],
+    "quota_exceeded",
+)
+check(
+    "403 -> ruxsat (sms.send) yo'q",
+    "sms.send" in _send(httpx.Response(403, json={"code": "forbidden", "message": "x"})),
+    True,
+)
+check(
+    "noma'lum kod -> Xabarchi matni o'zi",
+    _send(httpx.Response(409, json={"code": "yangi_kod", "message": "Izoh"})),
+    "yangi_kod|Izoh",
+)
+check(
+    "422 (pydantic) -> umumiy xato",
+    _send(httpx.Response(422, json={"detail": [{"msg": "x"}]})).split("|")[0],
+    "api_error",
+)
+check(
+    "tarmoq xatosi -> ulanib bo'lmadi",
+    _send(httpx.ConnectError("rad etildi")).split("|")[0],
+    "unreachable",
+)
+
+
+# --- Faktura to'lovi -----------------------------------------------------
+
+class _NoInvoiceSession:
+    async def get(self, model, key):
+        return None
+
+
+async def _invoice_quiet():
+    # Faktura topilmasa yoki bronsiz bo'lsa — jim, xatosiz
+    await sms_service.notify_invoice_payment(_NoInvoiceSession(), "i1", 5000)
+    return True
+
+
+print("Faktura to'lovi:")
+check("bronsiz faktura jim o'tadi", asyncio.run(_invoice_quiet()), True)
+
 print()
 print(f"Jami: {ok} OK, {fail} XATO")
 sys.exit(1 if fail else 0)

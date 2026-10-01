@@ -200,11 +200,18 @@ async def test_branch_sms(
             "BAD_PHONE",
         )
     try:
-        await sms_service.send_sms(
+        message = await sms_service.send_sms(
             key,
             phone,
             f"{branch.name}: SMS sozlamasi tekshiruvi — ulanish ishlayapti.",
         )
     except Exception as exc:  # noqa: BLE001 — sababi xodimga ko'rsatiladi
         raise ValidationException(f"SMS yuborilmadi: {exc}", "SMS_SEND_FAILED")
-    return {"ok": True, "phone": phone}
+    # Xabarchi SMS'ni navbatga oladi (queued) — uni hisobga ulangan telefon
+    # yuboradi. Holat va raqam Xabarchi panelida kuzatish uchun qaytadi.
+    return {
+        "ok": True,
+        "phone": phone,
+        "status": message.get("status"),
+        "message_id": message.get("id"),
+    }

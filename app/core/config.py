@@ -161,10 +161,16 @@ class SmsSettings(BaseSettings):
     API kalitlari bu yerda EMAS — har filialning kaliti bazada shifrlangan
     holda saqlanadi va sozlamalar sahifasidan kiritiladi. Bu yerda faqat
     xizmat manzili.
+
+    DIQQAT: manzil Xabarchi BACKEND'iga (API) qaratilishi shart, veb-sayt
+    (dashboard) domeniga emas. Sayt domeni har qanday GET'ga HTML, POST'ga
+    esa 405 qaytaradi — SMS jimgina ketmay qoladi. Tekshirish:
+    `GET {manzil}/healthz` → `{"status":"ok"}` (JSON) bo'lishi kerak.
+    Oxiridagi `/api/v1` yozilmasa ham bo'ladi — o'zi qo'shiladi.
     """
 
     SMS_API_BASE: str = (
-        "https://manager-xabar-web-udyrjh-9d78c6-13-140-185-49.sslip.io/api/v1"
+        "https://manager-xabarchi-backend-bula2s-f6aaa1-13-140-185-49.sslip.io/api/v1"
     )
 
 

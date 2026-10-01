@@ -12,8 +12,13 @@ filialda hamma narsa avvalgidek, SMS'siz ishlayveradi.
 
 Xabarchi API (o'z Android telefon + SIM orqali yuboradi):
     POST {SMS_API_BASE}/public/messages
-    X-API-Key: xab_live_...
+    X-API-Key: xab_live_...          (ruxsat: sms.send)
     {"to": ["+998901234567"], "text": "...", "priority": "transactional"}
+    → 201 [{"id": 42, "status": "queued", ...}]
+    xato → {"code": "auth_error" | "quota_exceeded" | ..., "message": "..."}
+
+SMS_API_BASE Xabarchi BACKEND'ining manzili (`.../api/v1`), veb-saytniki
+emas — sayt domeni POST'ga 405 qaytaradi va SMS ketmaydi.
 """
 from __future__ import annotations
 
@@ -83,18 +88,88 @@ def _fmt_amount(value: float) -> str:
 
 # --- Yuborish -----------------------------------------------------------
 
-async def send_sms(api_key: str, phone: str, text: str) -> None:
-    """Bitta SMS yuboradi; muvaffaqiyatsiz javobda xato ko'taradi."""
-    url = settings.SMS_API_BASE.rstrip("/") + "/public/messages"
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.post(
-            url,
-            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
-            json={"to": [phone], "text": text, "priority": "transactional"},
-        )
+class SmsError(RuntimeError):
+    """SMS yuborilmadi. `code` — sabab (Xabarchi kodi yoki o'zimizniki),
+    `str(exc)` — xodimga ko'rsatsa bo'ladigan tushuntirish."""
+
+    def __init__(self, code: str, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+#: Xabarchi xato kodlari → xodim tushunadigan sabab. Sozlamalardagi
+#: "Sinov SMS" tugmasi aynan shu matnni ko'rsatadi.
+_REASONS = {
+    "auth_error": "API kalit noto'g'ri yoki o'chirilgan — Xabarchi'dan yangi kalit oling",
+    "forbidden": "API kalitda SMS yuborish ruxsati (sms.send) yo'q",
+    "quota_exceeded": "Xabarchi tarifidagi oylik SMS limiti tugagan",
+    "subscription_inactive": "Xabarchi obunasi faol emas",
+    "rate_limited": "Juda ko'p so'rov — bir daqiqadan so'ng qayta urinib ko'ring",
+    "invalid_phone": "Telefon raqami noto'g'ri",
+    "not_found": "Xabarchi'da tanlangan qurilma topilmadi",
+}
+
+_BAD_URL = (
+    "SMS xizmati manzili noto'g'ri sozlangan: SMS_API_BASE Xabarchi "
+    "backend'iga (API) qaratilishi kerak, veb-saytiga emas"
+)
+
+
+def api_url(base: str | None = None) -> str:
+    """`.../api/v1/public/messages` — `/api/v1` yozilmagan bo'lsa qo'shiladi."""
+    root = (base if base is not None else settings.SMS_API_BASE).strip().rstrip("/")
+    if not root.endswith("/api/v1"):
+        root += "/api/v1"
+    return root + "/public/messages"
+
+
+def _json(resp: httpx.Response):
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+async def send_sms(api_key: str, phone: str, text: str) -> dict:
+    """Bitta SMS'ni Xabarchi navbatiga qo'yadi va yaratilgan xabarni qaytaradi.
+
+    Xabarchi 201 bilan xabar(lar) ro'yxatini qaytaradi (`status: queued`) —
+    SMS'ni keyin hisobga ulangan Android telefon yuboradi. Muvaffaqiyatsiz
+    javobda sababi aniq [SmsError] ko'tariladi: xodim "405" emas, "manzil
+    noto'g'ri" yoki "kalit noto'g'ri" degan gapni ko'rishi kerak.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                api_url(),
+                headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+                json={"to": [phone], "text": text, "priority": "transactional"},
+            )
+    except httpx.HTTPError as exc:
+        raise SmsError(
+            "unreachable",
+            f"SMS xizmatiga ulanib bo'lmadi ({type(exc).__name__})",
+        ) from exc
+
+    data = _json(resp)
     if resp.status_code >= 400:
-        detail = resp.text[:300]
-        raise RuntimeError(f"SMS API {resp.status_code}: {detail}")
+        code = data.get("code") if isinstance(data, dict) else None
+        if code:
+            reason = _REASONS.get(code) or str(data.get("message") or code)
+            raise SmsError(code, reason, resp.status_code)
+        # Xabarchi xatolari doim {code, message} — boshqa narsa kelgan bo'lsa
+        # so'rov API'ga emas, boshqa serverga (masalan, veb-saytga) tushgan
+        if resp.status_code in (404, 405) or data is None:
+            raise SmsError("bad_api_url", _BAD_URL, resp.status_code)
+        raise SmsError(
+            "api_error", f"SMS xizmati xatosi ({resp.status_code})", resp.status_code
+        )
+    # Muvaffaqiyat — xabarlar ro'yxati. HTML yoki boshqa shakl kelsa, bu ham
+    # noto'g'ri manzil belgisi: "yuborildi" deb aldab qo'ymaymiz.
+    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        raise SmsError("bad_api_url", _BAD_URL, resp.status_code)
+    return data[0]
 
 
 #: Fonga yuborilgan vazifalar — GC yig'ishtirib ketmasligi uchun
@@ -106,8 +181,16 @@ def _schedule(api_key: str, phone: str, text: str, what: str) -> None:
 
     async def runner() -> None:
         try:
-            await send_sms(api_key, phone, text)
-            logger.info("SMS yuborildi (%s): %s", what, phone)
+            message = await send_sms(api_key, phone, text)
+            logger.info(
+                "SMS navbatga qo'yildi (%s): %s, xabar #%s",
+                what, phone, message.get("id"),
+            )
+        except SmsError as exc:
+            # Kutilgan sabab (kalit, limit, manzil) — bir qatorda, izsiz
+            logger.warning(
+                "SMS yuborilmadi (%s): %s — [%s] %s", what, phone, exc.code, exc
+            )
         except Exception:
             # SMS xatosi asosiy oqimni buzmaydi — faqat log
             logger.warning("SMS yuborilmadi (%s): %s", what, phone, exc_info=True)
@@ -186,3 +269,23 @@ async def notify_payment(session: AsyncSession, reservation, amount: float) -> N
         _schedule(key, phone, text, "to'lov")
     except Exception:
         logger.warning("To'lov SMS'ini tayyorlab bo'lmadi", exc_info=True)
+
+
+async def notify_invoice_payment(session: AsyncSession, invoice_id, amount: float) -> None:
+    """Hisob-faktura Moliya bo'limidan to'langanda — u bronga tegishli
+    bo'lsa, o'sha bron mijoziga kvitansiya SMS'i. Bronsiz faktura (do'kon
+    va h.k.) jim o'tadi."""
+    try:
+        from app.infrastructure.database.models.invoice import Invoice
+        from app.infrastructure.database.models.reservation import Reservation
+
+        invoice = await session.get(Invoice, invoice_id)
+        reservation_id = getattr(invoice, "reservation_id", None) if invoice else None
+        if not reservation_id:
+            return
+        reservation = await session.get(Reservation, reservation_id)
+        if reservation is None:
+            return
+        await notify_payment(session, reservation, amount)
+    except Exception:
+        logger.warning("Faktura to'lovi SMS'ini tayyorlab bo'lmadi", exc_info=True)

@@ -293,6 +293,27 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 
 ---
 
+**GET /branches/{branch_id}/sms** · **PUT** · **DELETE**
+
+- Auth: require_permission("branch.update")
+- Description: Branch SMS (Xabarchi) API key. The key is stored encrypted
+  and never returned — only a masked hint.
+- PUT body: `{"api_key": "xab_live_..."}`
+- Response 200: `{"configured": true, "key_hint": "xab_live_7…ABCD"}`
+
+**POST /branches/{branch_id}/sms/test**
+
+- Auth: require_permission("branch.update")
+- Body: `{"phone": "+998 90 123 45 67"}`
+- Description: Sends a test SMS with the saved key and returns the result
+  immediately.
+- Response 200: `{"ok": true, "phone": "+998901234567", "status": "queued", "message_id": 42}`
+  (`queued` — accepted by Xabarchi; the paired phone sends it)
+- Errors: 422 `SMS_KEY_NOT_SET`, `BAD_PHONE`, `SMS_SEND_FAILED` (detail
+  carries the reason: wrong key, monthly quota, misconfigured `SMS_API_BASE` …)
+
+---
+
 ### Floors
 
 **GET /floors**

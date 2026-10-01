@@ -228,6 +228,34 @@ Global modellar (`room_types`, `amenities`) SUPER_ADMIN tomonidan yaratiladi va 
 | `MINIO_BUCKET_DOCUMENTS` | Hujjatlar bucket | `hotel-documents` |
 | `MINIO_BUCKET_GUESTS` | Mehmon bucket | `hotel-guests` |
 | `CORS_ORIGINS` | Ruxsat etilgan origin'lar | `["http://localhost:3000"]` |
+| `SMS_API_BASE` | Xabarchi **backend** (API) manzili — veb-sayt emas | `https://manager-xabarchi-backend-…sslip.io/api/v1` |
+
+### Mijozga SMS (Xabarchi)
+
+Mijozga SMS [Xabarchi](https://github.com/To-Rex/Xabarchi-Backend) orqali
+ketadi — u SMS'ni hisobga ulangan Android telefon (SIM) bilan yuboradi.
+
+- **Kalit** har filialga alohida: Sozlamalar → "SMS xabarnomalar" (yoki
+  `PUT /branches/{id}/sms`, ruxsat `branch.update`). Xabarchi'da kalit
+  `sms.send` ruxsati bilan yaratiladi. Bazada Fernet bilan shifrlangan
+  saqlanadi; javoblarda faqat niqoblangan ko'rinishi qaytadi.
+- **Qachon ketadi**: bron yaratilganda (tasdiqlash), qo'shimcha to'lov
+  qabul qilinganda (`settle-payment`, `PAY`) va bron hisob-fakturasi Moliya
+  bo'limidan to'langanda (`POST /finance/invoices/{id}/pay`). Qaytarimda
+  SMS yo'q. Mehmon telefoni O'zbekiston raqami bo'lmasa SMS yuborilmaydi.
+- **Fire-and-forget**: SMS xatosi bron yoki to'lovni hech qachon buzmaydi —
+  sababi logga bir qatorda yoziladi: `SMS yuborilmadi (bron): +998… —
+  [auth_error] …`. Kalit kiritilmagan filial avvalgidek, SMS'siz ishlaydi.
+- **Sinov**: `POST /branches/{id}/sms/test {phone}` natijani darhol
+  qaytaradi (`status: queued` — Xabarchi navbatiga tushdi); xato bo'lsa
+  sababi aniq matn bilan (`kalit noto'g'ri`, `oylik limit tugagan`,
+  `manzil noto'g'ri sozlangan` …).
+- **Manzil**: `SMS_API_BASE` Xabarchi **backend**'iga qaratilishi shart.
+  Veb-sayt (dashboard) domeni POST'ga 405 qaytaradi — SMS ketmaydi.
+  Tekshirish: `GET {manzil}/healthz` → `{"status":"ok"}`.
+
+Kod: `app/application/services/sms_service.py`, test:
+`python tests/test_sms_service.py`.
 
 ### Baza bilan aloqa uzilganda
 

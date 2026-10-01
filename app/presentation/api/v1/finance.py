@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.infrastructure.database.models.invoice import Invoice
+from app.application.services import sms_service
 from app.application.services.finance_service import FinanceService
 from app.application.dto.finance import (
     PaymentCreateRequest,
@@ -254,7 +255,11 @@ async def record_payment(
     service = FinanceService(session)
     payload = data.model_dump()
     payload["invoice_id"] = invoice_id
-    return await service.record_payment(h_id, payload, current_user["id"])
+    payment = await service.record_payment(h_id, payload, current_user["id"])
+    # Bron hisob-fakturasi Moliya bo'limidan to'langanda ham mijozga
+    # kvitansiya SMS'i (filial kaliti bo'lsa) — fonda, xatosi to'lovni buzmaydi
+    await sms_service.notify_invoice_payment(session, invoice_id, float(payment.amount))
+    return payment
 
 
 @router.get("/payments", response_model=list[PaymentResponse])
