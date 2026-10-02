@@ -130,6 +130,43 @@ async def finance_daily(
     return await FinanceSummaryService(session).daily(h_id, date_from, date_to)
 
 
+@router.get("/by-staff")
+async def finance_by_staff(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Davr tushumi xodimlar kesimida: kim qancha bron to'lovi va do'kon
+    savdosi olgan, qancha qaytargan va xarajat qilgan. Yig'indisi
+    `/finance/summary` dagi jami tushumga teng (bir xil sana ta'rifi).
+
+    Faqat admin yoki moliya/kassa nazorati huquqi borlar
+    (`STAFF_REPORT_CODES`) — boshqa xodimlarning pulini ochib beradi."""
+    from app.application.services.finance_summary_service import (
+        FinanceSummaryService,
+        can_view_staff_report,
+    )
+
+    if not can_view_staff_report(current_user):
+        raise ForbiddenException(
+            "Xodimlar kesimidagi hisobotni ko'rishga ruxsat yo'q",
+            "STAFF_REPORT_FORBIDDEN",
+        )
+    if date_from and date_to and date_from > date_to:
+        raise ValidationException(
+            "Boshlanish sanasi tugash sanasidan keyin bo'lmasin", "INVALID_RANGE"
+        )
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    return await FinanceSummaryService(session).by_staff(
+        h_id, date_from=date_from, date_to=date_to
+    )
+
+
 @router.get("/penalties")
 async def finance_penalties(
     date_from: date | None = Query(default=None),

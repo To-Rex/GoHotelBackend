@@ -1711,6 +1711,28 @@ Yozuv shakli:
 
 ---
 
+**GET /finance/by-staff**
+
+- Auth: ADMIN / SUPER_ADMIN or any of `finance.view`, `shift.force_close`, `report.view` (403 `STAFF_REPORT_FORBIDDEN`); `?hotel_id=` for SUPER_ADMIN
+- Query: `?date_from=2026-10-01&date_to=2026-10-07` (optional; 422 `INVALID_RANGE` if from > to)
+- Description: Revenue of the period split by the employee who took the money — booking payments (`Payment.created_by`, by `payment_date`, refunds are negative), paid shop sales (`ShopSale.created_by`, by `paid_at`; split payments go to each part's method) and expenses (`Expense.created_by`, by `expense_date`). Same day definitions as `/finance/summary`, so the sum of `revenue` equals summary `income + shop_revenue`. Sorted by revenue, then expense. An employee with only expenses is listed too.
+- Response 200:
+
+```json
+{
+  "items": [
+    {"user_id": "uuid", "name": "Dilnoza Rahimova", "user_type": "EMPLOYEE", "status": "ACTIVE",
+     "revenue": 2230000.0, "income": 2200000.0, "payment_count": 7, "refunds": 0.0,
+     "shop": 30000.0, "shop_count": 1, "cash": 1530000.0,
+     "expense": 0.0, "expense_count": 0, "cash_expense": 0.0,
+     "methods": [{"key": "CASH", "pay": 1500000.0, "shop": 30000.0}, {"key": "CARD", "pay": 700000.0, "shop": 0.0}]}
+  ],
+  "total": {"revenue": 2230000.0, "income": 2200000.0, "shop": 30000.0, "refunds": 0.0, "expense": 0.0, "payment_count": 7}
+}
+```
+
+---
+
 **GET /finance/penalties**
 
 - Auth: required (`?hotel_id=` for SUPER_ADMIN)

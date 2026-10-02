@@ -357,6 +357,15 @@ qarzdorlar va smenalardagi kamomad/ortiqcha. Ikkita yangi endpoint:
 
 Test: `pytest tests/test_finance_overview.py`.
 
+**Tushum xodimlar kesimida.** Moliya sahifasida "Tushum — xodimlar
+bo'yicha" kartasi: kim qancha bron to'lovi va do'kon savdosi olgan,
+naqd/karta, qaytarim va xarajat. `GET /finance/by-staff?date_from&date_to`
+— pul yozuvning o'zidan bog'lanadi (`Payment/ShopSale/Expense.created_by`,
+"Mening hisobotim" va smena kassasi bilan bir xil), sana ta'rifi
+`/finance/summary` bilan bir xil, ya'ni xodimlar yig'indisi jami tushumga
+teng. Ko'rish — admin yoki `finance.view` / `shift.force_close` /
+`report.view`. Test: `pytest tests/test_finance_by_staff.py`.
+
 ### Mijozga SMS (Xabarchi)
 
 Mijozga SMS [Xabarchi](https://github.com/To-Rex/Xabarchi-Backend) orqali
