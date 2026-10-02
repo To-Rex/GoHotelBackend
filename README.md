@@ -285,6 +285,34 @@ almashtirishda chegirma" (`GET/PUT /api/v1/hotels/move-discount-settings`,
 Kod: `app/application/services/move_discount_policy.py`, migratsiya
 `b1e2f3a4b5c6`, test: `pytest tests/test_move_discount_policy.py`.
 
+### Jarimalar (kech chiqish, shikast)
+
+Mehmon kech chiqsa yoki biror narsani sindirsa bronga jarima yoziladi.
+Vebda: Bronlar → bronni boshqarish oynasi → "Jarimalar" bo'limi;
+kiritilgan summalar shu yerda, bron tafsilotida va Moliya sahifasida
+ko'rinadi.
+
+- Turlari: `LATE_CHECKOUT` (kech chiqish), `DAMAGE` (shikast/sindirilgan
+  narsa), `OTHER`. Faqat `CHECKED_IN` va `CHECKED_OUT` bronlarga (chiqib
+  ketgan mehmonga keyin topilgan shikast uchun ham).
+- Qo'shish — `reservation.update` ruxsati (resepshn), bekor qilish — faqat
+  ADMIN/SUPER_ADMIN yoki `shift.force_close` (menejer). Jarima
+  o'chirilmaydi: bekor qilingani sababi va kim qilgani bilan qoladi.
+- Summa `reservations.penalty_amount` ga va bron jamiga qo'shiladi,
+  hisob-fakturada `PENALTY` qatori bo'ladi; chiqish, xona ko'chirish,
+  hisob-kitob va hisob-faktura yaratishda qayta hisoblansa ham saqlanadi.
+  To'lov odatdagi "hisob-kitob" orqali olinadi (qarz sifatida ko'rinadi).
+- Kech chiqish taklifi (ixtiyoriy): Sozlamalar → "Bron va mehmonlar" →
+  "Jarimalar" (`GET/PUT /hotels/penalty-settings`,
+  `hotels.settings["penalty"]`): soatiga summa va imtiyozli daqiqalar.
+  **Standart — o'chiq (0)**. Yoqilsa server kechikkan soatlarni (yuqoriga
+  yaxlitlab) hisoblab taklif qiladi, xodim summani o'zgartira oladi.
+- Moliya: `GET /finance/penalties?date_from&date_to` (jurnal + turlar
+  bo'yicha jami), `/finance/summary` da `penalty_total`, `penalty_count`.
+
+Kod: `app/application/services/reservation_penalty_service.py`, migratsiya
+`c2f3a4b5c6d7`, test: `pytest tests/test_reservation_penalties.py`.
+
 ### Sozlovchi (CONFIGURATOR) roli
 
 Sozlovchi — mehmonxonaga bog'lanmagan hisob (`users.user_type =

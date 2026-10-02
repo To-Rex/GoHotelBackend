@@ -628,6 +628,9 @@ class RoomService:
                     "move_discount_amount": float(
                         getattr(reservation, "move_discount_amount", 0) or 0
                     ),
+                    "penalty_amount": float(
+                        getattr(reservation, "penalty_amount", 0) or 0
+                    ),
                     "notes": reservation.notes,
                     "cancelled_reason": reservation.cancelled_reason,
                     "companions": reservation.companions,

@@ -1,6 +1,8 @@
 from uuid import UUID
 from datetime import date
 
+from typing import Literal
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -718,3 +720,84 @@ async def remove_service(
     service = ReservationService(session)
     await service.remove_service(service_id, reservation_id, h_id)
     return {"message": "Service removed from reservation"}
+
+
+# ------------------------------------------------------------- jarimalar --
+#
+# Kech chiqish, shikast (buzilgan narsa) va boshqa jarimalar. Qoidalar:
+# application/services/reservation_penalty_service.py
+
+
+class PenaltyCreateRequest(BaseModel):
+    kind: Literal["LATE_CHECKOUT", "DAMAGE", "OTHER"]
+    amount: float = Field(gt=0, le=1_000_000_000)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PenaltyVoidRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+async def _penalty_hotel_id(
+    current_user: dict, reservation_id: UUID, session: AsyncSession
+) -> UUID:
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = current_user.get("hotel_id")
+        if not h_id:
+            reservation = await session.get(Reservation, reservation_id)
+            if not reservation:
+                raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+            h_id = reservation.hotel_id
+        return h_id
+    h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return h_id
+
+
+@router.get("/{reservation_id}/penalties")
+async def list_penalties(
+    reservation_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Bron jarimalari (bekor qilinganlari ham), faollar jami va kech chiqish
+    bo'yicha taklif (sozlamada soatiga summa berilgan bo'lsa)."""
+    from app.application.services.reservation_penalty_service import ReservationPenaltyService
+
+    h_id = await _penalty_hotel_id(current_user, reservation_id, session)
+    return await ReservationPenaltyService(session).list_for_reservation(h_id, reservation_id)
+
+
+@router.post("/{reservation_id}/penalties")
+async def add_penalty(
+    data: PenaltyCreateRequest,
+    reservation_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """Jarima qo'shish — bron summasiga darhol qo'shiladi (to'lanmasa qarz)."""
+    from app.application.services.reservation_penalty_service import ReservationPenaltyService
+
+    h_id = await _penalty_hotel_id(current_user, reservation_id, session)
+    return await ReservationPenaltyService(session).add(
+        h_id, reservation_id, data.kind, data.amount, data.note, current_user["id"]
+    )
+
+
+@router.post("/{reservation_id}/penalties/{penalty_id}/void")
+async def void_penalty(
+    data: PenaltyVoidRequest,
+    reservation_id: UUID = Path(),
+    penalty_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Jarimani bekor qilish — faqat administrator yoki menejer. O'chirilmaydi:
+    kim, qachon, nima uchun bekor qilgani saqlanadi."""
+    from app.application.services.reservation_penalty_service import ReservationPenaltyService
+
+    h_id = await _penalty_hotel_id(current_user, reservation_id, session)
+    return await ReservationPenaltyService(session).void(
+        h_id, reservation_id, penalty_id, data.reason, current_user
+    )

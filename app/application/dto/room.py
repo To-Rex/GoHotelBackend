@@ -192,6 +192,8 @@ class RoomReservationResponse(BaseModel):
     discount_percent: float = 0
     # Qimmatroq xonaga ko'chirishda berilgan chegirma (so'm)
     move_discount_amount: float = 0
+    # Faol jarimalar yig'indisi
+    penalty_amount: float = 0
     # Hamrohlar: [{"guest_id": ..., "name": ...}, ...] — xonada kim turgani
     companions: list | None = None
     created_at: datetime

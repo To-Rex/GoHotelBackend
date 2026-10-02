@@ -1155,6 +1155,47 @@ Yozuv shakli:
 
 ---
 
+**GET /reservations/{reservation_id}/penalties**
+
+- Auth: required
+- Description: Penalties of a booking (late checkout, damage, other) — voided ones included with `voided_at`. `total` is the sum of active penalties (already part of `total_amount`). `late_suggestion` is a server-side late-checkout amount when `penalty-settings.late_hourly_amount` > 0 and the guest is late beyond `grace_minutes` (CHECKED_IN: until now; CHECKED_OUT: until `checkout_requested_at`), otherwise `null`.
+- Response 200:
+
+```json
+{
+  "items": [
+    {"id": "uuid", "reservation_id": "uuid", "kind": "DAMAGE", "amount": 150000.0, "note": "Stakan sindi",
+     "penalty_date": "2026-10-02", "created_by": "uuid", "created_by_name": "Dilnoza R",
+     "created_at": "2026-10-02T09:10:00+00:00", "voided_at": null, "voided_by_name": null, "void_reason": null}
+  ],
+  "total": 150000.0,
+  "can_add": true,
+  "late_suggestion": {"late_minutes": 130, "hours": 3, "hourly_amount": 50000.0, "amount": 150000.0, "due_at": "2026-10-02T07:00:00+00:00"}
+}
+```
+
+---
+
+**POST /reservations/{reservation_id}/penalties**
+
+- Auth: require_permission("reservation.update")
+- Description: Add a penalty. Allowed only for CHECKED_IN and CHECKED_OUT bookings (a guest who already left can still be charged for damage found later). The amount is added to `reservations.penalty_amount` and `total_amount`, `payment_status` is recalculated, and a `PENALTY` line is added to the booking invoice (if it exists; otherwise it is added when the invoice is created / at check-out). Payment is taken through the usual `settle-payment` / invoice payment flow.
+- Body: `{"kind": "LATE_CHECKOUT" | "DAMAGE" | "OTHER", "amount": 150000, "note": "optional, max 500"}`
+- Response 200: `{"penalty": {...}, "reservation_total": 750000.0, "penalty_total": 150000.0, "payment_status": "PARTIALLY_PAID"}`
+- Errors: 422 `PENALTY_INVALID_STATUS`, `PENALTY_INVALID_KIND`, `PENALTY_INVALID_AMOUNT`; 404 `RESERVATION_NOT_FOUND`
+
+---
+
+**POST /reservations/{reservation_id}/penalties/{penalty_id}/void**
+
+- Auth: ADMIN / SUPER_ADMIN or permission `shift.force_close` (manager)
+- Description: Void a penalty (never deleted — kept with `voided_at`, `voided_by`, `void_reason`). The amount is taken back out of the booking total and the invoice, its `PENALTY` invoice line is removed.
+- Body: `{"reason": "optional"}`
+- Response 200: same shape as add
+- Errors: 403 `PENALTY_VOID_FORBIDDEN`; 404 `PENALTY_NOT_FOUND`; 422 `PENALTY_ALREADY_VOIDED`
+
+---
+
 ### Employees
 
 **GET /employees**
@@ -1667,6 +1708,30 @@ Yozuv shakli:
 ```
 
 - Errors: 422 `INVALID_RANGE` (from after to), 422 `RANGE_TOO_LONG`
+
+---
+
+**GET /finance/penalties**
+
+- Auth: required (`?hotel_id=` for SUPER_ADMIN)
+- Query: `?date_from=2026-10-01&date_to=2026-10-31` (optional; by `penalty_date`)
+- Description: Penalty journal for the period — every penalty with booking number, room and guest; voided ones are listed but not counted. `/finance/summary` also returns `penalty_total` and `penalty_count` (active penalties of the period).
+- Response 200:
+
+```json
+{
+  "summary": {"total": 200000.0, "count": 2, "by_kind": {"LATE_CHECKOUT": {"total": 50000.0, "count": 1}, "DAMAGE": {"total": 150000.0, "count": 1}, "OTHER": {"total": 0.0, "count": 0}}},
+  "items": [{"id": "uuid", "kind": "DAMAGE", "amount": 150000.0, "reservation_number": "R-0012", "room_number": "204", "guest_name": "Ali Valiyev", "voided_at": null}]
+}
+```
+
+---
+
+**GET /hotels/penalty-settings** / **PUT /hotels/penalty-settings**
+
+- Auth: GET — any employee; PUT — configurator / SUPER_ADMIN (`assert_can_manage_settings`, 403 `SETTINGS_CONFIGURATOR_ONLY`)
+- Body (PUT): `{"late_hourly_amount": 50000, "grace_minutes": 30}` — `late_hourly_amount` 0 turns the late-checkout suggestion off (default)
+- Response 200: `{"late_hourly_amount": 50000.0, "grace_minutes": 30, "checkout_hour": 12}` (`checkout_hour` — server checkout hour for daily bookings, read-only)
 
 ---
 

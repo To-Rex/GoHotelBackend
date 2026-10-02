@@ -320,6 +320,72 @@ async def save_move_discount_settings(
     return resolve_move_discount_settings(new_settings)
 
 
+# ------------------------------------------------- jarimalar sozlamasi --
+
+
+class PenaltySettingsRequest(BaseModel):
+    """Kech chiqish jarimasi taklifi: soatiga summa (0 — o'chiq) va
+    imtiyozli daqiqalar. Server taklif qiladi, xodim summani o'zgartira oladi."""
+
+    late_hourly_amount: float = Field(default=0, ge=0, le=1_000_000_000)
+    grace_minutes: int = Field(default=0, ge=0, le=600)
+
+
+def _penalty_payload(settings_dict: dict | None) -> dict:
+    from app.application.services.reservation_penalty_service import (
+        resolve_penalty_settings,
+    )
+    from app.core.config import settings as app_settings
+
+    return {
+        **resolve_penalty_settings(settings_dict),
+        # Kunlik bronda chiqish soati (o'qish uchun — server sozlamasi)
+        "checkout_hour": max(0, min(23, app_settings.DEFAULT_CHECKOUT_HOUR)),
+    }
+
+
+@router.get("/penalty-settings")
+async def get_penalty_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Jarima sozlamasi — HAR QANDAY xodim o'qiydi (jarima oynasi taklif
+    qilishi uchun)."""
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        return _penalty_payload(None)
+    hotel = await session.get(Hotel, hotel_id)
+    return _penalty_payload(hotel.settings if hotel else None)
+
+
+@router.put("/penalty-settings")
+async def save_penalty_settings(
+    data: PenaltySettingsRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Saqlash — faqat sozlovchi (configurator_access)."""
+    from app.application.services.reservation_penalty_service import (
+        PENALTY_SETTINGS_KEY,
+        resolve_penalty_settings,
+    )
+
+    assert_can_manage_settings(current_user)
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        raise ForbiddenException("Hotel context required")
+    hotel = await session.get(Hotel, hotel_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    new_settings = dict(hotel.settings or {})
+    new_settings[PENALTY_SETTINGS_KEY] = resolve_penalty_settings(
+        {PENALTY_SETTINGS_KEY: data.model_dump()}
+    )
+    hotel.settings = new_settings
+    await session.flush()
+    return _penalty_payload(new_settings)
+
+
 # ------------------------------------- ish vaqtidan tashqarida ishlash --
 
 

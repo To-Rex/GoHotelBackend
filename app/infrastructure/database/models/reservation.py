@@ -82,6 +82,12 @@ class Reservation(FullMixin, SoftDeleteMixin, Base):
     move_discount_amount: Mapped[float] = mapped_column(
         Numeric(12, 2), nullable=False, default=0, server_default="0"
     )
+    # Faol (bekor qilinmagan) jarimalar yig'indisi — bron summasiga qo'shilgan,
+    # qayta hisoblarda (chiqish, hisob-faktura, ko'chirish) ham saqlanadi.
+    # Qoida: reservation_penalty_service
+    penalty_amount: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0, server_default="0"
+    )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

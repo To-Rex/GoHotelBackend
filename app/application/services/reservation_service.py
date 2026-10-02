@@ -24,6 +24,7 @@ from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
 from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.discount_policy import check_discount
+from app.application.services.reservation_penalty_service import ensure_penalty_lines
 from app.application.services.move_discount_policy import (
     carry_over_move_discount,
     check_move_discount,
@@ -533,6 +534,8 @@ class ReservationService:
 
         # Invoice bilan sinxronlash: xizmat qatorlari saqlanadi, xona qatori yangilanadi
         service_total = 0.0
+        # Jarimalar (kech chiqish, shikast) xonaga bog'liq emas — jamida qoladi
+        penalty_total = float(getattr(reservation, "penalty_amount", 0) or 0)
         invoice = await self.invoice_repo.get_by_reservation(reservation_id, hotel_id)
         if invoice:
             line_items = await self.invoice_repo.get_line_items(invoice.id)
@@ -553,10 +556,12 @@ class ReservationService:
                     service_total += float(li.total_price or 0)
             invoice.subtotal = new_charge
             invoice.discount_amount = discount_amount + move_discount
-            invoice.total_amount = max(new_room_total + service_total, 0)
+            invoice.total_amount = max(
+                new_room_total + service_total + penalty_total, 0
+            )
 
         old_total = float(reservation.total_amount or 0)
-        new_total = max(new_room_total + service_total, 0)
+        new_total = max(new_room_total + service_total + penalty_total, 0)
         reservation.total_amount = new_total
         reservation.move_discount_amount = move_discount
 
@@ -659,13 +664,16 @@ class ReservationService:
                 discount_amount = float(reservation.discount_amount or 0) + float(
                     reservation.move_discount_amount or 0
                 )
+                # Jarimalar jamida bor, lekin xona qatoriga kirmaydi — ular
+                # alohida PENALTY qatorlari bo'ladi
+                penalty_total = float(getattr(reservation, "penalty_amount", 0) or 0)
                 invoice = await self._create_invoice(
                     hotel_id=hotel_id,
                     reservation_id=reservation.id,
                     guest_id=reservation.guest_id,
                     room_id=reservation.room_id,
                     base_price=base_price,
-                    room_charge=total + discount_amount,
+                    room_charge=total + discount_amount - penalty_total,
                     discount_amount=discount_amount,
                     total_amount=total,
                     booking_type=booking_type,
@@ -673,6 +681,8 @@ class ReservationService:
                     created_by=user_id,
                     status="ISSUED",
                 )
+                await self.session.flush()
+                await ensure_penalty_lines(self.session, invoice, reservation)
             await self._create_payment(
                 hotel_id=hotel_id,
                 invoice=invoice,
@@ -1730,6 +1740,12 @@ class ReservationService:
             )
             self.session.add(service_line)
             total_amount += svc["total_price"]
+
+        # Jarimalar (kech chiqish, shikast) — xona narxi qayta hisoblansa ham
+        # bron jamisida qoladi; qatori yo'q bo'lsa qo'shiladi
+        total_amount += float(getattr(reservation, "penalty_amount", 0) or 0)
+        await self.session.flush()
+        await ensure_penalty_lines(self.session, invoice, reservation)
 
         invoice.total_amount = max(total_amount, 0)
         if not existing_invoice:

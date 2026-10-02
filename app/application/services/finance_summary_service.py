@@ -89,12 +89,20 @@ class FinanceSummaryService:
         invoices = await self._invoices(hotel_id, date_from, date_to, status)
         expenses = await self._expenses(hotel_id, date_from, date_to, bucket)
         shop = await self._shop(hotel_id, date_from, date_to, bucket)
+        # Davrda yozilgan faol jarimalar (kech chiqish, shikast) — yangi
+        # maydonlar, mavjudlari o'zgarmaydi
+        from app.application.services.reservation_penalty_service import (
+            penalty_totals,
+        )
+
+        penalties = await penalty_totals(self.session, hotel_id, date_from, date_to)
 
         return {
             **payments,
             **invoices,
             **expenses,
             **shop,
+            **penalties,
             "methods": [{"key": key, **values} for key, values in methods.items()],
         }
 

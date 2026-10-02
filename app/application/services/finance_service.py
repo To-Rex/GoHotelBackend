@@ -197,6 +197,15 @@ class FinanceService:
             self.session.add(service_line)
             total += svc["total_price"]
 
+        # Jarimalar (kech chiqish, shikast) — alohida PENALTY qatorlari
+        from app.application.services.reservation_penalty_service import (
+            ensure_penalty_lines,
+        )
+
+        total += float(getattr(reservation, "penalty_amount", 0) or 0)
+        await self.session.flush()
+        await ensure_penalty_lines(self.session, invoice, reservation)
+
         invoice.total_amount = max(total, 0)
         await self.session.flush()
         return invoice

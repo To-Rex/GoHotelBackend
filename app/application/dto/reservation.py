@@ -150,6 +150,8 @@ class ReservationResponse(BaseModel):
     # Qimmatroq xonaga ko'chirishda berilgan chegirma (so'm), bron
     # chegirmasidan alohida
     move_discount_amount: float = 0
+    # Faol jarimalar (kech chiqish, shikast) yig'indisi — jamiga kirgan
+    penalty_amount: float = 0
     notes: str | None
     cancelled_reason: str | None
     cancelled_at: datetime | None

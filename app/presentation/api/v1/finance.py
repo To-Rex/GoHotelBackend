@@ -130,6 +130,30 @@ async def finance_daily(
     return await FinanceSummaryService(session).daily(h_id, date_from, date_to)
 
 
+@router.get("/penalties")
+async def finance_penalties(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Davrdagi jarimalar (kech chiqish, shikast, boshqa) — ro'yxat va
+    faollari bo'yicha jamlanma (turlar kesimida). Bekor qilinganlar ham
+    ro'yxatda, lekin jamiga kirmaydi."""
+    from app.application.services.reservation_penalty_service import (
+        ReservationPenaltyService,
+    )
+
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await ReservationPenaltyService(session).journal(h_id, date_from, date_to)
+
+
 @router.get("/invoices", response_model=list[InvoiceResponse])
 async def list_invoices(
     response: Response,
