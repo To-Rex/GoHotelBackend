@@ -285,6 +285,26 @@ almashtirishda chegirma" (`GET/PUT /api/v1/hotels/move-discount-settings`,
 Kod: `app/application/services/move_discount_policy.py`, migratsiya
 `b1e2f3a4b5c6`, test: `pytest tests/test_move_discount_policy.py`.
 
+### Kunlik bron hisobi: 12 yoki 24 soatlik
+
+Sozlamalar → "Bron va mehmonlar" → "Kunlik bron hisobi"
+(`GET/PUT /hotels/booking-settings`, maydon `daily_unit`, saqlanadi:
+`hotels.settings["booking"]["daily_unit"]`). **Standart — `12h`**.
+
+- `12h` — avvalgi tartib: kalendarda tanlangan oxirgi kun chiqish kuni,
+  1 kecha = xona turi narxi.
+- `24h` — har tanlangan kun to'liq 24 soat va xona narxi 12 soatlik deb
+  olinadi: **1 kun = narx × 2** (250 000 so'mlik xona — kuniga 500 000).
+  Soatlik bronlarga tegishli emas.
+- Rejim bron YARATILGANDA unga yoziladi (`reservations.daily_unit`) va
+  keyingi barcha qayta hisoblar (xona almashtirish, chiqish, hisob-kitob,
+  hisob-faktura) shu qiymat bilan — sozlama o'zgarsa ham mavjud bronlar
+  narxi o'zgarmaydi. Sozlamadan oldingi bronlar — `12h`. Hisob-faktura
+  qatorida birlik narxi ham × 2 bilan yoziladi.
+
+Kod: `app/application/services/daily_unit.py`, migratsiya `d3a4b5c6d7e8`,
+test: `pytest tests/test_daily_unit_pricing.py`.
+
 ### Jarimalar (kech chiqish, shikast)
 
 Mehmon kech chiqsa yoki biror narsani sindirsa bronga jarima yoziladi.

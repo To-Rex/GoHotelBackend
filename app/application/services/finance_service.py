@@ -102,6 +102,13 @@ class FinanceService:
             base_price = float(room_type.base_price) if room_type else 0
 
         booking_type = getattr(reservation, 'booking_type', None) or "DAILY"
+        # Bronning o'z kunlik hisob rejimi bilan (24 soatlik kunda × 2)
+        from app.application.services.daily_unit import (
+            reservation_daily_unit,
+            unit_price,
+        )
+
+        base_price = unit_price(base_price, booking_type, reservation_daily_unit(reservation))
         nights = (reservation.check_out_date - reservation.check_in_date).days
         if nights < 1:
             nights = 1

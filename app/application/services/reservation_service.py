@@ -24,6 +24,12 @@ from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
 from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.discount_policy import check_discount
+from app.application.services.daily_unit import (
+    DEFAULT_DAILY_UNIT,
+    reservation_daily_unit,
+    resolve_daily_unit,
+    unit_price,
+)
 from app.application.services.reservation_penalty_service import ensure_penalty_lines
 from app.application.services.move_discount_policy import (
     carry_over_move_discount,
@@ -464,8 +470,15 @@ class ReservationService:
             )
 
         # --- Narx qayta hisobi ---
-        old_base = await self._get_room_base_price(reservation.room_id, hotel_id)
-        new_base = await self._get_room_base_price(new_room_id, hotel_id)
+        # Bir kecha/kun narxi — bronning o'z kunlik hisob rejimi bilan (24
+        # soatlik kunda × 2). Ko'chirish yozuvidagi narxlar ham shu birlikda
+        unit = reservation_daily_unit(reservation)
+        old_base = unit_price(
+            await self._get_room_base_price(reservation.room_id, hotel_id), booking_type, unit
+        )
+        new_base = unit_price(
+            await self._get_room_base_price(new_room_id, hotel_id), booking_type, unit
+        )
 
         if booking_type == "HOURLY":
             # Soatlik narx davomiylikka bog'liq emas — yangi xonaning yaxlit narxi
@@ -651,8 +664,12 @@ class ReservationService:
                 )
             if not invoice:
                 # To'lovsiz yaratilgan bronda hisob-faktura hali yo'q — hozir ochiladi
-                base_price = await self._get_room_base_price(reservation.room_id, hotel_id)
                 booking_type = reservation.booking_type or "DAILY"
+                base_price = unit_price(
+                    await self._get_room_base_price(reservation.room_id, hotel_id),
+                    booking_type,
+                    reservation_daily_unit(reservation),
+                )
                 duration = (
                     1
                     if booking_type == "HOURLY"
@@ -915,14 +932,27 @@ class ReservationService:
                 "ROOM_ALREADY_BOOKED",
             )
 
-        base_price = await self._get_room_base_price(data["room_id"], hotel_id)
+        # Kunlik hisob rejimi (12/24 soat) — mehmonxona sozlamasidan. Bronga
+        # yoziladi: keyingi qayta hisoblar (ko'chirish, chiqish, hisob-faktura)
+        # shu qiymat bilan, sozlama keyin o'zgarsa ham narx o'zgarmaydi.
+        # 24 soatlik kunda bir kun = xona narxi × 2 (daily_unit.py)
+        policy_hotel = await self.session.get(Hotel, hotel_id)
+        daily_unit = (
+            DEFAULT_DAILY_UNIT
+            if booking_type == "HOURLY"
+            else resolve_daily_unit(policy_hotel.settings if policy_hotel else None)
+        )
+        base_price = unit_price(
+            await self._get_room_base_price(data["room_id"], hotel_id),
+            booking_type,
+            daily_unit,
+        )
         room_charge, duration = await self._calculate_price(
             base_price, booking_type, check_in, check_out, check_in_dt, check_out_dt
         )
 
         # Chegirma qoidasi — mehmonxona sozlamasidan. Tekshiruv shu yerda,
         # ya'ni brauzerni chetlab o'tib qoidadan oshirib bo'lmaydi
-        policy_hotel = await self.session.get(Hotel, hotel_id)
         check_discount(
             policy_hotel.settings if policy_hotel else None,
             booking_type,
@@ -1002,6 +1032,7 @@ class ReservationService:
             status="CONFIRMED",
             created_by=created_by,
             companions=companions or None,
+            daily_unit=daily_unit,
         )
         reservation = await self.repo.create(reservation)
 
@@ -1640,9 +1671,14 @@ class ReservationService:
         rt_stmt = select(RoomType).where(RoomType.id == room.room_type_id)
         rt_result = await self.session.execute(rt_stmt)
         room_type = rt_result.scalar_one_or_none()
-        base_price = float(room_type.base_price) if room_type else 0
-
         booking_type = reservation.booking_type or "DAILY"
+        # Bronning o'z kunlik hisob rejimi bilan (24 soatlik kunda × 2)
+        base_price = unit_price(
+            float(room_type.base_price) if room_type else 0,
+            booking_type,
+            reservation_daily_unit(reservation),
+        )
+
         room_charge, duration = await self._calculate_price(
             base_price, booking_type,
             reservation.check_in_date, reservation.check_out_date,

@@ -125,9 +125,9 @@ BOOKING_TYPES = ("DAILY", "HOURLY")
 #:         Standart: sozlama qo'shilishidan oldingi xatti-harakat AYNAN shu.
 #:   24h — har tanlangan kun to'liq (24 soatlik) to'lanadigan kun
 #:         (bugun + ertaga = 2 kun, chiqish — indinga).
-#: Server narxni avvalgidek kechalar soni (chiqish − kirish) bo'yicha
-#: hisoblaydi; rejim faqat kalendar tanlovi sanalarga qanday aylanishini
-#: belgilaydi (veb).
+#: Narx: 12h — 1 kecha = xona narxi; 24h — 1 kun = xona narxi × 2 (xona
+#: narxi 12 soatlik deb olinadi). Rejim bron yaratilganda unga yoziladi —
+#: sozlama o'zgarsa mavjud bronlar narxi o'zgarmaydi (daily_unit.py).
 DAILY_UNITS = ("12h", "24h")
 
 

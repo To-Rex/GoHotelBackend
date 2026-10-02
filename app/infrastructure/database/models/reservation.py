@@ -88,6 +88,12 @@ class Reservation(FullMixin, SoftDeleteMixin, Base):
     penalty_amount: Mapped[float] = mapped_column(
         Numeric(12, 2), nullable=False, default=0, server_default="0"
     )
+    # Kunlik bron qaysi hisobda yaratilgan: "12h" — 1 kecha = xona narxi,
+    # "24h" — 1 kun = xona narxi × 2. Qayta hisoblar shu qiymat bilan
+    # (daily_unit.py); eski bronlar — "12h"
+    daily_unit: Mapped[str] = mapped_column(
+        String(4), nullable=False, default="12h", server_default="12h"
+    )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

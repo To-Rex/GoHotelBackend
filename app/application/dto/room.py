@@ -194,6 +194,8 @@ class RoomReservationResponse(BaseModel):
     move_discount_amount: float = 0
     # Faol jarimalar yig'indisi
     penalty_amount: float = 0
+    # Kunlik hisob rejimi ("12h" / "24h")
+    daily_unit: str = "12h"
     # Hamrohlar: [{"guest_id": ..., "name": ...}, ...] — xonada kim turgani
     companions: list | None = None
     created_at: datetime

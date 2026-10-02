@@ -152,6 +152,8 @@ class ReservationResponse(BaseModel):
     move_discount_amount: float = 0
     # Faol jarimalar (kech chiqish, shikast) yig'indisi — jamiga kirgan
     penalty_amount: float = 0
+    # Kunlik hisob: "12h" — 1 kecha = narx, "24h" — 1 kun = narx × 2
+    daily_unit: str = "12h"
     notes: str | None
     cancelled_reason: str | None
     cancelled_at: datetime | None

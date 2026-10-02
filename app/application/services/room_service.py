@@ -631,6 +631,7 @@ class RoomService:
                     "penalty_amount": float(
                         getattr(reservation, "penalty_amount", 0) or 0
                     ),
+                    "daily_unit": getattr(reservation, "daily_unit", None) or "12h",
                     "notes": reservation.notes,
                     "cancelled_reason": reservation.cancelled_reason,
                     "companions": reservation.companions,
