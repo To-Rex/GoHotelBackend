@@ -120,6 +120,16 @@ BOOKING_SETTINGS_KEY = "booking"
 
 BOOKING_TYPES = ("DAILY", "HOURLY")
 
+#: Kunlik bron hisobi — kalendarda tanlangan kunlar qanday hisoblanadi:
+#:   12h — tanlangan oxirgi kun CHIQISH kuni (bugun + ertaga = 1 kecha).
+#:         Standart: sozlama qo'shilishidan oldingi xatti-harakat AYNAN shu.
+#:   24h — har tanlangan kun to'liq (24 soatlik) to'lanadigan kun
+#:         (bugun + ertaga = 2 kun, chiqish — indinga).
+#: Server narxni avvalgidek kechalar soni (chiqish − kirish) bo'yicha
+#: hisoblaydi; rejim faqat kalendar tanlovi sanalarga qanday aylanishini
+#: belgilaydi (veb).
+DAILY_UNITS = ("12h", "24h")
+
 
 def _resolve_booking(settings: dict | None) -> dict:
     """Yangi bandlov dialogi qaysi tur bilan ochiladi.
@@ -130,15 +140,18 @@ def _resolve_booking(settings: dict | None) -> dict:
     """
     saved = (settings or {}).get(BOOKING_SETTINGS_KEY)
     if not isinstance(saved, dict):
-        return {"default_type": "DAILY", "require_all_guests": False}
+        return {"default_type": "DAILY", "require_all_guests": False, "daily_unit": "12h"}
     default_type = saved.get("default_type")
     if default_type not in BOOKING_TYPES:
         default_type = "DAILY"
+    daily_unit = saved.get("daily_unit")
     return {
         "default_type": default_type,
         # Standart — majburiy emas: avvalgi bronlar bitta mehmon bilan
         # yaratilgan, sozlama yoqilmaguncha shunday qolishi kerak
         "require_all_guests": saved.get("require_all_guests") is True,
+        # Notanish qiymat — standart (12 soatlik, avvalgi xatti-harakat)
+        "daily_unit": daily_unit if daily_unit in DAILY_UNITS else "12h",
     }
 
 
@@ -146,6 +159,9 @@ class BookingSettingsRequest(BaseModel):
     default_type: str = Field(default="DAILY")
     # Xonadagi har bir kishi mehmon sifatida ro'yxatga olinishi shartmi
     require_all_guests: bool = Field(default=False)
+    # Kunlik bron hisobi: "12h" yoki "24h". Yuborilmasa — saqlangani qoladi
+    # (bu maydonni bilmaydigan eski klient uni o'chirib yubormasin)
+    daily_unit: str | None = Field(default=None)
 
 
 @router.get("/booking-settings")
@@ -181,8 +197,11 @@ async def save_booking_settings(
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
     new_settings = dict(hotel.settings or {})
+    payload = data.model_dump()
+    if payload.get("daily_unit") is None:
+        payload["daily_unit"] = _resolve_booking(hotel.settings)["daily_unit"]
     new_settings[BOOKING_SETTINGS_KEY] = _resolve_booking(
-        {BOOKING_SETTINGS_KEY: data.model_dump()}
+        {BOOKING_SETTINGS_KEY: payload}
     )
     hotel.settings = new_settings
     await session.flush()
