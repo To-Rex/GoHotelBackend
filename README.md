@@ -377,6 +377,15 @@ qarzdorlar va smenalardagi kamomad/ortiqcha. Ikkita yangi endpoint:
 
 Test: `pytest tests/test_finance_overview.py`.
 
+**Kassada hozir va smenadan smenaga o'tgan pullar (veb).** Moliya va
+Smenalar sahifalarida "Kassada hozir" kartasi (`/shifts/cash-overview`,
+har daqiqada yangilanadi). Smenalar sahifasida "Smenadan smenaga o'tgan
+pullar": `GET /shifts/handovers?date_from&date_to` — har yopilgan kassa
+kimdan kimga o'tgani (qabul qiluvchining boshlang'ich kassasi bilan),
+kunlik kesimda yoki majburiy yopishda kassadan chiqqan pul, kutilgan
+summa va farq. Ikkalasi ham faqat admin yoki `shift.force_close` ("ko'r
+sanash" saqlanadi). Test: `pytest tests/test_shift_handovers.py`.
+
 **Tushum xodimlar kesimida.** Moliya sahifasida "Tushum — xodimlar
 bo'yicha" kartasi: kim qancha bron to'lovi va do'kon savdosi olgan,
 naqd/karta, qaytarim va xarajat. `GET /finance/by-staff?date_from&date_to`

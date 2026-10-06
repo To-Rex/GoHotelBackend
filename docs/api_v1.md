@@ -1968,6 +1968,27 @@ Yozuv shakli:
 }
 ```
 
+**GET /shifts/handovers**
+
+- Auth: ADMIN / SUPER_ADMIN or `shift.force_close` (others: 403 `FORBIDDEN`)
+- Query: `?date_from=2026-10-01&date_to=2026-10-06&limit=200` (all optional; local day of `ended_at`; 422 `INVALID_RANGE`; `limit` ≤ 500)
+- Description: Cash passed from shift to shift. One item per CLOSED or PENDING_HANDOVER session — where the counted cash went (`kind`): `HANDOVER` (the next employee accepted it; it became their opening cash), `PENDING` (handed over, waiting for acceptance), `CASH_OUT` (day close — the cash left the drawer, the employee's next session starts from 0), `FORCE_TAKEN` (force-closed and the manager took the cash). For `HANDOVER` the receiver's new session (started within ±2 minutes of `accepted_at`) is matched and its `received_opening_cash` returned, so a broken chain (e.g. the counted amount corrected later) is visible.
+- Response 200:
+
+```json
+{
+  "mode": "cash",
+  "summary": {"handed_over_total": 1200000.0, "handed_over_count": 1, "taken_out_total": 800000.0, "taken_out_count": 2,
+              "pending_total": 800000.0, "pending_count": 1, "shortage_total": 50000.0, "surplus_total": 10000.0},
+  "items": [
+    {"id": "uuid", "kind": "HANDOVER", "from_user_name": "Dilnoza R", "to_user_name": "Aziz K", "closed_by_name": "Dilnoza R",
+     "branch_name": "Markaziy", "ended_at": "...", "accepted_at": "...", "opening_cash": 100000.0,
+     "expected_cash": 1250000.0, "counted_cash": 1200000.0, "cash_diff": -50000.0, "force_closed": false,
+     "corrected": false, "received_opening_cash": 1200000.0}
+  ]
+}
+```
+
 ---
 
 ### Reports

@@ -4,6 +4,7 @@ Kassali rejim mehmonxona sozlamalarida yoqiladi (faqat ADMIN). Xodimlar
 smenani ochadi, kassani topshiradi (ko'r sanash), smenani tugallaydi;
 keyingi xodim parol bilan qabul qiladi; admin/menejer majburiy yopadi.
 """
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException
+from app.core.exceptions import ForbiddenException, ValidationException
 from app.application.services.shift_service import ShiftService
 from app.presentation.middleware.auth import get_current_user
 from app.presentation.api.v1._deps import require_active_hotel
@@ -195,6 +196,26 @@ async def correct_shift(
         session_id,
         data.counted_cash,
         data.note,
+    )
+
+
+@router.get("/handovers")
+async def get_handovers(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Smenadan smenaga o'tgan pullar (admin/menejer): har topshirilgan
+    kassa — kimdan kimga, qancha, kutilgan va farq; kunlik kesimda yoki
+    majburiy yopishda kassadan chiqqan pul ham."""
+    if date_from and date_to and date_from > date_to:
+        raise ValidationException(
+            "Boshlanish sanasi tugash sanasidan keyin bo'lmasin", "INVALID_RANGE"
+        )
+    return await ShiftService(session).get_handovers(
+        _hotel_id(current_user), current_user, date_from, date_to, limit
     )
 
 

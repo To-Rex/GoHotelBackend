@@ -10,13 +10,14 @@ Qoidalar (jahon amaliyoti: Opera PMS / r_keeper uslubida):
      admin/menejer majburiy yopadi.
   5. Rejim va kunlik kesim vaqti mehmonxona sozlamalarida (hotels.settings).
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings as app_settings
 from app.core.exceptions import (
     ConflictException,
     ForbiddenException,
@@ -76,6 +77,42 @@ def pick_open_session(sessions, *, active_only: bool = False):
 
 def _dec(v) -> Decimal:
     return v if isinstance(v, Decimal) else Decimal(str(v or 0))
+
+
+#: Smena yakunida kassadagi pul qayerga ketgani:
+#:   HANDOVER    — keyingi xodim qabul qildi (summa uning boshlang'ich kassasi)
+#:   PENDING     — topshirildi, qabul qilinishi kutilmoqda
+#:   CASH_OUT    — kassa topshirildi (kunlik kesim): pul zanjirdan chiqdi,
+#:                 xodimning keyingi sessiyasi 0 dan boshlandi
+#:   FORCE_TAKEN — majburiy yopildi va pulni rahbar oldi (qabul qilinmaydi)
+HANDOVER_KINDS = ("HANDOVER", "PENDING", "CASH_OUT", "FORCE_TAKEN")
+
+
+def handover_kind(s) -> str:
+    """Yopilgan/topshirilgan sessiyadagi pul qayerga ketgani."""
+    if s.status == "PENDING_HANDOVER":
+        return "PENDING"
+    if s.accepted_by:
+        return "HANDOVER"
+    if s.force_closed:
+        return "FORCE_TAKEN"
+    return "CASH_OUT"
+
+
+def local_day_bounds(day_from: date | None, day_to: date | None) -> tuple[datetime | None, datetime | None]:
+    """Mahalliy kunlar chegarasi UTC da (APP_TZ_OFFSET_MINUTES)."""
+    offset = timedelta(minutes=app_settings.APP_TZ_OFFSET_MINUTES)
+    start = (
+        datetime.combine(day_from, time.min, tzinfo=timezone.utc) - offset
+        if day_from
+        else None
+    )
+    end = (
+        datetime.combine(day_to + timedelta(days=1), time.min, tzinfo=timezone.utc) - offset
+        if day_to
+        else None
+    )
+    return start, end
 
 
 class ShiftService:
@@ -643,6 +680,142 @@ class ShiftService:
         s.corrections = [*(s.corrections or []), entry]
         await self.session.flush()
         return self._serialize(s, include_cash=True)
+
+    async def get_handovers(
+        self,
+        hotel_id: UUID,
+        current: dict,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        limit: int = 200,
+    ) -> dict:
+        """Smenadan smenaga o'tgan pullar — admin/menejer uchun.
+
+        Har yopilgan (yoki topshirilayotgan) sessiya — bitta pul harakati:
+        xodim sanab topshirgan summa qayerga ketgani (`handover_kind`):
+        keyingi xodimga o'tdimi, qabul kutilyaptimi, kunlik kesimda kassadan
+        chiqdimi yoki majburiy yopilib rahbar oldimi. Qabul qilinganida
+        qabul qiluvchining yangi sessiyasi (boshlang'ich kassasi) ham
+        ko'rsatiladi — zanjir uzilmaganini tekshirish uchun.
+
+        Sana — sessiya YAKUNLANGAN (topshirilgan) mahalliy kun bo'yicha.
+        "Ko'r sanash" buzilmaydi: faqat nazorat qiluvchiga ochiq.
+        """
+        is_admin = current.get("user_type") in ("ADMIN", "SUPER_ADMIN")
+        has_perm = "shift.force_close" in (current.get("permissions") or [])
+        if not (is_admin or has_perm):
+            raise ForbiddenException(
+                "Kassa harakatini faqat administrator yoki menejer ko'radi",
+                "FORBIDDEN",
+            )
+        mode = (await self.get_settings(hotel_id))["mode"]
+
+        stmt = (
+            select(ShiftSession, User)
+            .join(User, User.id == ShiftSession.user_id)
+            .where(
+                ShiftSession.hotel_id == hotel_id,
+                ShiftSession.status.in_(["CLOSED", "PENDING_HANDOVER"]),
+                ShiftSession.ended_at.is_not(None),
+            )
+        )
+        start, end = local_day_bounds(date_from, date_to)
+        if start is not None:
+            stmt = stmt.where(ShiftSession.ended_at >= start)
+        if end is not None:
+            stmt = stmt.where(ShiftSession.ended_at < end)
+        rows = (
+            await self.session.execute(stmt.order_by(ShiftSession.ended_at.desc()).limit(limit))
+        ).all()
+
+        # Qabul qilgan / yopgan shaxslar va filiallar nomi
+        people = {s.accepted_by for s, _ in rows if s.accepted_by} | {
+            s.closed_by for s, _ in rows if s.closed_by
+        }
+        names: dict = {}
+        if people:
+            for u in (await self.session.execute(select(User).where(User.id.in_(people)))).scalars():
+                names[u.id] = f"{u.first_name} {u.last_name}".strip()
+        branch_ids = {s.branch_id for s, _ in rows if s.branch_id}
+        branches: dict = {}
+        if branch_ids:
+            from app.infrastructure.database.models.branch import Branch
+
+            for b in (await self.session.execute(select(Branch).where(Branch.id.in_(branch_ids)))).scalars():
+                branches[b.id] = b.name
+
+        # Qabul qiluvchining yangi sessiyasi: qabul paytida (±2 daqiqa) ochilgan
+        accepted = [s for s, _ in rows if s.accepted_by and s.accepted_at]
+        receivers: dict = {}
+        if accepted:
+            window = timedelta(minutes=2)
+            cand = (
+                await self.session.execute(
+                    select(ShiftSession).where(
+                        ShiftSession.hotel_id == hotel_id,
+                        ShiftSession.user_id.in_({s.accepted_by for s in accepted}),
+                        ShiftSession.started_at >= min(s.accepted_at for s in accepted) - window,
+                        ShiftSession.started_at <= max(s.accepted_at for s in accepted) + window,
+                    )
+                )
+            ).scalars().all()
+            for s in accepted:
+                match = [
+                    c for c in cand
+                    if c.user_id == s.accepted_by and abs(c.started_at - s.accepted_at) <= window
+                ]
+                if match:
+                    receivers[s.id] = min(match, key=lambda c: abs(c.started_at - s.accepted_at))
+
+        items = []
+        summary = {
+            "handed_over_total": 0.0, "handed_over_count": 0,
+            "taken_out_total": 0.0, "taken_out_count": 0,
+            "pending_total": 0.0, "pending_count": 0,
+            "shortage_total": 0.0, "surplus_total": 0.0,
+        }
+        for s, u in rows:
+            kind = handover_kind(s)
+            amount = float(s.counted_cash) if s.counted_cash is not None else None
+            diff = float(s.cash_diff) if s.cash_diff is not None else None
+            receiver = receivers.get(s.id)
+            items.append({
+                "id": str(s.id),
+                "kind": kind,
+                "from_user_id": str(s.user_id),
+                "from_user_name": f"{u.first_name} {u.last_name}".strip(),
+                "to_user_id": str(s.accepted_by) if s.accepted_by else None,
+                "to_user_name": names.get(s.accepted_by),
+                "closed_by_name": names.get(s.closed_by),
+                "branch_name": branches.get(s.branch_id),
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+                "accepted_at": s.accepted_at.isoformat() if s.accepted_at else None,
+                "opening_cash": float(s.opening_cash or 0),
+                "expected_cash": float(s.expected_cash) if s.expected_cash is not None else None,
+                "counted_cash": amount,
+                "cash_diff": diff,
+                "force_closed": bool(s.force_closed),
+                "corrected": bool(s.corrections),
+                "notes": s.notes,
+                "received_session_id": str(receiver.id) if receiver else None,
+                "received_opening_cash": float(receiver.opening_cash or 0) if receiver else None,
+            })
+            value = amount or 0.0
+            if kind == "HANDOVER":
+                summary["handed_over_total"] += value
+                summary["handed_over_count"] += 1
+            elif kind == "PENDING":
+                summary["pending_total"] += value
+                summary["pending_count"] += 1
+            else:
+                summary["taken_out_total"] += value
+                summary["taken_out_count"] += 1
+            if diff is not None and diff < 0:
+                summary["shortage_total"] += -diff
+            elif diff is not None and diff > 0:
+                summary["surplus_total"] += diff
+        return {"mode": mode, "summary": summary, "items": items}
 
     async def get_history(
         self, hotel_id: UUID, current: dict, limit: int = 50
