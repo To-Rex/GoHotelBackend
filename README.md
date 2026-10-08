@@ -356,6 +356,24 @@ endpointi ikki filial xodimi va filial almashtirgan administrator nomidan:
 boshqa filialning birorta ID'si chiqmasligi), `tests/test_branch_provisioning.py`.
 Uchalasi `GOHOTEL_TEST_PG_URL` (lokal test bazasi) bilan ishlaydi.
 
+### Dasturlar do'koni: bo'laklab yuklash (boshqaruv paneli)
+
+Panel → Ilovalar. O'rnatish fayllari katta (APK ~100 MB); bitta so'rovda
+yuborilsa yo'ldagi proksi (Traefik v3, standart `readTimeout` 60 s) tanasi
+60 soniyadan uzoq kelayotgan so'rovni 504 bilan uzadi — sekin tarmoqdan
+yangi versiya umuman qo'shib bo'lmas edi. Endi panel faylni 4 MB'lik
+bo'laklarga bo'lib yuboradi (`app/application/services/app_upload_service.py`):
+
+- `POST /superadmin/apps/uploads` — sessiya; `PUT .../chunks/{n}` — har
+  bo'lak alohida qisqa so'rov (xato bergan bo'lak qayta yuboriladi);
+  `POST .../complete` — bo'laklar yig'ilib MinIO'ga OQIM bilan yoziladi
+  (butun fayl xotiraga olinmaydi), do'kon yozuvi yaratiladi.
+- Bo'laklar server diskidagi vaqtinchalik papkada; tugallanmagan yuklash
+  6 soatdan keyin o'chiriladi. Eski bir martalik `POST /superadmin/apps`
+  ham ishlayveradi.
+
+Test: `pytest tests/test_app_upload_chunks.py`.
+
 ### Mehmonxonani butunlay o'chirish (boshqaruv paneli)
 
 Panel → Mehmonxonalar → "O'chirish". "To'xtatish" (`DELETE /superadmin/hotels/{id}`)

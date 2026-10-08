@@ -146,6 +146,30 @@ What it means for the API:
 
 ---
 
+### Superadmin panel: app store — chunked upload
+
+`POST /superadmin/apps` (multipart, whole file in one request) still works, but a request whose body takes longer than the proxy's read timeout (Traefik v3 default 60 s) is cut with 504 — a 93 MB APK needs ≥ 1.5 MB/s. The panel therefore uploads in chunks; every request is short, a failed chunk is retried, progress is reported.
+
+**POST /superadmin/apps/uploads** — start
+
+- Auth: panel token
+- Body: `{"platform": "ANDROID|WINDOWS", "name", "version"?, "notes"?, "filename", "size", "content_type"?}` (422 `INVALID_PLATFORM`, `NAME_REQUIRED`, `EMPTY_FILE`, `FILE_TOO_LARGE` > 500 MB)
+- Response 200: `{"upload_id", "chunk_size": 4194304, "total_chunks"}`
+
+**PUT /superadmin/apps/uploads/{upload_id}/chunks/{index}** — one chunk
+
+- Body: raw bytes (`Content-Type: application/octet-stream`), exactly `chunk_size` bytes except the last chunk. Re-sending an index overwrites it (safe to retry).
+- Errors: 404 `UPLOAD_NOT_FOUND`, 422 `CHUNK_INDEX`, `CHUNK_SIZE`, `CHUNK_TOO_LARGE` (> 8 MB)
+- Response 200: `{"index", "received", "total_chunks"}`
+
+**GET /superadmin/apps/uploads/{upload_id}** — `{"received", "total_chunks", "missing": [indexes]}` (to resume)
+
+**POST /superadmin/apps/uploads/{upload_id}/complete** — assembles the chunks, streams the file to MinIO (never fully in memory), creates the release and removes the temporary files. 409 `UPLOAD_INCOMPLETE` / `UPLOAD_SIZE_MISMATCH`. Response: the release (same shape as `GET /superadmin/apps` items).
+
+**DELETE /superadmin/apps/uploads/{upload_id}** — abort. Unfinished uploads are also removed automatically after 6 hours.
+
+---
+
 ### Superadmin panel: delete a hotel permanently
 
 `DELETE /superadmin/hotels/{id}` only stops a hotel (`status = INACTIVE`, everything kept). Permanent deletion is a separate, two-step action:

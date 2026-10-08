@@ -105,15 +105,59 @@ class AppStoreService:
         path = storage_path(platform, filename)
         mime = mime_for(filename, content_type)
         await storage.upload_file(bucket, path, content, mime)
+        return await self._register(
+            platform=platform, name=title, version=version, notes=notes,
+            filename=filename, mime=mime, size=len(content),
+            bucket=bucket, path=path, uploaded_by=uploaded_by,
+        )
 
+    async def create_from_path(
+        self,
+        *,
+        platform: str,
+        name: str,
+        version: str | None,
+        notes: str | None,
+        filename: str,
+        file_path,
+        content_type: str | None,
+        uploaded_by: UUID | None = None,
+    ) -> dict:
+        """Diskdagi (bo'laklardan yig'ilgan) faylni do'konga qo'shadi —
+        MinIO'ga oqim bilan, xotiraga olmasdan (app_upload_service)."""
+        import os
+
+        platform = normalize_platform(platform)
+        title = (name or "").strip()
+        if not title:
+            raise ValidationException("Dastur nomi kerak", "NAME_REQUIRED")
+        size = os.path.getsize(file_path)
+        if size <= 0:
+            raise ValidationException("Fayl bo'sh", "EMPTY_FILE")
+        if size > MAX_FILE_BYTES:
+            raise ValidationException("Fayl juda katta", "FILE_TOO_LARGE")
+
+        bucket = settings.MINIO_BUCKET_DOCUMENTS
+        path = storage_path(platform, filename)
+        mime = mime_for(filename, content_type)
+        await storage.upload_file_from_path(bucket, path, file_path, mime)
+        return await self._register(
+            platform=platform, name=title, version=version, notes=notes,
+            filename=filename, mime=mime, size=size,
+            bucket=bucket, path=path, uploaded_by=uploaded_by,
+        )
+
+    async def _register(
+        self, *, platform, name, version, notes, filename, mime, size, bucket, path, uploaded_by
+    ) -> dict:
         release = AppRelease(
             platform=platform,
-            name=title,
+            name=name,
             version=(version or "").strip() or None,
             notes=(notes or "").strip() or None,
             original_name=filename or "app.bin",
             mime_type=mime,
-            file_size=len(content),
+            file_size=size,
             minio_bucket=bucket,
             minio_path=path,
             uploaded_by=uploaded_by,

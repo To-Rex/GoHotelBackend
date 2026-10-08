@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, Path, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Path, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,8 @@ from app.core.exceptions import (
 )
 from app.superadmin import security
 from app.application.services.app_store_service import AppStoreService
+from app.application.services import app_upload_service
+from app.application.services.app_upload_service import AppUploadService
 from app.presentation.api.v1.apps import download_headers
 from app.superadmin.estate_service import EstateService
 from app.superadmin.hotel_purge_service import HotelPurgeService
@@ -560,6 +562,81 @@ async def upload_app_release(
         content_type=file.content_type,
         uploaded_by=actor.id,
     )
+
+
+# --- Bo'laklab yuklash (app_upload_service): proksi vaqt chegarasidan
+# qat'i nazar, istalgan hajmdagi fayl — har bo'lak alohida qisqa so'rov ---
+
+
+class AppUploadStartRequest(BaseModel):
+    platform: str = Field(max_length=20)
+    name: str = Field(min_length=1, max_length=120)
+    version: str | None = Field(default=None, max_length=50)
+    notes: str | None = Field(default=None, max_length=2000)
+    filename: str = Field(min_length=1, max_length=255)
+    size: int = Field(gt=0)
+    content_type: str | None = Field(default=None, max_length=120)
+
+
+@router.post("/apps/uploads")
+async def start_app_upload(
+    data: AppUploadStartRequest,
+    actor: PanelUser = Depends(current_panel_user),
+):
+    """Yuklash sessiyasi: bo'lak hajmi va soni qaytadi."""
+    return AppUploadService().start(
+        platform=data.platform,
+        name=data.name,
+        version=data.version,
+        notes=data.notes,
+        filename=data.filename,
+        size=data.size,
+        content_type=data.content_type,
+        uploaded_by=actor.id,
+    )
+
+
+@router.put("/apps/uploads/{upload_id}/chunks/{index}")
+async def put_app_upload_chunk(
+    request: Request,
+    upload_id: str = Path(max_length=32),
+    index: int = Path(ge=0),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Bitta bo'lak — xom baytlar (application/octet-stream)."""
+    # Tanani o'qimasdan oldin rad etish — katta bo'lak xotirani egallamasin
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > app_upload_service.MAX_CHUNK_BYTES:
+        raise ValidationException("Bo'lak juda katta", "CHUNK_TOO_LARGE")
+    return AppUploadService().write_chunk(upload_id, index, await request.body())
+
+
+@router.get("/apps/uploads/{upload_id}")
+async def app_upload_status(
+    upload_id: str = Path(max_length=32),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Qaysi bo'laklar yetib kelgani — uzilgan yuklashni davom ettirish uchun."""
+    return AppUploadService().status(upload_id)
+
+
+@router.post("/apps/uploads/{upload_id}/complete")
+async def complete_app_upload(
+    upload_id: str = Path(max_length=32),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Bo'laklar yig'ilib MinIO'ga yoziladi, do'kon yozuvi yaratiladi."""
+    return await AppUploadService().complete(session, upload_id)
+
+
+@router.delete("/apps/uploads/{upload_id}")
+async def abort_app_upload(
+    upload_id: str = Path(max_length=32),
+    _: PanelUser = Depends(current_panel_user),
+):
+    AppUploadService().abort(upload_id)
+    return {"aborted": True}
 
 
 @router.delete("/apps/{app_id}")

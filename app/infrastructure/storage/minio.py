@@ -53,6 +53,31 @@ async def upload_file(bucket: str, object_path: str, data: bytes, content_type: 
     return object_path
 
 
+async def upload_file_from_path(
+    bucket: str, object_path: str, file_path, content_type: str
+) -> str:
+    """Diskdagi faylni MinIO'ga OQIM bilan yozadi — katta o'rnatuvchi
+    (yuzlab MB) xotiraga to'liq olinmaydi."""
+    import os
+
+    client = await asyncio.to_thread(get_minio_client)
+    size = os.path.getsize(file_path)
+
+    def _put():
+        with open(file_path, "rb") as stream:
+            client.put_object(
+                bucket, object_path, stream, size,
+                content_type=content_type, part_size=16 * 1024 * 1024,
+            )
+
+    try:
+        await asyncio.to_thread(_put)
+    except S3Error as e:
+        logger.error("MinIO upload failed for %s/%s: %s", bucket, object_path, e)
+        raise
+    return object_path
+
+
 def get_presigned_url(bucket: str, object_path: str, expires: int = 3600) -> str:
     client = get_minio_client()
     return client.presigned_get_object(bucket, object_path, expires=timedelta(seconds=expires))
