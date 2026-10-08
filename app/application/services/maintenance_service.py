@@ -2,7 +2,9 @@
 "Xavfli hudud" uchun.
 
 Barcha o'chirishlar BITTA mehmonxona doirasida (hotel_id bo'yicha) bajariladi —
-boshqa mehmonxonalar ma'lumotlariga tegilmaydi. Ikki rejim:
+boshqa mehmonxonalar ma'lumotlariga tegilmaydi. Filial berilsa (sozlovchi
+tanlagan filial — filiallar ajratilgan) faqat O'SHA FILIAL tozalanadi,
+boshqa filiallarga tegilmaydi. Ikki rejim:
 
 - operational: bronlar, moliya, xo'jalik vazifalari, smenalar va
   kassa sessiyalari, tarix va bildirishnomalar o'chiriladi. Xodimlar, ruxsatlar
@@ -84,18 +86,27 @@ class MaintenanceService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def reset_data(self, hotel_id: UUID, include_employees: bool) -> dict[str, int]:
+    async def reset_data(
+        self, hotel_id: UUID, include_employees: bool, branch_id: UUID | None = None
+    ) -> dict[str, int]:
         """Operatsion ma'lumotlarni (ixtiyoriy ravishda xodimlar bilan)
-        tozalaydi va o'chirilgan yozuvlar sonini jadval bo'yicha qaytaradi."""
+        tozalaydi va o'chirilgan yozuvlar sonini jadval bo'yicha qaytaradi.
+
+        `branch_id` berilsa — faqat shu filial."""
         s = self.session
         h = {"h": str(hotel_id)}
+        # Filial sharti: barcha operatsion jadvallarda branch_id bor
+        b = ""
+        if branch_id is not None:
+            h["b"] = str(branch_id)
+            b = " AND branch_id = :b"
         deleted: dict[str, int] = {}
 
         # checklist_items da hotel_id yo'q — vazifalar orqali o'chiriladi
         result = await s.execute(
             text(
                 "DELETE FROM checklist_items WHERE task_id IN "
-                "(SELECT id FROM housekeeping_tasks WHERE hotel_id = :h)"
+                f"(SELECT id FROM housekeeping_tasks WHERE hotel_id = :h{b})"
             ),
             h,
         )
@@ -106,7 +117,7 @@ class MaintenanceService:
         result = await s.execute(
             text(
                 "DELETE FROM shop_sale_items WHERE sale_id IN "
-                "(SELECT id FROM shop_sales WHERE hotel_id = :h)"
+                f"(SELECT id FROM shop_sales WHERE hotel_id = :h{b})"
             ),
             h,
         )
@@ -116,7 +127,7 @@ class MaintenanceService:
         result = await s.execute(
             text(
                 "DELETE FROM invoice_items WHERE invoice_id IN "
-                "(SELECT id FROM invoices WHERE hotel_id = :h)"
+                f"(SELECT id FROM invoices WHERE hotel_id = :h{b})"
             ),
             h,
         )
@@ -124,12 +135,22 @@ class MaintenanceService:
 
         for table in HOTEL_SCOPED_TABLES:
             result = await s.execute(
-                text(f"DELETE FROM {table} WHERE hotel_id = :h"), h
+                text(f"DELETE FROM {table} WHERE hotel_id = :h{b}"), h
             )
             deleted[table] = result.rowcount or 0
 
+        # Fayllarda filial ustuni yo'q — ular biriktirilgan yozuv (vazifa,
+        # muammo, skan) allaqachon o'chdi; filial tozalanganda faqat egasi
+        # qolmagan operatsion fayllar o'chadi
+        orphan = (
+            " AND NOT EXISTS (SELECT 1 FROM housekeeping_tasks t WHERE t.id = file_attachments.entity_id)"
+            " AND NOT EXISTS (SELECT 1 FROM problems p WHERE p.id = file_attachments.entity_id)"
+            " AND NOT EXISTS (SELECT 1 FROM document_scans d WHERE d.id = file_attachments.entity_id)"
+            if branch_id is not None
+            else ""
+        )
         files_stmt = text(
-            "DELETE FROM file_attachments WHERE hotel_id = :h AND entity_type IN :et"
+            "DELETE FROM file_attachments WHERE hotel_id = :h AND entity_type IN :et" + orphan
         ).bindparams(bindparam("et", expanding=True))
         result = await s.execute(files_stmt, {**h, "et": FILE_ENTITY_TYPES})
         deleted["file_attachments"] = result.rowcount or 0
@@ -138,32 +159,42 @@ class MaintenanceService:
         result = await s.execute(
             text(
                 "UPDATE rooms SET current_status = 'AVAILABLE' "
-                "WHERE hotel_id = :h AND current_status <> 'AVAILABLE'"
+                f"WHERE hotel_id = :h AND current_status <> 'AVAILABLE'{b}"
             ),
             h,
         )
         deleted["rooms_reset"] = result.rowcount or 0
 
         if include_employees:
+            # Xodimlar yozgan chat xabarlari va taklif/shikoyatlar ularga
+            # RESTRICT bilan bog'langan — xodim o'chirilishidan oldin
+            for table in ("staff_messages", "guest_feedback"):
+                result = await s.execute(text(f"DELETE FROM {table} WHERE hotel_id = :h{b}"), h)
+                deleted[table] = result.rowcount or 0
+
             # Xodim yuklagan qolgan fayllar (FK bloklamasligi uchun)
             result = await s.execute(
                 text(
                     "DELETE FROM file_attachments WHERE uploaded_by IN "
-                    "(SELECT id FROM users WHERE hotel_id = :h AND user_type = 'EMPLOYEE')"
+                    f"(SELECT id FROM users WHERE hotel_id = :h AND user_type = 'EMPLOYEE'{b})"
                 ),
                 h,
             )
             deleted["file_attachments"] += result.rowcount or 0
 
             result = await s.execute(
-                text("DELETE FROM user_permissions WHERE hotel_id = :h"), h
+                text(
+                    "DELETE FROM user_permissions WHERE hotel_id = :h AND user_id IN "
+                    f"(SELECT id FROM users WHERE hotel_id = :h AND user_type = 'EMPLOYEE'{b})"
+                ),
+                h,
             )
             deleted["user_permissions"] = result.rowcount or 0
 
             result = await s.execute(
                 text(
                     "DELETE FROM user_sessions WHERE user_id IN "
-                    "(SELECT id FROM users WHERE hotel_id = :h AND user_type = 'EMPLOYEE')"
+                    f"(SELECT id FROM users WHERE hotel_id = :h AND user_type = 'EMPLOYEE'{b})"
                 ),
                 h,
             )
@@ -172,7 +203,7 @@ class MaintenanceService:
             # Faqat EMPLOYEE o'chiriladi — ADMIN/SUPER_ADMIN doim saqlanadi
             result = await s.execute(
                 text(
-                    "DELETE FROM users WHERE hotel_id = :h AND user_type = 'EMPLOYEE'"
+                    f"DELETE FROM users WHERE hotel_id = :h AND user_type = 'EMPLOYEE'{b}"
                 ),
                 h,
             )

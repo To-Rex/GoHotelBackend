@@ -32,7 +32,7 @@ Endi qoida shunday:
      yozilmagan/buzuq bo'lsa xodim ishda deb hisoblanadi — ma'lumot xatosi
      vazifani to'sib qo'ymasin.
 
-TAQSIMLASH REJIMI (mehmonxona sozlamasi, `hotels.settings["hk_assign"]["mode"]`):
+TAQSIMLASH REJIMI (mehmonxona sozlamasi, `branches.settings["hk_assign"]["mode"]`):
 
   * `queue` (standart) — yuqoridagi qoida bo'yicha BITTA farrosh tanlanadi,
     vazifa unga biriktiriladi, push faqat unga ketadi.
@@ -60,7 +60,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.permission import Permission, UserPermission
 from app.infrastructure.database.models.user import User
@@ -72,7 +71,7 @@ ASSIGN_MODE_QUEUE = "queue"
 ASSIGN_MODE_CLAIM = "claim"
 ASSIGN_MODES = (ASSIGN_MODE_QUEUE, ASSIGN_MODE_CLAIM)
 
-#: hotels.settings ichidagi kalit va maydon
+#: branches.settings ichidagi kalit va maydon
 HK_ASSIGN_SETTINGS_KEY = "hk_assign"
 ASSIGN_MODE_FIELD = "mode"
 
@@ -209,7 +208,9 @@ def eligible_cleaners(
     Ikkala taqsimlash rejimi ham shu doiradan foydalanadi — `queue` undan
     bittasini tanlaydi, `claim` esa hammasiga xabar beradi.
     """
-    everyone = list(candidates)
+    # Filiallar ajratilgan: faqat vazifa filialining xodimlari (farrosh roli
+    # bo'lmasa ham — quyidagi keng qoida shu filial ichida)
+    everyone = _prefer_branch(list(candidates), branch_id)
     cleaners = [c for c in everyone if classify_role(c.codes) == ROLE_HOUSEKEEPER]
     if cleaners:
         # Ish vaqtidan tashqaridagi farroshga vazifa ketmaydi — hech kim ishda
@@ -268,14 +269,22 @@ def pick_cleaner(
 def _prefer_branch(
     pool: list[CleanerCandidate], branch_id: UUID | None
 ) -> list[CleanerCandidate]:
-    """Iloji bo'lsa o'sha filialdagilar, bo'lmasa hammasi."""
-    same_branch = [c for c in pool if c.branch_id == branch_id]
-    return same_branch or pool
+    """Faqat o'sha filial xodimlari — filiallar to'liq ajratilgan, boshqa
+    filial farroshiga vazifa ketmaydi (hech kim bo'lmasa vazifa
+    biriktirilmay qoladi va filial farroshi ishga kelganda biriktiriladi).
+    Filial noma'lum bo'lsa — hammasi (avvalgidek)."""
+    if branch_id is None:
+        return pool
+    return [c for c in pool if c.branch_id == branch_id]
 
 
-async def load_assign_mode(session: AsyncSession, hotel_id: UUID) -> str:
-    """Mehmonxonaning taqsimlash rejimi (sozlamadan)."""
-    hotel = await session.get(Hotel, hotel_id)
+async def load_assign_mode(
+    session: AsyncSession, hotel_id: UUID, branch_id: UUID | None = None
+) -> str:
+    """Filialning taqsimlash rejimi (sozlamadan)."""
+    from app.application.services.branch_settings import settings_owner
+
+    hotel = await settings_owner(session, hotel_id, branch_id)
     return resolve_assign_mode(hotel.settings if hotel else None)
 
 
@@ -290,7 +299,7 @@ async def resolve_assignment(
     `mode` berilmasa sozlamadan o'qiladi.
     """
     if mode is None:
-        mode = await load_assign_mode(session, hotel_id)
+        mode = await load_assign_mode(session, hotel_id, branch_id)
     candidates = await load_candidates(session, hotel_id)
     return plan_assignment(candidates, branch_id, mode)
 

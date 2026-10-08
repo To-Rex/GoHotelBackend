@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.configurator_access import assert_can_manage_settings
+from app.application.services.branch_settings import settings_owner
 from app.core.database import get_db
 from pydantic import BaseModel, Field
 
@@ -88,7 +89,7 @@ async def get_nav_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         return {"order": []}
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     return _resolve_nav(hotel.settings if hotel else None)
 
 
@@ -103,7 +104,7 @@ async def save_nav_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
@@ -177,7 +178,7 @@ async def get_booking_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         return _resolve_booking(None)
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     return _resolve_booking(hotel.settings if hotel else None)
 
 
@@ -192,7 +193,7 @@ async def save_booking_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
@@ -240,7 +241,7 @@ async def get_discount_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         return resolve_discount_rules(None)
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     return resolve_discount_rules(hotel.settings if hotel else None)
 
 
@@ -255,7 +256,7 @@ async def save_discount_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
@@ -292,7 +293,7 @@ async def get_move_discount_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         return resolve_move_discount_settings(None)
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     return resolve_move_discount_settings(hotel.settings if hotel else None)
 
 
@@ -307,7 +308,7 @@ async def save_move_discount_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
@@ -354,7 +355,7 @@ async def get_penalty_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         return _penalty_payload(None)
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     return _penalty_payload(hotel.settings if hotel else None)
 
 
@@ -374,7 +375,7 @@ async def save_penalty_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     new_settings = dict(hotel.settings or {})
@@ -408,7 +409,7 @@ async def get_debt_settings(
     )
 
     hotel_id = current_user.get("hotel_id")
-    hotel = await session.get(Hotel, hotel_id) if hotel_id else None
+    hotel = await settings_owner(session, hotel_id)
     return {
         **resolve_debt_settings(hotel.settings if hotel else None),
         "allowed_intervals": list(ALLOWED_INTERVALS),
@@ -439,7 +440,7 @@ async def save_debt_settings(
     hotel_id = current_user.get("hotel_id")
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     new_settings = dict(hotel.settings or {})
@@ -487,7 +488,7 @@ async def get_work_hours_settings(
     h_id = _work_hours_hotel_id(current_user, hotel_id)
     if not h_id:
         return resolve_work_hours_settings(None)
-    hotel = await session.get(Hotel, h_id)
+    hotel = await settings_owner(session, h_id)
     return resolve_work_hours_settings(hotel.settings if hotel else None)
 
 
@@ -503,7 +504,7 @@ async def save_work_hours_settings(
     h_id = _work_hours_hotel_id(current_user, hotel_id)
     if not h_id:
         raise ForbiddenException("Hotel context required")
-    hotel = await session.get(Hotel, h_id)
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun

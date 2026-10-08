@@ -34,6 +34,7 @@ from app.application.dto.common import MessageResponse
 from app.application.services import sms_service
 from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel, require_open_shift
+from app.application.services.branch_settings import settings_owner
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -54,10 +55,8 @@ async def get_edit_window_settings(
     current_user: dict = Depends(get_current_user),
 ):
     """Bron tahriri (xona almashtirish) vaqt oynasi — daqiqalarda, 0 = cheklovsiz."""
-    from app.infrastructure.database.models.hotel import Hotel
-
     h_id = _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     return {
         "window_minutes": resolve_edit_window_minutes(hotel.settings if hotel else None),
         "default_minutes": DEFAULT_EDIT_WINDOW_MINUTES,
@@ -71,11 +70,9 @@ async def save_edit_window_settings(
     current_user: dict = Depends(get_current_user),
 ):
     """Vaqt oynasini saqlash — faqat ADMIN/SUPER_ADMIN."""
-    from app.infrastructure.database.models.hotel import Hotel
-
     assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — o'zgarish sezilishi uchun
@@ -95,7 +92,6 @@ async def get_cancellation_settings(
     current_user: dict = Depends(get_current_user),
 ):
     """Bekor qilishda ushlab qolinadigan foiz."""
-    from app.infrastructure.database.models.hotel import Hotel
     from app.application.services.reservation_service import (
         DEFAULT_CANCELLATION_FEE_PERCENT,
         resolve_cancellation_fee_percent,
@@ -106,7 +102,7 @@ async def get_cancellation_settings(
         if current_user["user_type"] == "SUPER_ADMIN"
         else _get_hotel_id(current_user)
     )
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     return {
         "fee_percent": resolve_cancellation_fee_percent(hotel.settings if hotel else None),
         "default_percent": DEFAULT_CANCELLATION_FEE_PERCENT,
@@ -120,7 +116,6 @@ async def save_cancellation_settings(
     current_user: dict = Depends(get_current_user),
 ):
     """Foizni saqlash — faqat ADMIN/SUPER_ADMIN."""
-    from app.infrastructure.database.models.hotel import Hotel
     from app.application.services.reservation_service import (
         CANCELLATION_POLICY_KEY,
         DEFAULT_CANCELLATION_FEE_PERCENT,
@@ -128,7 +123,7 @@ async def save_cancellation_settings(
 
     assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — o'zgarish sezilishi uchun

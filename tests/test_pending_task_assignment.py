@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from app.application.services import automation_service as auto
 from app.application.services.automation_service import AutomationService
 from app.application.services.notification_service import NotificationService
+from tests._branch_fakes import BranchResult, fake_branch, is_branch_query
 
 
 class FakeResult:
@@ -35,9 +36,13 @@ class FakeSession:
         self.flushes = 0
 
     async def execute(self, _stmt):
+        if is_branch_query(_stmt):  # sozlamalar filialda
+            return BranchResult(fake_branch(None, self.hotel.settings))
         return FakeResult(list(self.tasks))
 
     async def get(self, model, _key):
+        if model.__name__ == "Branch":
+            return None  # vazifa filiali topilmasa — asosiy filial so'raladi
         return self.hotel if model.__name__ == "Hotel" else self.room
 
     async def flush(self):

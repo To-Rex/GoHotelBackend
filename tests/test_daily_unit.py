@@ -11,6 +11,7 @@ import uuid
 from types import SimpleNamespace
 
 from app.presentation.api.v1 import hotels as hotels_api
+from tests._branch_fakes import BranchResult, fake_branch, is_branch_query
 
 KEY = hotels_api.BOOKING_SETTINGS_KEY
 HOTEL = uuid.uuid4()
@@ -20,9 +21,15 @@ CONFIGURATOR = {"user_type": "ADMIN", "actual_user_type": "CONFIGURATOR", "hotel
 class Session:
     def __init__(self, settings=None):
         self.hotel = SimpleNamespace(id=HOTEL, settings=settings or {})
+        # Sozlamalar filialda — mehmonxonaning yagona filiali
+        self.branch = fake_branch(HOTEL, self.hotel.settings)
 
     async def get(self, model, key):
         return self.hotel if key == HOTEL else None
+
+    async def execute(self, statement, *_a, **_k):
+        assert is_branch_query(statement), str(statement)
+        return BranchResult(self.branch)
 
     async def flush(self):
         return None

@@ -25,6 +25,7 @@ from app.core.exceptions import (  # noqa: E402
     ForbiddenException,
     ValidationException,
 )
+from tests._branch_fakes import BranchResult, fake_branch, is_branch_query  # noqa: E402
 
 ok = fail = 0
 
@@ -104,6 +105,12 @@ class FakeSession:
         return self.hotel
 
     async def execute(self, _stmt):
+        # Sozlamalar filialda — mehmonxonaning yagona filiali
+        if is_branch_query(_stmt):
+            return BranchResult(
+                fake_branch(None, getattr(self.hotel, "settings", None) or {})
+                if self.hotel is not None else None
+            )
         # `assert_bookable` `first()` bilan o'qiydi, qolganlari
         # `scalar_one_or_none()` bilan
         if self.blacklisted_row is not None or self.guest is None:

@@ -9,10 +9,10 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import UUIDPrimaryKeyMixin
+from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
-class DocumentScan(UUIDPrimaryKeyMixin, Base):
+class DocumentScan(BranchScoped, UUIDPrimaryKeyMixin, Base):
     """Telefonda skanerlangan hujjat — qabulxona ekraniga uzatiladi.
 
     Resepsiya xodimi mehmonning pasportini telefonda suratga oladi;
@@ -41,6 +41,10 @@ class DocumentScan(UUIDPrimaryKeyMixin, Base):
         ForeignKey("hotels.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
 
     #: ID_CARD yoki PASSPORT.

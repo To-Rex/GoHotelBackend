@@ -8,10 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import RoomStatus
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, SoftDeleteMixin
+from app.shared.mixins import FullMixin, SoftDeleteMixin, BranchScoped
 
 
-class Room(FullMixin, SoftDeleteMixin, Base):
+class Room(BranchScoped, FullMixin, SoftDeleteMixin, Base):
     __tablename__ = "rooms"
     __table_args__ = (
         # Xona raqami faqat FAOL xonalar orasida unikal — arxivdagi (soft

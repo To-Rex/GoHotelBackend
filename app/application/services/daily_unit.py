@@ -1,6 +1,6 @@
 """Kunlik bron hisobi: 12 soatlik yoki 24 soatlik kun.
 
-Mehmonxona sozlamasi (`hotels.settings["booking"]["daily_unit"]`):
+Mehmonxona sozlamasi (`branches.settings["booking"]["daily_unit"]`):
 
 * ``12h`` (standart, avvalgi tartib) — xona turi narxi BIR kunlik narx:
   kalendarda tanlangan oxirgi kun chiqish kuni, 1 kecha = narx × 1.

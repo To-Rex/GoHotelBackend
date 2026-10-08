@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.configurator_access import (
+    ADMIN_TYPE,
     CONFIGURATOR_TYPE,
     CONTEXT_SWITCH_TYPES,
 )
@@ -280,6 +281,10 @@ class AuthService:
             token_hotel_id, token_branch_id = await self._valid_context(
                 payload.get("hotel_id"), payload.get("branch_id")
             )
+        elif user.user_type == ADMIN_TYPE and user.hotel_id:
+            # Administrator tanlagan filial — faqat o'z mehmonxonasida
+            _, chosen = await self._valid_context(user.hotel_id, payload.get("branch_id"))
+            token_branch_id = chosen or user.branch_id
 
         new_jti = generate_jti()
         token_data = {
@@ -339,17 +344,25 @@ class AuthService:
                 branch_uuid = None
         return hotel_uuid, branch_uuid
 
-    async def context_options(self) -> list[dict]:
-        """Tanlash uchun mehmonxonalar va ularning filiallari."""
+    async def context_options(self, current_user: dict | None = None) -> list[dict]:
+        """Tanlash uchun mehmonxonalar va ularning filiallari.
+
+        Administrator faqat o'z mehmonxonasini (filiallari bilan) ko'radi.
+        """
         from sqlalchemy import select
 
         from app.infrastructure.database.models.branch import Branch
         from app.infrastructure.database.models.hotel import Hotel
 
-        hotels = (await self.session.execute(select(Hotel).order_by(Hotel.name))).scalars().all()
-        branches = (
-            await self.session.execute(select(Branch).order_by(Branch.name))
-        ).scalars().all()
+        hotel_stmt = select(Hotel).order_by(Hotel.name)
+        branch_stmt = select(Branch).order_by(Branch.name)
+        actual = (current_user or {}).get("actual_user_type") or (current_user or {}).get("user_type")
+        if actual == ADMIN_TYPE:
+            own = current_user.get("hotel_id")
+            hotel_stmt = hotel_stmt.where(Hotel.id == own)
+            branch_stmt = branch_stmt.where(Branch.hotel_id == own)
+        hotels = (await self.session.execute(hotel_stmt)).scalars().all()
+        branches = (await self.session.execute(branch_stmt)).scalars().all()
         by_hotel: dict = {}
         for branch in branches:
             if getattr(branch, "is_deleted", False):
@@ -400,16 +413,22 @@ class AuthService:
         from app.infrastructure.database.models.hotel import Hotel
 
         actual = current_user.get("actual_user_type") or current_user.get("user_type")
-        if actual not in CONTEXT_SWITCH_TYPES:
+        if actual not in CONTEXT_SWITCH_TYPES and actual != ADMIN_TYPE:
             raise ForbiddenException(
                 "Mehmonxonani faqat sozlovchi tanlay oladi", "CONTEXT_FORBIDDEN"
             )
         user = await self.user_repo.get_by_id(current_user["id"])
         if not user or user.status != "ACTIVE" or user.is_deleted:
             raise UnauthorizedException("User not active", "USER_INACTIVE")
-        if user.user_type not in CONTEXT_SWITCH_TYPES:
+        if user.user_type not in CONTEXT_SWITCH_TYPES and user.user_type != ADMIN_TYPE:
             raise ForbiddenException(
                 "Mehmonxonani faqat sozlovchi tanlay oladi", "CONTEXT_FORBIDDEN"
+            )
+        if user.user_type == ADMIN_TYPE and (hotel_id is None or hotel_id != user.hotel_id):
+            # Administrator boshqa mehmonxonaga o'ta olmaydi — faqat o'z
+            # mehmonxonasining filiallari orasida
+            raise ForbiddenException(
+                "Faqat o'z mehmonxonangiz filialini tanlay olasiz", "CONTEXT_FORBIDDEN"
             )
 
         if hotel_id is None:
@@ -477,11 +496,15 @@ class AuthService:
         branch_name: str | None = None
         if user.user_type in CONTEXT_SWITCH_TYPES:
             own_hotel_id, own_branch_id = context_hotel_id, context_branch_id
-            if own_branch_id:
-                from app.infrastructure.database.models.branch import Branch
+        elif context_branch_id and context_hotel_id == user.hotel_id:
+            # Joriy so'rov filiali: xodimda — o'ziniki, administratorda —
+            # tanlagani (get_current_user hisoblaydi)
+            own_branch_id = context_branch_id
+        if own_branch_id:
+            from app.infrastructure.database.models.branch import Branch
 
-                branch = await self.session.get(Branch, own_branch_id)
-                branch_name = branch.name if branch is not None else None
+            branch = await self.session.get(Branch, own_branch_id)
+            branch_name = branch.name if branch is not None else None
 
         permissions: list[str] = []
         if user.user_type == "EMPLOYEE":
@@ -503,7 +526,12 @@ class AuthService:
         work_hours_enforced = False
         work_hours_blocked = False
         if user.user_type == EMPLOYEE_TYPE and hotel is not None:
-            work_hours_enforced = resolve_work_hours_settings(hotel.settings)["enforce"]
+            from app.application.services.branch_settings import settings_owner
+
+            owner = await settings_owner(self.session, hotel.id, user.branch_id)
+            work_hours_enforced = resolve_work_hours_settings(
+                owner.settings if owner else None
+            )["enforce"]
             work_hours_blocked = (
                 await evaluate_work_hours_block(
                     self.session,

@@ -29,7 +29,6 @@ from app.core.exceptions import (
     ValidationException,
 )
 from app.infrastructure.database.models.guest import Guest
-from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.application.services.shop_payments import apply_payment, remaining_of
@@ -44,6 +43,7 @@ from app.infrastructure.database.models.shop import (
 from app.infrastructure.database.models.user import User
 from app.presentation.middleware.auth import get_current_user
 from app.presentation.api.v1._deps import require_active_hotel, require_open_shift
+from app.application.services.branch_settings import settings_owner
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -311,7 +311,7 @@ async def get_receipt_settings(
 ):
     """Chek dizayni — sotuvchi ham o'qiy oladi (chek chiqarish uchun kerak)."""
     h_id = _get_hotel_id(current_user, hotel_id)
-    hotel = await session.get(Hotel, h_id)
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found")
     return _resolve_receipt(hotel.settings)
@@ -327,7 +327,7 @@ async def save_receipt_settings(
     """Dizaynni saqlash — faqat sozlovchi (Sozlamalar → Chek, configurator_access)."""
     assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user, hotel_id)
-    hotel = await session.get(Hotel, h_id)
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun

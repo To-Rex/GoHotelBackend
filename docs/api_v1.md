@@ -119,6 +119,30 @@ For `SUPER_ADMIN`, pass `hotel_id` as a query parameter to scope requests to a s
   - `work_hours_enforced` — the hotel setting; always `false` for `ADMIN`/`SUPER_ADMIN` and users without a hotel.
   - `work_hours_blocked` — `true` when any non-allowlisted request by this user would be rejected right now with 403 `OUTSIDE_WORK_HOURS`. Computed on the server clock (`APP_TZ_OFFSET_MINUTES`) with the same function as the gate, so clients should rely on it instead of the browser/device clock.
 - `CONFIGURATOR` / `SUPER_ADMIN`: `hotel_id`, `hotel_name`, `branch_id` and `branch_name` are the hotel/branch chosen with `POST /auth/context` (taken from the token), not the user row.
+- `ADMIN`: `branch_id` / `branch_name` are the branch chosen with `POST /auth/context` (default — the admin's own branch). `EMPLOYEE`: always the employee's own branch. `branch_name` is now filled for every role.
+
+---
+
+### Branch isolation
+
+Every hotel row belongs to exactly one branch (`branch_id`), and every authenticated request works inside ONE branch:
+
+- `EMPLOYEE` — always the branch on the user row (read on every request, so moving an employee takes effect immediately; a `branch_id` claim in the token is ignored).
+- `ADMIN` — the branch in the token (`POST /auth/context`, own hotel only); default is the admin's own branch, then the main branch.
+- `CONFIGURATOR` / `SUPER_ADMIN` with a chosen hotel — the chosen branch. `SUPER_ADMIN` without a hotel ("all hotels" mode, `?hotel_id=`) is not branch-scoped.
+
+What it means for the API:
+
+- All list/detail endpoints return only the current branch's data: rooms, floors, room types (+ global types), hotel services, amenities, guests, reservations, invoices, payments, penalties, shop (products, stock, sales), expenses, shifts and cash, housekeeping tasks, checklists, problems, feedback, messages, notifications, incoming calls, document scans, cameras/sightings, devices, audit log, reports. Another branch's record by id → 404.
+- New records are written into the current branch automatically (`branch_id` in the body may be omitted). Writing a record into another branch, or moving an existing record to another branch, → 403 `BRANCH_SCOPE`. Exceptions: an `ADMIN` may assign an employee (`PUT /employees/{id}`, `branch_id`) to any branch of the own hotel (the employee then leaves this branch's list); cameras / camera PCs may be assigned to a branch in settings.
+- `GET /employees/` — employees of the current branch. `GET /branches/` — `EMPLOYEE`: only the own branch; `ADMIN` / `CONFIGURATOR` / `SUPER_ADMIN`: all branches of the hotel.
+- **Settings are per branch** (`branches.settings`): every `GET/PUT …-settings` endpoint reads/writes the current branch. A new branch starts with a copy of the main branch's settings.
+- Reports (`/finance/*`, `/shifts/*`, `/reports/*`, dashboard data) are per branch.
+- Notifications and pushes go to the current branch's staff plus the hotel's `ADMIN`s; the broadcast (`POST /notifications/broadcast`) goes to the current branch's staff and the admins. Cleaners are assigned only from the task's branch.
+- `POST /maintenance/reset-data` resets only the current branch.
+- Face recognition matches a camera's sighting only against guests of the camera's branch.
+
+**New branch** (`POST /branches/`, panel `POST /superadmin/hotels/{id}/branches`): starts with copies of the main branch's settings and catalogs (hotel room types, enabled room types, amenities, service prices, checklist templates, chart of accounts, shop products without stock). A branch with no operational data (only those copies) can be deleted from the panel; a branch with guests, bookings, staff, etc. → 409 `BRANCH_NOT_EMPTY`.
 
 ---
 
@@ -151,12 +175,12 @@ A configurator is a hotel-less account (`users.user_type = "CONFIGURATOR"`, `hot
 
 **GET /auth/context/options**
 
-- Auth: `CONFIGURATOR` or `SUPER_ADMIN` (others: 403 `CONTEXT_FORBIDDEN`)
+- Auth: `CONFIGURATOR`, `SUPER_ADMIN` or `ADMIN` (others: 403 `CONTEXT_FORBIDDEN`). `ADMIN` gets only the own hotel with its branches.
 - Response 200: `{"hotels": [{"id", "name", "code", "status", "branches": [{"id", "name", "code", "is_main", "status"}]}]}` — main branch first.
 
 **POST /auth/context**
 
-- Auth: `CONFIGURATOR` or `SUPER_ADMIN` (checked against the user row, not only the token)
+- Auth: `CONFIGURATOR`, `SUPER_ADMIN` or `ADMIN` (checked against the user row, not only the token). `ADMIN` may choose only a branch of the own hotel (another hotel → 403 `CONTEXT_FORBIDDEN`).
 - Body: `{"hotel_id": "uuid", "branch_id": "uuid | null"}` — without `branch_id` the main (or first) branch is used. `SUPER_ADMIN` may send `hotel_id: null` to go back to "all hotels"; a configurator may not (422 `HOTEL_REQUIRED`).
 - Response 200: a new token pair (same shape as `/auth/refresh`). The choice lives in the token claims and is kept by `/auth/refresh`; the current session is revoked.
 - Errors: 403 `CONTEXT_FORBIDDEN`, 404 `HOTEL_NOT_FOUND`, 422 `BRANCH_NOT_IN_HOTEL`, 401 `USER_INACTIVE`

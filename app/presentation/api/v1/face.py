@@ -290,6 +290,12 @@ async def face_users(
     )
     if hotel_id is not None:
         stmt = stmt.where(User.hotel_id == hotel_id)
+        # Joriy filial xodimlari va administratorlar
+        from app.infrastructure.tenant.branch_scope import users_in_branch
+
+        in_branch = users_in_branch(User, session, hotel_id)
+        if in_branch is not None:
+            stmt = stmt.where(in_branch)
 
     rows = (await session.execute(stmt)).all()
     return [

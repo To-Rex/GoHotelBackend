@@ -43,6 +43,7 @@ from app.application.services.work_hours_access import (
 from app.core.exceptions import ForbiddenException
 from app.infrastructure.auth.jwt import create_access_token
 from app.infrastructure.database.models.hotel import Hotel
+from app.infrastructure.tenant.branch_scope import set_branch_scope
 from app.presentation.api.v1 import hotels as hotels_api
 from app.presentation.api.v1 import users as users_api
 from app.presentation.middleware.auth import get_current_user
@@ -55,6 +56,9 @@ NOON = time(12, 0)
 
 #: Bazadagi xodim qatori: (allow_outside_work_hours, work_start, work_end)
 DAY_ROW = (False, "09:00", "18:00")
+
+#: Mehmonxonaning yagona (asosiy) filiali
+BRANCH_ID = uuid.uuid4()
 
 
 # ------------------------------------------------------------ o'rinbosarlar --
@@ -70,6 +74,18 @@ class FakeResult:
 
     def scalar_one_or_none(self):
         return self.value
+
+    def scalars(self):
+        return self
+
+
+def branch_of(hotel):
+    """Mehmonxonaning yagona (asosiy) filiali — sozlamalar endi filialda."""
+    if hotel is None:
+        return None
+    return SimpleNamespace(
+        id=BRANCH_ID, hotel_id=hotel.id, name="Markaz", settings=dict(hotel.settings or {})
+    )
 
 
 class FakeSession:
@@ -88,16 +104,33 @@ class FakeSession:
         self.flushed = False
         # Sozlovchi tokeni sessiya bilan tekshiriladi (configurator_access)
         self.live_session = None
+        # Sozlamalar filialda (branch_settings); so'rov filiali `info` da
+        self.branch = branch_of(hotel)
+        self.info: dict = {}
 
     async def get(self, model, _key):
         self.gets.append(model.__name__)
         if model is Hotel:
             return self.hotel
+        if model.__name__ == "Branch":
+            return self.branch
         return None
 
-    async def execute(self, statement):
+    async def execute(self, statement, *_args, **_kwargs):
         sql = str(statement)
         self.statements.append(sql)
+        # So'rov filiali (get_current_user) va asosiy filial (sozlamalar)
+        if "FROM branches" in sql or "JOIN branches" in sql:
+            branch = self.branch
+            if "branches.name" in sql:  # butun filial qatori
+                return FakeResult(branch)
+            if "SELECT branches.hotel_id" in sql:
+                return FakeResult(branch.hotel_id if branch else None)
+            if "SELECT users.branch_id" in sql:
+                return FakeResult(branch.id if branch else None)
+            if "SELECT branches.id" in sql:
+                return FakeResult(branch.id if branch else None)
+            return FakeResult(branch)
         if "shift_sessions" in sql:
             return FakeResult(uuid.uuid4() if self.active_session else None)
         if "FROM user_sessions" in sql:
@@ -320,6 +353,8 @@ def test_dto_fields():
 
 # -------------------------------------------------------------- to'siq --
 def run_gate(session, user, path="/api/v1/tasks"):
+    # get_current_user to'siqdan oldin so'rov filialini sessiyaga yozadi
+    set_branch_scope(session, user.get("hotel_id"), BRANCH_ID)
     return asyncio.run(assert_within_work_hours(session, user, path))
 
 
@@ -371,7 +406,9 @@ def test_gate_off_costs_one_hotel_lookup(clock):
     hotel = make_hotel(OFF)
     session = FakeSession(hotel)
     run_gate(session, employee(hotel.id))
-    assert session.gets == ["Hotel"]
+    # Mehmonxona (require_active_hotel bilan umumiy) va so'rov filiali
+    # (get_current_user yuklagan — haqiqiy sessiyada identity map'dan)
+    assert session.gets == ["Hotel", "Branch"]
     assert session.statements == []
 
 
@@ -726,17 +763,21 @@ def test_http_only_configurator_saves_setting(clock):
     )
     assert response.status_code == 200
     assert response.json() == {"enforce": True}
-    assert hotel.settings == {"shift": {"mode": "cash"}, "work_hours": {"enforce": True}}
+    # Sozlama FILIALGA yoziladi (mehmonxona yozuvi o'zgarmaydi)
+    assert session.branch.settings == {"shift": {"mode": "cash"}, "work_hours": {"enforce": True}}
+    assert WORK_HOURS_SETTINGS_KEY not in hotel.settings
     assert session.flushed
 
     # Super admin boshqa mehmonxonani ?hotel_id= bilan
     other = make_hotel(ON)
+    other_session = FakeSession(other)
     response = http(
-        FakeSession(other), "PUT", f"/api/v1/hotels/work-hours-settings?hotel_id={other.id}",
+        other_session, "PUT", f"/api/v1/hotels/work-hours-settings?hotel_id={other.id}",
         token_for("SUPER_ADMIN", None), json={"enforce": False},
     )
     assert response.status_code == 200
-    assert other.settings[WORK_HOURS_SETTINGS_KEY] == {"enforce": False}
+    # Mehmonxona tanlamagan tizim ma'muri — asosiy filial sozlamasi
+    assert other_session.branch.settings[WORK_HOURS_SETTINGS_KEY] == {"enforce": False}
 
 
 def test_settings_endpoint_functions_directly():
@@ -762,6 +803,7 @@ def test_evaluate_uses_preloaded_user_without_query(clock):
     hotel = make_hotel(ON)
     session = FakeSession(hotel)
     user = make_user(hotel, start="22:00", end="06:00")
+    user.branch_id = BRANCH_ID
     result = asyncio.run(
         evaluate_work_hours_block(
             session, user_type="EMPLOYEE", hotel_id=hotel.id, user_id=user.id,
@@ -769,7 +811,8 @@ def test_evaluate_uses_preloaded_user_without_query(clock):
         )
     )
     assert result is None
-    assert session.gets == [] and session.statements == []
+    # Faqat xodim filiali (sozlamalar uchun; haqiqiy sessiyada identity map)
+    assert session.gets == ["Branch"] and session.statements == []
 
 
 # ------------------------------- HTTP: to'liq oqim (ilova ko'radigan holat) --

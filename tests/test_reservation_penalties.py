@@ -21,6 +21,7 @@ from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.invoice import InvoiceLineItem
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.reservation_penalty import ReservationPenalty
+from tests._branch_fakes import BranchResult, fake_branch, is_branch_query
 
 HOTEL = uuid.uuid4()
 USER = uuid.uuid4()
@@ -111,6 +112,7 @@ class Db:
         self.added = []
         self.deleted = []
         self.hotel = SimpleNamespace(id=HOTEL, settings=hotel_settings or {})
+        self.branch = fake_branch(HOTEL, self.hotel.settings)
 
     async def get(self, model, key):
         if model is Reservation:
@@ -123,6 +125,8 @@ class Db:
 
     async def execute(self, stmt):
         sql = str(stmt)
+        if is_branch_query(stmt):  # sozlamalar filialda
+            return BranchResult(self.branch)
         if "FROM invoices" in sql:
             return Rows([self.invoice] if self.invoice else [])
         if "FROM invoice_line_items" in sql:

@@ -8,10 +8,10 @@ from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstrai
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import UUIDPrimaryKeyMixin
+from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
-class TrustedDevice(UUIDPrimaryKeyMixin, Base):
+class TrustedDevice(BranchScoped, UUIDPrimaryKeyMixin, Base):
     """Tizimga kirishga ruxsat berilgan qurilma.
 
     Nega kerak: login va parol o'g'irlansa, ular istalgan kompyuterdan
@@ -38,6 +38,10 @@ class TrustedDevice(UUIDPrimaryKeyMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     #: Brauzer saqlaydigan tasodifiy identifikator
     device_id: Mapped[str] = mapped_column(String(128), nullable=False)

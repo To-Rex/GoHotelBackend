@@ -9,10 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import FeedbackPriority, FeedbackStatus
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, SoftDeleteMixin
+from app.shared.mixins import FullMixin, SoftDeleteMixin, BranchScoped
 
 
-class GuestFeedback(FullMixin, SoftDeleteMixin, Base):
+class GuestFeedback(BranchScoped, FullMixin, SoftDeleteMixin, Base):
     """Mehmon murojaati — talab (REQUEST), taklif (SUGGESTION) yoki shikoyat
     (COMPLAINT). Xizmat ko'rsatish joyidagi "Taklif va shikoyatlar kitobi"ning
     elektron ko'rinishi: qabulxona mehmon aytganini yozadi, menejer ko'rib

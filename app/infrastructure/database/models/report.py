@@ -9,14 +9,18 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import UUIDPrimaryKeyMixin
+from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
-class Report(UUIDPrimaryKeyMixin, Base):
+class Report(BranchScoped, UUIDPrimaryKeyMixin, Base):
     __tablename__ = "reports"
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     report_type: Mapped[str] = mapped_column(String(100), nullable=False)

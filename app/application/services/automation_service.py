@@ -118,6 +118,8 @@ class AutomationService:
         )
         ids = [row[0] for row in id_rows.all()]
 
+        from app.infrastructure.tenant.branch_scope import set_branch_scope
+
         for rid in ids:
             try:
                 reservation = await self.session.get(Reservation, rid)
@@ -128,11 +130,16 @@ class AutomationService:
                     or reservation.status not in ("CHECKED_IN", "CONFIRMED")
                 ):
                     continue
+                # Bron o'z FILIALI ichida qayta ishlanadi: sozlamalar, xona,
+                # farrosh, xabar oluvchilar — hammasi shu filialdan
+                set_branch_scope(self.session, reservation.hotel_id, reservation.branch_id)
                 await self._process(reservation, now)
                 await self.session.commit()
             except Exception:
                 await self.session.rollback()
                 logger.exception("Auto-checkout failed for reservation %s", rid)
+            finally:
+                set_branch_scope(self.session, None, None)
 
         # Muddati o'tgan xo'jalik vazifalarini avtomatik yakunlash
         try:
@@ -208,16 +215,16 @@ class AutomationService:
                 ),
             )
         )
-        from app.infrastructure.database.models.hotel import Hotel
+        from app.application.services.branch_settings import settings_owner
 
-        mode_cache: dict[UUID, str] = {}
+        # Rejim filial sozlamasidan (har filial o'zinikini tanlaydi)
+        mode_cache: dict[tuple, str] = {}
         for task in rows.scalars().all():
-            if task.hotel_id not in mode_cache:
-                hotel = await self.session.get(Hotel, task.hotel_id)
-                mode_cache[task.hotel_id] = resolve_assign_mode(
-                    hotel.settings if hotel else None
-                )
-            if mode_cache[task.hotel_id] == ASSIGN_MODE_CLAIM:
+            key = (task.hotel_id, task.branch_id)
+            if key not in mode_cache:
+                owner = await settings_owner(self.session, task.hotel_id, task.branch_id)
+                mode_cache[key] = resolve_assign_mode(owner.settings if owner else None)
+            if mode_cache[key] == ASSIGN_MODE_CLAIM:
                 continue  # bo'sh vazifa — farroshlar o'zi oladi
             cleaner_id = await self._find_cleaner(task.hotel_id, task.branch_id)
             if cleaner_id is None:
@@ -246,7 +253,7 @@ class AutomationService:
     async def _auto_complete_tasks(self) -> None:
         """Belgilangan vaqtdan oshib ketgan OPEN/IN_PROGRESS vazifalarni yopadi.
 
-        Vaqt chegarasi vazifa turiga qarab: mehmonxona sozlamasi (hotels.settings
+        Vaqt chegarasi vazifa turiga qarab: mehmonxona sozlamasi (branches.settings
         -> hk_auto_complete) yoki standart qiymatlar. Yakunlash odatiy
         housekeeping oqimi orqali bo'ladi — xona AVAILABLE'ga qaytadi va
         "chiqish so'ralgan" bron bo'lsa avtomatik CHECKED_OUT bo'ladi.
@@ -256,7 +263,6 @@ class AutomationService:
             HousekeepingService,
             effective_auto_complete_minutes,
         )
-        from app.infrastructure.database.models.hotel import Hotel
         from app.infrastructure.database.models.housekeeping import HousekeepingTask
 
         now_utc = datetime.now(timezone.utc)
@@ -274,17 +280,21 @@ class AutomationService:
         if not rows:
             return
 
-        # Mehmonxona sozlamalari keshi (bitta tickda qayta-qayta o'qimaslik uchun)
+        # Filial sozlamalari keshi (bitta tickda qayta-qayta o'qimaslik uchun)
+        from app.application.services.branch_settings import branch_settings
+
         settings_cache: dict = {}
         for task in rows:
             try:
-                if task.hotel_id not in settings_cache:
-                    hotel = await self.session.get(Hotel, task.hotel_id)
-                    settings_cache[task.hotel_id] = (hotel.settings if hotel else {}) or {}
+                key = (task.hotel_id, task.branch_id)
+                if key not in settings_cache:
+                    settings_cache[key] = await branch_settings(
+                        self.session, task.hotel_id, task.branch_id
+                    )
                 # Mehmonxona umuman o'chirib qo'ygan bo'lsa ham 0 — tegilmaydi:
                 # xona faqat farrosh/menejer yakunlaganda o'zgaradi
                 minutes = effective_auto_complete_minutes(
-                    settings_cache[task.hotel_id], task.task_type
+                    settings_cache[key], task.task_type
                 )
                 if minutes <= 0:
                     continue  # avto-yakunlash o'chirilgan (umuman yoki shu tur uchun)

@@ -17,10 +17,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import TaskPriority, TaskStatus, TaskType
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import FullMixin, BranchScoped
 
 
-class HousekeepingTask(FullMixin, Base):
+class HousekeepingTask(BranchScoped, FullMixin, Base):
     __tablename__ = "housekeeping_tasks"
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

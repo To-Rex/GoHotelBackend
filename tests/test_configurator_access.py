@@ -117,20 +117,29 @@ USER_ID = uuid.uuid4()
 
 
 class TokenSession:
-    """Faqat sozlovchi sessiyasini tekshirish so'rovi kutiladi — qurilma va
-    ish vaqti tekshiruvlari bazaga tegsa sinov yiqiladi."""
+    """Faqat sozlovchi sessiyasini tekshirish va so'rov FILIALI kutiladi —
+    qurilma va ish vaqti tekshiruvlari bazaga tegsa sinov yiqiladi."""
 
     def __init__(self, live=None):
         self.live = live
         self.session_queries = 0
+        self.branch_queries = 0
+        self.info: dict = {}
 
-    async def get(self, *_):
+    async def get(self, model, key):
+        if model.__name__ == "Branch":
+            self.branch_queries += 1
+            return SimpleNamespace(id=key, hotel_id=HOTEL_A)
         raise AssertionError("kutilmagan so'rov")
 
     async def execute(self, stmt):
         if "user_sessions" in str(stmt):
             self.session_queries += 1
             return Result(one=self.live)
+        if "FROM branches" in str(stmt):
+            # Tokenda filial yo'q — xodimning yoki asosiy filial
+            self.branch_queries += 1
+            return Result(one=SimpleNamespace(id=BRANCH_A_MAIN, hotel_id=HOTEL_A))
         raise AssertionError("kutilmagan so'rov")
 
 
@@ -437,7 +446,9 @@ def test_me_reports_the_chosen_hotel_and_branch():
 def test_me_for_hotel_staff_ignores_token_context():
     user = make_user("ADMIN", hotel_id=HOTEL_A, branch_id=BRANCH_A_MAIN)
     me = asyncio.run(service(user).get_me(user.id, HOTEL_B, BRANCH_B))
-    assert me["hotel_id"] == str(HOTEL_A) and me["branch_name"] is None
+    # Boshqa mehmonxona tanlovi hisobga olinmaydi — o'z filiali (nomi bilan)
+    assert me["hotel_id"] == str(HOTEL_A)
+    assert me["branch_id"] == str(BRANCH_A_MAIN) and me["branch_name"] == "Markaz"
 
 
 # ------------------------------------------------- sozlama endpointlari --

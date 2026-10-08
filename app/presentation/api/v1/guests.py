@@ -17,7 +17,6 @@ from app.application.services.guest_history_service import GuestHistoryService
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.guest import Guest
-from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.guest_service import GuestService
 from app.application.dto.guest import GuestCreateRequest, GuestUpdateRequest, GuestResponse
 from app.application.dto.reservation import ReservationResponse
@@ -26,6 +25,7 @@ from app.core.constants import MAX_PAGE_SIZE
 from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel
 from app.infrastructure.database.repositories.reservation_repo import ReservationRepository
+from app.application.services.branch_settings import settings_owner
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ async def get_scan_settings(
 ):
     """Skaner rejimi — har qanday xodim o'qiy oladi (skanerlash uchun kerak)."""
     h_id = _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     resolved = _resolve_scan(hotel.settings if hotel else None)
     if resolved["serverAvailable"] and resolved["engine"] == "server":
         _start_ocr_warm_up()
@@ -121,7 +121,7 @@ async def save_scan_settings(
     """Rejimni o'zgartirish — faqat sozlovchi (configurator_access)."""
     assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
@@ -188,7 +188,7 @@ async def scan_document(
     # Sozlamadagi rejim SERVERDA ham kuchga kiradi — ilgari u faqat
     # qurilmadagi OCR'ga ta'sir qilib, server doim "auto" ishlardi
     h_id = _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     mode = _resolve_scan(hotel.settings if hotel else None)["mode"]
     return await intake.run_scan(images, document_type, mode)
 
@@ -268,7 +268,7 @@ async def upload_document_images(
     """
     h_id = _document_images_hotel(current_user, DOCUMENT_IMAGE_UPLOAD_CODES)
     await _live_guest(session, guest_id)
-    hotel = await session.get(Hotel, h_id)
+    hotel = await settings_owner(session, h_id)
     if not document_images.store_enabled(hotel.settings if hotel else None):
         return {"stored": [], "disabled": True}
 
@@ -430,7 +430,6 @@ async def get_blacklist_settings(
     current_user: dict = Depends(get_current_user),
 ):
     """Qora ro'yxatdagi mehmonga bron ochish taqiqlanganmi."""
-    from app.infrastructure.database.models.hotel import Hotel
     from app.application.services.blacklist_service import (
         DEFAULT_BLOCK_BOOKING,
         resolve_block_booking,
@@ -441,7 +440,7 @@ async def get_blacklist_settings(
         if current_user["user_type"] == "SUPER_ADMIN"
         else _get_hotel_id(current_user)
     )
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     return {
         "block_booking": resolve_block_booking(hotel.settings if hotel else None),
         "default_block_booking": DEFAULT_BLOCK_BOOKING,
@@ -455,7 +454,6 @@ async def save_blacklist_settings(
     current_user: dict = Depends(get_current_user),
 ):
     """Qoidani saqlash — faqat ADMIN/SUPER_ADMIN."""
-    from app.infrastructure.database.models.hotel import Hotel
     from app.application.services.blacklist_service import (
         BLACKLIST_SETTINGS_KEY,
         DEFAULT_BLOCK_BOOKING,
@@ -463,7 +461,7 @@ async def save_blacklist_settings(
 
     assert_can_manage_settings(current_user)
     h_id = _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — o'zgarish sezilishi uchun

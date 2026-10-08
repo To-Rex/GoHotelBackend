@@ -125,12 +125,13 @@ async def get_me(
 
 
 def _assert_context_user(current_user: dict) -> None:
-    from app.application.services.configurator_access import can_switch_context
+    from app.application.services.configurator_access import can_switch_branch
     from app.core.exceptions import ForbiddenException
 
-    if not can_switch_context(current_user):
+    if not can_switch_branch(current_user):
         raise ForbiddenException(
-            "Mehmonxonani faqat sozlovchi tanlay oladi", "CONTEXT_FORBIDDEN"
+            "Mehmonxona yoki filialni faqat administrator va sozlovchi tanlay oladi",
+            "CONTEXT_FORBIDDEN",
         )
 
 
@@ -139,9 +140,10 @@ async def context_options(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Sozlovchi va tizim ma'muri uchun: barcha mehmonxonalar va filiallari."""
+    """Sozlovchi va tizim ma'muri uchun: barcha mehmonxonalar va filiallari.
+    Administrator uchun — faqat o'z mehmonxonasi va uning filiallari."""
     _assert_context_user(current_user)
-    return {"hotels": await AuthService(session).context_options()}
+    return {"hotels": await AuthService(session).context_options(current_user)}
 
 
 @router.post("/context", response_model=TokenResponse)
@@ -154,7 +156,9 @@ async def switch_context(
     """Mehmonxona va filialni tanlash — yangi token juftligi qaytadi.
 
     Tanlangan mehmonxonada sozlovchi administrator kabi ishlaydi va
-    sozlamalarni o'zgartira oladi (configurator_access).
+    sozlamalarni o'zgartira oladi (configurator_access). Administrator
+    faqat o'z mehmonxonasining filialini tanlaydi — keyingi barcha
+    so'rovlar shu filial ichida ishlaydi.
     """
     _assert_context_user(current_user)
     return await AuthService(session).switch_context(

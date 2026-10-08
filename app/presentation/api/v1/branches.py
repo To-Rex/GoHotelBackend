@@ -28,6 +28,14 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     return hotel_id
 
 
+def _assert_branch_visible(current_user: dict, branch_id) -> None:
+    """Xodim boshqa filialni ko'rmaydi va boshqara olmaydi."""
+    if current_user.get("user_type") == "EMPLOYEE" and str(branch_id) != str(
+        current_user.get("branch_id")
+    ):
+        raise NotFoundException("Branch not found", "BRANCH_NOT_FOUND")
+
+
 @router.get("/", response_model=list[BranchResponse])
 async def list_branches(
     skip: int = Query(default=0, ge=0),
@@ -41,7 +49,14 @@ async def list_branches(
     else:
         h_id = _get_hotel_id(current_user)
     service = BranchService(session)
-    return await service.get_branches(h_id, skip=skip, limit=limit)
+    branches = await service.get_branches(h_id, skip=skip, limit=limit)
+    # Filiallar ajratilgan: xodim faqat o'z filialini ko'radi. Administrator
+    # va sozlovchi — hammasini (xodimni yoki kamerani filialga biriktirish,
+    # filialni tanlash uchun)
+    if current_user.get("user_type") == "EMPLOYEE":
+        own = current_user.get("branch_id")
+        branches = [b for b in branches if b.id == own]
+    return branches
 
 
 @router.post("/", response_model=BranchResponse)
@@ -74,6 +89,7 @@ async def get_branch(
         h_id = hotel_id or current_user.get("hotel_id")
     else:
         h_id = _get_hotel_id(current_user)
+    _assert_branch_visible(current_user, branch_id)
     service = BranchService(session)
     return await service.get_branch(branch_id, h_id)
 
@@ -90,6 +106,7 @@ async def update_branch(
         h_id = hotel_id or current_user.get("hotel_id")
     else:
         h_id = _get_hotel_id(current_user)
+    _assert_branch_visible(current_user, branch_id)
     service = BranchService(session)
     return await service.update_branch(branch_id, h_id, data.model_dump(exclude_none=True))
 
@@ -130,6 +147,7 @@ async def _sms_branch(
     branch = await session.get(Branch, branch_id)
     if not branch or getattr(branch, "deleted_at", None):
         raise NotFoundException("Branch not found", "BRANCH_NOT_FOUND")
+    _assert_branch_visible(current_user, branch.id)
     if current_user["user_type"] != "SUPER_ADMIN":
         hotel_id = current_user.get("hotel_id")
         if not hotel_id or str(branch.hotel_id) != str(hotel_id):

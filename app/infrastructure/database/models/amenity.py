@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import BranchScoped, FullMixin
 
 
 class Amenity(FullMixin, Base):
@@ -32,14 +32,15 @@ class Amenity(FullMixin, Base):
     )
 
 
-class HotelAmenity(Base):
+class HotelAmenity(BranchScoped, Base):
     __tablename__ = "hotel_amenities"
-    __table_args__ = (
-        UniqueConstraint("hotel_id", "amenity_id", name="uq_hotel_amenities"),
-    )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("hotels.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("hotels.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Filialda yoqilgan qulaylik (kalit: filial + qulaylik)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id"), primary_key=True
     )
     amenity_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("amenities.id", ondelete="CASCADE"), primary_key=True

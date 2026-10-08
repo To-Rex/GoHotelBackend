@@ -52,7 +52,11 @@ async def reset_data(
         raise ForbiddenException("Hotel context required", "HOTEL_REQUIRED")
 
     service = MaintenanceService(session)
-    deleted = await service.reset_data(h_id, include_employees=(data.scope == "full"))
+    # Faqat joriy filial (sozlovchi tanlagani) — boshqa filiallarga tegilmaydi
+    branch_id = current_user.get("branch_id") if str(current_user.get("hotel_id")) == str(h_id) else None
+    deleted = await service.reset_data(
+        h_id, include_employees=(data.scope == "full"), branch_id=branch_id
+    )
 
     return {
         "message": "Ma'lumotlar muvaffaqiyatli tozalandi",

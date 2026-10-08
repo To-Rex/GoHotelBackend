@@ -357,7 +357,10 @@ class _HotelIndex:
 
 
 _index_lock = threading.Lock()
-_indexes: dict[UUID, _HotelIndex] = {}
+#: Kalit — (mehmonxona, filial): filiallar ajratilgan, har filial kamerasi
+#: faqat O'Z filiali mehmonlarini taniydi. Versiya mehmonxona bo'yicha —
+#: shablon o'zgarsa shu mehmonxonaning barcha filial indekslari eskiradi.
+_indexes: dict[tuple, _HotelIndex] = {}
 _versions: dict[UUID, int] = {}
 
 
@@ -374,46 +377,56 @@ def invalidate_hotel(hotel_id: UUID) -> None:
 def index_stats(hotel_id: UUID) -> dict[str, object]:
     """Diagnostika uchun: indeks qurilganmi, nechta shablon bor."""
     with _index_lock:
-        index = _indexes.get(hotel_id)
+        found = [i for key, i in _indexes.items() if key[0] == hotel_id]
         version = _versions.get(hotel_id, 0)
-    if index is None:
+    if not found:
         return {"loaded": False, "profiles": 0, "version": version}
+    newest = max(found, key=lambda i: i.built_at)
     return {
         "loaded": True,
-        "profiles": index.size,
-        "version": index.version,
-        "stale": index.version != version,
-        "built_at": index.built_at.isoformat(),
+        "profiles": sum(i.size for i in found),
+        "version": newest.version,
+        "stale": any(i.version != version for i in found),
+        "built_at": newest.built_at.isoformat(),
     }
 
 
-async def get_index(session: AsyncSession, hotel_id: UUID) -> _HotelIndex:
-    """Mehmonxona indeksini qaytaradi, kerak bo'lsa qayta quradi."""
+async def get_index(
+    session: AsyncSession, hotel_id: UUID, branch_id: UUID | None = None
+) -> _HotelIndex:
+    """Filial indeksini qaytaradi, kerak bo'lsa qayta quradi.
+
+    Filial — berilgani yoki so'rov filiali (branch_scope); ikkalasi ham
+    bo'lmasa butun mehmonxona (avvalgidek).
+    """
+    from app.infrastructure.tenant.branch_scope import ALL_BRANCHES, scoped_branch_id
+
+    branch_id = branch_id or scoped_branch_id(session, hotel_id)
+    key = (hotel_id, branch_id)
     with _index_lock:
         current_version = _versions.setdefault(hotel_id, 0)
-        cached = _indexes.get(hotel_id)
+        cached = _indexes.get(key)
         if cached is not None and cached.version == current_version:
             return cached
 
-    rows = (
-        (
-            await session.execute(
-                select(
-                    GuestFaceProfile.id,
-                    GuestFaceProfile.guest_id,
-                    GuestFaceProfile.embedding,
-                )
-                .join(Guest, Guest.id == GuestFaceProfile.guest_id)
-                .where(
-                    GuestFaceProfile.hotel_id == hotel_id,
-                    GuestFaceProfile.model == MODEL_NAME,
-                    GuestFaceProfile.dim == EMBEDDING_DIM,
-                    Guest.is_deleted.is_(False),
-                )
-            )
+    stmt = (
+        select(
+            GuestFaceProfile.id,
+            GuestFaceProfile.guest_id,
+            GuestFaceProfile.embedding,
         )
-        .all()
+        .join(Guest, Guest.id == GuestFaceProfile.guest_id)
+        .where(
+            GuestFaceProfile.hotel_id == hotel_id,
+            GuestFaceProfile.model == MODEL_NAME,
+            GuestFaceProfile.dim == EMBEDDING_DIM,
+            Guest.is_deleted.is_(False),
+        )
+        .execution_options(**{ALL_BRANCHES: True})
     )
+    if branch_id is not None:
+        stmt = stmt.where(GuestFaceProfile.branch_id == branch_id, Guest.branch_id == branch_id)
+    rows = (await session.execute(stmt)).all()
 
     vectors: list[np.ndarray] = []
     guest_ids: list[UUID] = []
@@ -444,7 +457,7 @@ async def get_index(session: AsyncSession, hotel_id: UUID) -> _HotelIndex:
         # yangisini quradi. Eskisini saqlab qo'yish jimgina eskirishga olib
         # kelardi.
         if _versions.get(hotel_id, 0) == current_version:
-            _indexes[hotel_id] = index
+            _indexes[key] = index
     logger.debug(
         "Yuz indeksi qurildi: mehmonxona=%s, shablon=%d", hotel_id, index.size
     )
@@ -538,10 +551,13 @@ def search_index(index: _HotelIndex, vector: np.ndarray) -> SearchResult:
 
 
 async def identify(
-    session: AsyncSession, hotel_id: UUID, vector: np.ndarray
+    session: AsyncSession,
+    hotel_id: UUID,
+    vector: np.ndarray,
+    branch_id: UUID | None = None,
 ) -> SearchResult:
-    """Mehmonxona doirasida bitta vektorni izlaydi."""
-    index = await get_index(session, hotel_id)
+    """Filial (yoki mehmonxona) doirasida bitta vektorni izlaydi."""
+    index = await get_index(session, hotel_id, branch_id)
     return search_index(index, vector)
 
 

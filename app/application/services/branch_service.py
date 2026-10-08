@@ -33,7 +33,13 @@ class BranchService:
             email=data.get("email"),
             status="ACTIVE",
         )
-        return await self.repo.create(branch)
+        branch = await self.repo.create(branch)
+        # Yangi filial asosiy filialning sozlama va kataloglari bilan
+        # boshlanadi — darhol ishlay oladi (branch_provisioning)
+        from app.application.services.branch_provisioning import provision_branch
+
+        await provision_branch(self.session, branch)
+        return branch
 
     async def get_branches(self, hotel_id: UUID | None, skip: int = 0, limit: int = 100) -> list[Branch]:
         if hotel_id is None:

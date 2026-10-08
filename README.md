@@ -206,6 +206,9 @@ API so'rovlarda `hotel_id` query parametri orqali yoki JWT token ichidagi `hotel
 - **SUPER_ADMIN**: `hotel_id` query parametri orqali istalgan mehmonxonani tanlaydi. Parametrsiz — barcha mehmonxonalar bo'yicha.
 - **ADMIN / EMPLOYEE**: JWT token'dagi `hotel_id` avtomatik qo'llaniladi.
 
+Mehmonxona ichida esa **filiallar to'liq ajratilgan** — har so'rov bitta
+filial ichida ishlaydi (pastda "Filiallar to'liq ajratilgan" bo'limi).
+
 Global modellar (`room_types`, `amenities`) SUPER_ADMIN tomonidan yaratiladi va `hotel_id` talab qilmaydi. Mehmonxonalarga M2M jadval orqali biriktiriladi.
 
 ## Muhit o'zgaruvchilari (.env)
@@ -304,6 +307,54 @@ Sozlamalar → "Bron va mehmonlar" → "Kunlik bron hisobi"
 
 Kod: `app/application/services/daily_unit.py`, migratsiya `d3a4b5c6d7e8`,
 test: `pytest tests/test_daily_unit_pricing.py`.
+
+### Filiallar to'liq ajratilgan
+
+Bitta mehmonxonaning filiallari bir-birini ko'rmaydi: xonalar, qavatlar,
+xona turlari va narxlari, xizmatlar, mehmonlar, bronlar, moliya, do'kon,
+kassa va smenalar, xo'jalik vazifalari, xabarlar, bildirishnomalar,
+qurilmalar, kameralar, hisobotlar va **sozlamalar** — har filialniki.
+
+- **Kim qaysi filialda.** Xodim — doim o'z yozuvidagi filialda (boshqa
+  filialga o'tkazilsa darhol, token yangilanishini kutmay). Administrator
+  boshqa filialni faqat TANLAB ko'radi: `POST /auth/context` (sozlovchi
+  kabi, lekin faqat o'z mehmonxonasi filiallari). Sozlovchi va tizim
+  ma'muri — tanlagan mehmonxona va filiali.
+- **Qanday ishlaydi** (`app/infrastructure/tenant/branch_scope.py`).
+  `get_current_user` so'rov filialini sessiyaga yozadi. `BranchScoped`
+  belgili modellarning har SELECT/UPDATE/DELETE so'roviga filial sharti
+  avtomatik qo'shiladi (`with_loader_criteria`), yangi yozuvga filial
+  avtomatik yoziladi; boshqa filialga yozish — 403 `BRANCH_SCOPE`.
+  Servis va endpointlar kodi o'zgarmadi — chegarani biror joyda unutib
+  qoldirib bo'lmaydi. Xodimlar ro'yxatlari (xodimlar sahifasi, xabar
+  oluvchilar, farrosh tanlash) filial bo'yicha aniq filtrlanadi;
+  administratorlar hamma filial xabarini oladi.
+- **Sozlamalar filialda** (`branches.settings`,
+  `app/application/services/branch_settings.py`): `settings_owner()`
+  so'rov (yoki yozuv) filialini qaytaradi — `.settings` o'qiladi va yoziladi.
+- **Fon vazifalari** (avto-chiqish, qarz eslatmalari) har bron/filial
+  uchun o'sha filial ichida ishlaydi: sozlama, farrosh, xabar oluvchilar —
+  shu filialniki. Kamera faqat o'z filiali mehmonlarini taniydi.
+- **Yangi filial** asosiy filialning sozlama va kataloglari nusxasi bilan
+  boshlanadi (`branch_provisioning.py`): xona turlari, yoqilgan turlar,
+  qulayliklar, xizmat narxlari, cheklistlar, hisob rejasi, do'kon
+  mahsulotlari (zaxirasiz). Faqat shu nusxalar bo'lgan filialni panel
+  o'chira oladi; ish ma'lumoti bor filial — 409 `BRANCH_NOT_EMPTY`.
+- **"Ma'lumotlarni tozalash"** faqat joriy filialni tozalaydi.
+- **Migratsiya** `a6b7c8d9e0f1` mavjud ma'lumotni yo'qotmasdan taqsimlaydi:
+  filialni aniq ko'rsatadigan bog'lanish bo'yicha (bron, xona, xodim...),
+  bo'lmasa asosiy filialga; bir necha filialda bron qilgan mehmon har
+  filialga alohida yozuvga ajratiladi (bronlari, hisoblari, hamrohlari
+  o'sha yozuvga ulanadi); kataloglar har filialga nusxalanadi; do'kon
+  zaxirasi asosiy filialda qoladi, boshqa filialda sotilgan miqdor o'sha
+  filialga "o'tkazilgan" partiya bo'ladi; sozlamalar har filialga
+  nusxalanadi; filiali yo'q mehmonxonaga "Asosiy filial" ochiladi.
+
+Testlar: `tests/test_branch_migration.py` (migratsiya — alohida
+vaqtinchalik bazada), `tests/test_branch_isolation_api.py` (80+ ro'yxat
+endpointi ikki filial xodimi va filial almashtirgan administrator nomidan:
+boshqa filialning birorta ID'si chiqmasligi), `tests/test_branch_provisioning.py`.
+Uchalasi `GOHOTEL_TEST_PG_URL` (lokal test bazasi) bilan ishlaydi.
 
 ### Mehmonxonani butunlay o'chirish (boshqaruv paneli)
 

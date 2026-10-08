@@ -27,15 +27,20 @@ class NotificationService:
         return result.scalar_one_or_none()
 
     async def _get_hotel_tokens(self, hotel_id: UUID) -> list[str]:
-        """Mehmonxonaning barcha faol foydalanuvchilarining FCM tokenlari."""
-        result = await self.session.execute(
-            select(User.fcm_token).where(
-                User.hotel_id == hotel_id,
-                User.fcm_token.is_not(None),
-                User.is_deleted.is_(False),
-                User.status == "ACTIVE",
-            )
+        """Joriy FILIAL faol xodimlari va mehmonxona administratorlarining
+        FCM tokenlari (filial bo'lmasa — butun mehmonxona, avvalgidek)."""
+        from app.infrastructure.tenant.branch_scope import users_in_branch
+
+        stmt = select(User.fcm_token).where(
+            User.hotel_id == hotel_id,
+            User.fcm_token.is_not(None),
+            User.is_deleted.is_(False),
+            User.status == "ACTIVE",
         )
+        in_branch = users_in_branch(User, self.session, hotel_id)
+        if in_branch is not None:
+            stmt = stmt.where(in_branch)
+        result = await self.session.execute(stmt)
         return [t for t in result.scalars().all() if t]
 
     async def _push_to_user(

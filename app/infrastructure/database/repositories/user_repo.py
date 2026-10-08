@@ -8,6 +8,7 @@ from app.infrastructure.database.models.permission import Permission, UserPermis
 from app.infrastructure.database.models.user import User
 from app.infrastructure.database.models.user_session import UserSession
 from app.infrastructure.database.repositories.base import BaseRepository
+from app.infrastructure.tenant.branch_scope import scoped_branch_id
 
 
 class UserRepository(BaseRepository[User]):
@@ -25,6 +26,10 @@ class UserRepository(BaseRepository[User]):
             User.user_type == "EMPLOYEE",
             User.is_deleted.is_(False),
         )
+        # Filiallar ajratilgan: boshqa filial xodimi shu filialdan ko'rinmaydi
+        branch_id = scoped_branch_id(self.session, hotel_id)
+        if branch_id is not None:
+            stmt = stmt.where(User.branch_id == branch_id)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -47,6 +52,11 @@ class UserRepository(BaseRepository[User]):
         stmt = select(User).where(User.user_type == "EMPLOYEE")
         if hotel_id is not None:
             stmt = stmt.where(User.hotel_id == hotel_id)
+        # Faqat joriy filial xodimlari (administrator boshqasini filialni
+        # tanlab ko'radi)
+        branch_id = scoped_branch_id(self.session, hotel_id)
+        if branch_id is not None:
+            stmt = stmt.where(User.branch_id == branch_id)
         if status:
             stmt = stmt.where(User.status == status)
         stmt = stmt.offset(skip).limit(limit)

@@ -8,10 +8,10 @@ from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import FullMixin, BranchScoped
 
 
-class Expense(FullMixin, Base):
+class Expense(BranchScoped, FullMixin, Base):
     """Mehmonxona xarajati (chiqim) — Xarajatlar sahifasidan kiritiladi.
 
     Kim kiritgani (created_by) majburiy saqlanadi va ro'yxatda ko'rsatiladi.

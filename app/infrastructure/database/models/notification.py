@@ -8,14 +8,18 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import UUIDPrimaryKeyMixin
+from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
-class Notification(UUIDPrimaryKeyMixin, Base):
+class Notification(BranchScoped, UUIDPrimaryKeyMixin, Base):
     __tablename__ = "notifications"
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

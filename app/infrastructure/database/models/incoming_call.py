@@ -9,10 +9,10 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import UUIDPrimaryKeyMixin
+from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
-class IncomingCall(UUIDPrimaryKeyMixin, Base):
+class IncomingCall(BranchScoped, UUIDPrimaryKeyMixin, Base):
     """Qabulxona telefoniga kelgan qo'ng'iroq.
 
     Mehmon qo'ng'iroq qilganda resepsiya qurilmasi raqamni yuboradi va
@@ -33,6 +33,10 @@ class IncomingCall(UUIDPrimaryKeyMixin, Base):
         ForeignKey("hotels.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
 
     #: Qurilma ko'rsatgan raqam — asl ko'rinishida saqlanadi.

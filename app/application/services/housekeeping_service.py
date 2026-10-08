@@ -42,7 +42,7 @@ TASK_STATUS_TITLES = {
 
 # Vazifa turlari bo'yicha AVTOMATIK YAKUNLASH vaqtlari (daqiqalarda) —
 # xodim qo'lda yakunlamasa scheduler shu vaqtdan keyin o'zi yopadi.
-# Mehmonxona bo'yicha o'zgartirilishi mumkin (hotels.settings JSON'ida
+# Mehmonxona bo'yicha o'zgartirilishi mumkin (branches.settings JSON'ida
 # "hk_auto_complete" kaliti ostida saqlanadi). 0 — o'chirilgan.
 HK_AUTO_COMPLETE_DEFAULTS: dict[str, int] = {
     "CLEANING": 20,
@@ -54,7 +54,7 @@ HK_AUTO_COMPLETE_DEFAULTS: dict[str, int] = {
 
 HK_SETTINGS_KEY = "hk_auto_complete"
 
-# Umumiy o'chirgich — hotels.settings["hk_auto_complete"]["enabled"].
+# Umumiy o'chirgich — branches.settings["hk_auto_complete"]["enabled"].
 # Yo'q bo'lsa True (avvalgi xatti-harakat). False — rejalashtiruvchi HECH
 # QANDAY vazifani o'zi yopmaydi: xona holati faqat farrosh yoki
 # menejer/admin vazifani yakunlaganda o'zgaradi. Tur bo'yicha daqiqalar

@@ -8,10 +8,10 @@ from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import UUIDPrimaryKeyMixin
+from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
-class StaffMessage(UUIDPrimaryKeyMixin, Base):
+class StaffMessage(BranchScoped, UUIDPrimaryKeyMixin, Base):
     """Xodimlar o'rtasidagi xabar/so'rovlar taxtasi.
 
     Farrosh mobil ilovadan so'rov yuboradi ("104-xonani tekshiring"),
@@ -23,6 +23,10 @@ class StaffMessage(UUIDPrimaryKeyMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     room_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("rooms.id", ondelete="SET NULL"), nullable=True

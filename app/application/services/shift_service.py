@@ -8,7 +8,7 @@ Qoidalar (jahon amaliyoti: Opera PMS / r_keeper uslubida):
   4. Qattiq blok: filialda yopilmagan/topshirilmagan sessiya bor ekan boshqa
      xodim yangi sessiya ocholmaydi — qabul qilib oladi (parol bilan) yoki
      admin/menejer majburiy yopadi.
-  5. Rejim va kunlik kesim vaqti mehmonxona sozlamalarida (hotels.settings).
+  5. Rejim va kunlik kesim vaqti mehmonxona sozlamalarida (branches.settings).
 """
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -32,7 +32,7 @@ from app.infrastructure.database.models.shift import ShiftSession
 from app.infrastructure.database.models.shop import ShopSalePayment
 from app.infrastructure.database.models.user import User
 
-# hotels.settings JSONB ichidagi kalit va standart qiymatlar
+# branches.settings JSONB ichidagi kalit va standart qiymatlar
 SHIFT_SETTINGS_KEY = "shift"
 # day_close_required — kunlik kassa kesimi MAJBURIYmi:
 #   True  — kesim vaqti kelgach kassa topshirilmaguncha ishlab bo'lmaydi
@@ -122,7 +122,10 @@ class ShiftService:
     # ------------------------------------------------------------------ util
 
     async def _get_hotel(self, hotel_id: UUID) -> Hotel:
-        hotel = await self.session.get(Hotel, hotel_id)
+        """Smena sozlamalari egasi — joriy filial (branch_settings)."""
+        from app.application.services.branch_settings import settings_owner
+
+        hotel = await settings_owner(self.session, hotel_id)
         if not hotel:
             raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
         return hotel

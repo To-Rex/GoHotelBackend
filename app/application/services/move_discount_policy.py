@@ -3,7 +3,7 @@
 Holat: mehmon kirib, xona yoqmadi va QIMMATROQ xonaga o'tmoqchi. Narx
 farqini to'liq olish o'rniga resepshn chegirma qilib bera oladi.
 
-Sozlama `hotels.settings["room_move_discount"]` da:
+Sozlama `branches.settings["room_move_discount"]` da:
 
 * `enabled` — xodimlar (resepshn) bu chegirmani bera oladimi. Standart —
   O'CHIQ: sozlama qo'shilishidan oldingi mehmonxonalarda xodim chegirma

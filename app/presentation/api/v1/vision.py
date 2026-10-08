@@ -68,6 +68,7 @@ from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.guest_face_profile import GuestFaceProfile
 from app.infrastructure.database.models.vision_camera import VisionCamera
 from app.infrastructure.database.models.reservation import Reservation
+from app.infrastructure.tenant.branch_scope import scoped_branch_id, set_branch_scope
 from app.presentation.middleware.auth import get_current_user, require_permission
 
 logger = logging.getLogger(__name__)
@@ -244,6 +245,18 @@ async def _handle_event(
         )
 
     camera = await _resolve_camera(session, device, event)
+
+    # Filial KAMERAdan (bo'lmasa qurilmadan, u ham bo'lmasa asosiy filial).
+    # Shu filial sessiyaga yoziladi: mehmonni faqat shu filial mehmonlari
+    # orasidan taniymiz, ko'rinish ham shu filialga yoziladi
+    branch_id = (camera.branch_id if camera is not None else None) or device.branch_id
+    if branch_id is None:
+        from app.application.services.branch_settings import main_branch
+
+        main = await main_branch(session, device.hotel_id)
+        branch_id = main.id if main is not None else None
+    set_branch_scope(session, device.hotel_id, branch_id)
+
     if camera is not None and not camera.is_active:
         # O'chirilgan kamera: tokenni bekor qilmasdan bitta kamerani
         # to'xtatish yo'li. Agent buni "yaroqsiz" deb qabul qiladi va qayta
@@ -345,7 +358,11 @@ async def _record_and_reply(
         # Filial KAMERAdan olinadi, qurilmadan emas: bitta agent turli
         # filiallardagi kameralarni boqishi mumkin. Kamera hali biriktirilmagan
         # bo'lsa qurilmanikiga qaytamiz — bu eski o'rnatishlarni buzmaydi.
-        branch_id=(camera.branch_id if camera is not None else None) or device.branch_id,
+        branch_id=(
+            (camera.branch_id if camera is not None else None)
+            or device.branch_id
+            or scoped_branch_id(session, device.hotel_id)
+        ),
         camera_id=event.camera_id[:64],
         camera_name=(event.camera_name or None) and event.camera_name[:128],
         location=(event.location or None) and event.location[:128],

@@ -23,6 +23,7 @@ from app.infrastructure.database.repositories.finance_repo import InvoiceReposit
 from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.infrastructure.database.models.service import HotelService
 from app.infrastructure.database.models.hotel import Hotel
+from app.application.services.branch_settings import settings_owner
 from app.application.services.discount_policy import check_discount
 from app.application.services.daily_unit import (
     DEFAULT_DAILY_UNIT,
@@ -79,12 +80,12 @@ def _extend_exception(error: extend_rules.ExtendError):
 
 
 # Bron tahriri (xona almashtirish) uchun vaqt oynasi sozlamasi:
-# hotels.settings JSONB ichida saqlanadi. 0 — cheklovsiz.
+# branches.settings JSONB ichida saqlanadi. 0 — cheklovsiz.
 RESERVATION_EDIT_KEY = "reservation_edit"
 DEFAULT_EDIT_WINDOW_MINUTES = 10
 
 
-# Yangi bandlov sozlamalari (hotels.settings["booking"]) — hamrohlarni
+# Yangi bandlov sozlamalari (branches.settings["booking"]) — hamrohlarni
 # ro'yxatga olish majburiymi. Standart: majburiy emas (avvalgi xatti-harakat).
 BOOKING_SETTINGS_KEY = "booking"
 
@@ -121,7 +122,7 @@ def resolve_edit_window_minutes(hotel_settings: dict | None) -> int:
 #
 # Mehmonxonalar bu masalada bir xil emas: biri to'lovni to'liq qaytaradi,
 # biri jarima ushlab qoladi. Shuning uchun foiz sozlamada saqlanadi
-# (hotels.settings -> cancellation_policy), standarti esa 0 — ya'ni
+# (branches.settings -> cancellation_policy), standarti esa 0 — ya'ni
 # sozlanmagan mehmonxonada pul TO'LIQ qaytariladi. Bu ataylab: tizim
 # o'zboshimchalik bilan mijozning pulini ushlab qolmasligi kerak.
 CANCELLATION_POLICY_KEY = "cancellation_policy"
@@ -403,7 +404,7 @@ class ReservationService:
             # qilinsa funksiya ichida lokal nomga aylanib, administrator
             # yo'lida (import ishlamaganda) quyidagi chegirma qoidasini
             # o'qishni buzardi
-            hotel = await self.session.get(Hotel, hotel_id)
+            hotel = await settings_owner(self.session, hotel_id, getattr(reservation, "branch_id", None))
             window = resolve_edit_window_minutes(hotel.settings if hotel else None)
             if window > 0 and reservation.created_at:
                 created = reservation.created_at
@@ -503,7 +504,7 @@ class ReservationService:
         increase = net_increase(new_charge - old_charge, reservation.discount_percent)
 
         # Ko'chirish chegirmasi — HAMMA o'zgarishdan oldin tekshiriladi
-        policy_hotel = await self.session.get(Hotel, hotel_id)
+        policy_hotel = await settings_owner(self.session, hotel_id, getattr(reservation, "branch_id", None))
         move_rule = resolve_move_discount_settings(
             policy_hotel.settings if policy_hotel else None
         )
@@ -954,7 +955,7 @@ class ReservationService:
         # yoziladi: keyingi qayta hisoblar (ko'chirish, chiqish, hisob-faktura)
         # shu qiymat bilan, sozlama keyin o'zgarsa ham narx o'zgarmaydi.
         # 24 soatlik kunda bir kun = xona narxi × 2 (daily_unit.py)
-        policy_hotel = await self.session.get(Hotel, hotel_id)
+        policy_hotel = await settings_owner(self.session, hotel_id, getattr(room, "branch_id", None))
         daily_unit = (
             DEFAULT_DAILY_UNIT
             if booking_type == "HOURLY"
@@ -1202,7 +1203,7 @@ class ReservationService:
             companions.append({"guest_id": str(gid), "name": name or None})
 
         # Majburiy rejim: xonadagi har bir kishi ro'yxatga olinishi shart
-        hotel = await self.session.get(Hotel, hotel_id)
+        hotel = await settings_owner(self.session, hotel_id)
         if require_all_guests(hotel.settings if hotel else None):
             total = len(companions) + 1
             if total < max(adults, 1):
@@ -1881,7 +1882,7 @@ class ReservationService:
 
         from app.infrastructure.database.models.hotel import Hotel
 
-        hotel = await self.session.get(Hotel, hotel_id)
+        hotel = await settings_owner(self.session, hotel_id, getattr(reservation, "branch_id", None))
         percent = resolve_cancellation_fee_percent(hotel.settings if hotel else None)
         paid = float(reservation.paid_amount or 0)
         refund, fee = compute_cancellation_refund(paid, percent)
@@ -1952,7 +1953,7 @@ class ReservationService:
         paid = float(reservation.paid_amount or 0)
         from app.infrastructure.database.models.hotel import Hotel
 
-        hotel = await self.session.get(Hotel, hotel_id)
+        hotel = await settings_owner(self.session, hotel_id, getattr(reservation, "branch_id", None))
         fee_percent = resolve_cancellation_fee_percent(hotel.settings if hotel else None)
         refund, kept = compute_cancellation_refund(paid, fee_percent, refund_amount)
 

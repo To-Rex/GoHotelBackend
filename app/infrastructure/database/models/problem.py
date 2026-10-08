@@ -7,10 +7,10 @@ from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import FullMixin, BranchScoped
 
 
-class Problem(FullMixin, Base):
+class Problem(BranchScoped, FullMixin, Base):
     __tablename__ = "problems"
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

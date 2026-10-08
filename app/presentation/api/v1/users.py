@@ -29,6 +29,22 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     return hotel_id
 
 
+def _assert_own_branch(current_user: dict, branch_id) -> None:
+    """Filial ichidagi xodim (menejer) faqat O'Z filialiga xodim qo'sha
+    yoki o'tkaza oladi. Administrator — o'z mehmonxonasining istalgan
+    filialiga (filial mehmonxonaniki ekani servisda tekshiriladi)."""
+    if (
+        branch_id is None
+        or current_user.get("user_type") != "EMPLOYEE"
+        or current_user.get("branch_id") is None
+    ):
+        return
+    if str(branch_id) != str(current_user.get("branch_id")):
+        raise ForbiddenException(
+            "Faqat o'z filialingizga xodim qo'sha olasiz", "BRANCH_SCOPE"
+        )
+
+
 @router.get("/", response_model=list[UserResponse])
 async def list_employees(
     status: str | None = Query(default=None),
@@ -63,6 +79,7 @@ async def create_employee(
     )
     if flag_error is not None:
         raise flag_error
+    _assert_own_branch(current_user, data.branch_id)
     service = UserService(session)
     payload = data.model_dump()
     payload["hotel_id"] = h_id
@@ -104,6 +121,7 @@ async def update_employee(
         h_id = _get_hotel_id(current_user)
     if not h_id:
         raise ForbiddenException("Hotel context required")
+    _assert_own_branch(current_user, data.branch_id)
     # Login/parol almashtirish — faqat administrator huquqi
     if (data.username or data.password) and current_user["user_type"] not in (
         "ADMIN",

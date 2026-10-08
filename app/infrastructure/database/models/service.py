@@ -10,16 +10,16 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, UUIDPrimaryKeyMixin
+from app.shared.mixins import FullMixin, UUIDPrimaryKeyMixin, BranchScoped
 
 
 class Service(FullMixin, Base):
@@ -36,15 +36,19 @@ class Service(FullMixin, Base):
     )
 
 
-class HotelService(FullMixin, Base):
+class HotelService(BranchScoped, FullMixin, Base):
     __tablename__ = "hotel_services"
     __table_args__ = (
-        UniqueConstraint("hotel_id", "service_id", name="uq_hotel_services_hotel_svc"),
+        Index("uq_hotel_services_branch_service", "branch_id", "service_id", unique=True),
         CheckConstraint("price >= 0", name="ck_hotel_services_price"),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     service_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("services.id", ondelete="RESTRICT"), nullable=False
@@ -59,7 +63,7 @@ class HotelService(FullMixin, Base):
     )
 
 
-class ReservationService(UUIDPrimaryKeyMixin, Base):
+class ReservationService(BranchScoped, UUIDPrimaryKeyMixin, Base):
     __tablename__ = "reservation_services"
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_reservation_services_qty"),
@@ -67,6 +71,10 @@ class ReservationService(UUIDPrimaryKeyMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     reservation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("reservations.id", ondelete="CASCADE"), nullable=False

@@ -7,9 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.services.hotel_access import assert_hotel_active
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
-from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.shift import ShiftSession
 from app.presentation.middleware.auth import get_current_user
+from app.application.services.branch_settings import settings_owner
 
 
 async def require_active_hotel(
@@ -69,7 +69,7 @@ async def require_open_shift(
 
     from app.application.services.shift_service import resolve_shift_settings
 
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     if resolve_shift_settings(hotel.settings if hotel else None)["mode"] != "cash":
         return
 

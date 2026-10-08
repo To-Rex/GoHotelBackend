@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 from app.application.services import daily_unit as du
 from app.application.services.reservation_service import ReservationService
+from tests._branch_fakes import BranchResult, fake_branch, is_branch_query
 from tests.test_move_discount_policy import (
     ADMIN,
     HOTEL_ID,
@@ -52,6 +53,7 @@ def test_unit_rules():
 class CreateSession:
     def __init__(self, hotel_settings):
         self.hotel = SimpleNamespace(id=HOTEL_ID, settings=hotel_settings, status="ACTIVE")
+        self.branch = fake_branch(HOTEL_ID, hotel_settings)
         self.added = []
 
     async def get(self, model, key):
@@ -68,7 +70,10 @@ class CreateSession:
     async def flush(self):
         return None
 
-    async def execute(self, *_):
+    async def execute(self, statement, *_a, **_k):
+        # Faqat filial (sozlamalar filialda) — boshqa so'rov kutilmaydi
+        if is_branch_query(statement):
+            return BranchResult(self.branch)
         raise AssertionError("kutilmagan so'rov")
 
 

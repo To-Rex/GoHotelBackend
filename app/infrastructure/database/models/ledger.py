@@ -6,24 +6,28 @@ from typing import Optional
 from sqlalchemy import (
     Boolean,
     ForeignKey,
+    Index,
     String,
-    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import LedgerType
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import FullMixin, BranchScoped
 
 
-class Ledger(FullMixin, Base):
+class Ledger(BranchScoped, FullMixin, Base):
     __tablename__ = "ledgers"
     __table_args__ = (
-        UniqueConstraint("hotel_id", "code", name="uq_ledgers_hotel_code"),
+        Index("uq_ledgers_branch_code", "branch_id", "code", unique=True),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     code: Mapped[str] = mapped_column(String(50), nullable=False)

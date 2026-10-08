@@ -4,6 +4,7 @@ import uuid
 from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import BranchStatus
@@ -34,6 +35,10 @@ class Branch(FullMixin, Base):
     #: Xabarchi SMS API kaliti — Fernet bilan shifrlangan (sms_service).
     #: Bo'sh bo'lsa bu filialda SMS yuborilmaydi, boshqa hech narsa o'zgarmaydi.
     sms_api_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Filial sozlamalari (avval `hotels.settings` edi — har filial
+    #: o'zinikini yuritadi). Bo'sh bo'lsa mehmonxona sozlamasi ishlatiladi:
+    #: app/application/services/branch_settings.py
+    settings: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=BranchStatus.ACTIVE.value
     )

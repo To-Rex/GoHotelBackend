@@ -175,9 +175,9 @@ class BlacklistService:
         if not ids:
             return
 
-        from app.infrastructure.database.models.hotel import Hotel
+        from app.application.services.branch_settings import settings_owner
 
-        hotel = await self.session.get(Hotel, hotel_id)
+        hotel = await settings_owner(self.session, hotel_id)
         if not resolve_block_booking(hotel.settings if hotel else None):
             return
 

@@ -12,6 +12,7 @@ from app.application.services.work_hours_access import assert_within_work_hours
 from app.core.database import get_db
 from app.infrastructure.auth.jwt import decode_token
 from app.infrastructure.database.repositories.user_repo import UserRepository, SessionRepository
+from app.infrastructure.tenant.branch_scope import set_branch_scope
 from sqlalchemy.ext.asyncio import AsyncSession
 
 security = HTTPBearer(auto_error=False)
@@ -80,6 +81,21 @@ async def get_current_user(
             hotel_id, device_id, user_type
         )
 
+    # --- Filial: so'rov faqat shu filial ichida ishlaydi ---
+    #
+    # Xodim — HAR DOIM o'z yozuvidagi filial (administrator uni boshqa
+    # filialga o'tkazsa, token yangilanishini kutmay darhol kuchga kiradi).
+    # Administrator / sozlovchi — tokendagi tanlov. Bo'lmasa — asosiy filial.
+    # Shundan keyin sessiyadagi barcha so'rovlar shu filial bilan
+    # cheklanadi (app/infrastructure/tenant/branch_scope.py).
+    branch_id = await resolve_request_branch(
+        session,
+        _safe_uuid(user_id),
+        hotel_id,
+        None if user_type == "EMPLOYEE" else _safe_uuid(payload.get("branch_id")),
+    )
+    set_branch_scope(session, hotel_id, branch_id)
+
     current_user = {
         "id": _safe_uuid(user_id),
         # Mehmonxona tanlagan sozlovchi shu mehmonxonada administrator kabi
@@ -87,7 +103,7 @@ async def get_current_user(
         "user_type": effective_user_type(user_type, hotel_id),
         "actual_user_type": user_type,
         "hotel_id": hotel_id,
-        "branch_id": _safe_uuid(payload.get("branch_id")),
+        "branch_id": branch_id,
         "permissions": payload.get("permissions", []),
         "jti": payload.get("jti", ""),
         "device_id": device_id,
@@ -110,6 +126,50 @@ async def get_current_user(
     )
 
     return current_user
+
+
+async def resolve_request_branch(
+    session: AsyncSession,
+    user_id: UUID | None,
+    hotel_id: UUID | None,
+    token_branch_id: UUID | None,
+) -> UUID | None:
+    """So'rov filiali: tokendagi (shu mehmonxonaniki bo'lsa), aks holda
+    xodim yozuvidagi, u ham bo'lmasa — mehmonxonaning asosiy filiali.
+
+    Filial yozuvi sessiyaga (identity map) yuklanadi — keyin shu so'rovdagi
+    sozlama o'qishlari (branch_settings) bazaga qayta bormaydi.
+    """
+    if hotel_id is None:
+        return None
+    from sqlalchemy import select
+
+    from app.infrastructure.database.models.branch import Branch
+    from app.infrastructure.database.models.user import User
+
+    if token_branch_id is not None:
+        branch = await session.get(Branch, token_branch_id)
+        if branch is not None and str(branch.hotel_id) == str(hotel_id):
+            return branch.id
+    if user_id is not None:
+        own = (
+            await session.execute(
+                select(Branch)
+                .join(User, User.branch_id == Branch.id)
+                .where(User.id == user_id, Branch.hotel_id == hotel_id)
+            )
+        ).scalars().first()
+        if own is not None:
+            return own.id
+    main = (
+        await session.execute(
+            select(Branch)
+            .where(Branch.hotel_id == hotel_id)
+            .order_by(Branch.is_main_branch.desc(), Branch.created_at, Branch.id)
+            .limit(1)
+        )
+    ).scalars().first()
+    return main.id if main is not None else None
 
 
 def require_permission(permission_code: str):

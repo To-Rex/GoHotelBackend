@@ -17,9 +17,10 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
+from app.shared.mixins import BranchShared
 
 
-class VisionCamera(Base):
+class VisionCamera(BranchShared, Base):
     """Bitta kamera va u qaysi filialda turishi.
 
     Nega qurilma (kompyuter) darajasida yetmaydi: bitta agent bir nechta

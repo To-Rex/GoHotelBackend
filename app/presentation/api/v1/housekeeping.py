@@ -16,7 +16,6 @@ from app.application.services.cleaner_assignment import (
 )
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
-from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.application.services.housekeeping_service import (
     HousekeepingService,
@@ -39,6 +38,7 @@ from app.application.services.checklist_template_service import (
 from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel
+from app.application.services.branch_settings import settings_owner
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -198,7 +198,7 @@ async def get_assignment_settings(
 ):
     """Joriy taqsimlash rejimi."""
     h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     return {
         "mode": resolve_assign_mode(hotel.settings if hotel else None),
         "modes": list(ASSIGN_MODES),
@@ -216,7 +216,7 @@ async def save_assignment_settings(
     """Taqsimlash rejimini saqlash — faqat sozlovchi (configurator_access)."""
     assert_can_manage_settings(current_user)
     h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
 
@@ -267,7 +267,7 @@ async def get_auto_complete_settings(
 ):
     """Joriy mehmonxonaning avto-yakunlash sozlamasi (yoqilganmi + vaqtlar)."""
     h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     hotel_settings = (hotel.settings if hotel else {}) or {}
     return _auto_complete_view(hotel_settings)
 
@@ -282,7 +282,7 @@ async def save_auto_complete_settings(
     """Avto-yakunlash vaqtlarini saqlash — faqat sozlovchi (configurator_access)."""
     assert_can_manage_settings(current_user)
     h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
-    hotel = await session.get(Hotel, h_id) if h_id else None
+    hotel = await settings_owner(session, h_id)
     if not hotel:
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
 

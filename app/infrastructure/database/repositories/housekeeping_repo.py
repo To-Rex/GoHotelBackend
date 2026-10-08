@@ -3,9 +3,19 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.repositories.base import TenantBaseRepository
+
+
+#: Javob sxemasi (TaskResponse) xona, mas'ul va filialni o'qiydi — ular
+#: oldindan yuklanadi (asinxron sessiyada keyin yuklab bo'lmaydi)
+_TASK_RELATIONS = (
+    selectinload(HousekeepingTask.room),
+    selectinload(HousekeepingTask.assigned_user),
+    selectinload(HousekeepingTask.branch),
+)
 
 
 class HousekeepingRepository(TenantBaseRepository[HousekeepingTask]):
@@ -35,7 +45,7 @@ class HousekeepingRepository(TenantBaseRepository[HousekeepingTask]):
         skip: int = 0,
         limit: int = 50,
     ) -> list[HousekeepingTask]:
-        stmt = select(HousekeepingTask).where(
+        stmt = select(HousekeepingTask).options(*_TASK_RELATIONS).where(
             HousekeepingTask.assigned_to == user_id,
         )
         if hotel_id is not None:
@@ -57,7 +67,7 @@ class HousekeepingRepository(TenantBaseRepository[HousekeepingTask]):
         skip: int = 0,
         limit: int = 50,
     ) -> list[HousekeepingTask]:
-        stmt = select(HousekeepingTask).where(
+        stmt = select(HousekeepingTask).options(*_TASK_RELATIONS).where(
             HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
         )
         if hotel_id is not None:

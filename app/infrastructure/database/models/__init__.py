@@ -61,3 +61,9 @@ __all__ = [
     "GuestFaceProfile", "FaceSighting", "VisionDevice", "VisionCamera",
     "GuestFeedback",
 ]
+
+# Filial chegarasi: so'rovlar filial bo'yicha filtrlanadi, yangi yozuvga
+# filial yoziladi (app/infrastructure/tenant/branch_scope.py)
+from app.infrastructure.tenant.branch_scope import install_branch_scope  # noqa: E402
+
+install_branch_scope()

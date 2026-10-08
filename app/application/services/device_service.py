@@ -79,6 +79,9 @@ class DeviceService:
         if device is None:
             device = TrustedDevice(
                 hotel_id=user.hotel_id,
+                # Ro'yxatda qurilma xodimning filialida ko'rinadi (tasdiq
+                # esa mehmonxona bo'yicha — filiallar orasida bitta qurilma)
+                branch_id=getattr(user, "branch_id", None),
                 device_id=device_id,
                 status="PENDING",
                 user_agent=user_agent,
@@ -96,6 +99,9 @@ class DeviceService:
             # holatini va kim urinayotganini ko'radi
             device.last_seen_at = now
             device.last_user_id = user.id
+            user_branch = getattr(user, "branch_id", None)
+            if user_branch and getattr(device, "branch_id", None) != user_branch:
+                device.branch_id = user_branch
             if user_agent:
                 device.user_agent = user_agent
             if ip_address:

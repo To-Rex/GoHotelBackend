@@ -1,6 +1,6 @@
 """Ish vaqtidan tashqarida xodimni tizimga qo'ymaslik.
 
-Mehmonxona sozlamasi (`hotels.settings["work_hours"]["enforce"]`) yoqilsa,
+Mehmonxona sozlamasi (`branches.settings["work_hours"]["enforce"]`) yoqilsa,
 oddiy xodim (`EMPLOYEE`) o'z ish vaqti (`work_start`–`work_end`) dan
 tashqarida tizimdan foydalana olmaydi: har bir so'rov 403
 `OUTSIDE_WORK_HOURS` bilan qaytadi va klient "ish vaqtingiz emas" ekranini
@@ -51,7 +51,7 @@ from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.shift import ShiftSession
 from app.infrastructure.database.models.user import User
 
-#: hotels.settings ichidagi kalit
+#: branches.settings ichidagi kalit
 WORK_HOURS_SETTINGS_KEY = "work_hours"
 
 #: Standart — o'chiq: avvalgi xatti-harakat o'zgarmaydi
@@ -229,7 +229,11 @@ async def evaluate_work_hours_block(
     # Mehmonxona yo'q yoki to'xtatilgan — HOTEL_* xatosi ustun
     if hotel is None or (hotel.status or "").upper() != ACTIVE_STATUS:
         return None
-    if not resolve_work_hours_settings(hotel.settings)["enforce"]:
+    # Sozlama — xodim filialiniki (branch_settings)
+    from app.application.services.branch_settings import settings_owner
+
+    owner = await settings_owner(session, hotel_id, getattr(user, "branch_id", None))
+    if not resolve_work_hours_settings(owner.settings if owner else None)["enforce"]:
         return None
 
     if user is not None:

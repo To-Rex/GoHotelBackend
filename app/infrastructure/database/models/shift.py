@@ -9,10 +9,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import FullMixin, BranchScoped
 
 
-class ShiftSession(FullMixin, Base):
+class ShiftSession(BranchScoped, FullMixin, Base):
     """Xodim smenasi + kassa sessiyasi (kassali rejimda).
 
     Pul kassaning emas, SESSIYANING hisobida: har bir xodim o'z sessiyasidagi

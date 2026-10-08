@@ -17,10 +17,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import InvoiceLineType, InvoiceStatus
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, UUIDPrimaryKeyMixin, TimestampMixin
+from app.shared.mixins import FullMixin, UUIDPrimaryKeyMixin, TimestampMixin, BranchScoped
 
 
-class Invoice(FullMixin, Base):
+class Invoice(BranchScoped, FullMixin, Base):
     __tablename__ = "invoices"
     __table_args__ = (
         UniqueConstraint("hotel_id", "invoice_number", name="uq_invoices_hotel_number"),
@@ -28,6 +28,10 @@ class Invoice(FullMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     reservation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("reservations.id", ondelete="RESTRICT"), nullable=False
@@ -71,7 +75,7 @@ class Invoice(FullMixin, Base):
     )
 
 
-class InvoiceLineItem(UUIDPrimaryKeyMixin, Base):
+class InvoiceLineItem(BranchScoped, UUIDPrimaryKeyMixin, Base):
     __tablename__ = "invoice_line_items"
 
     invoice_id: Mapped[uuid.UUID] = mapped_column(
@@ -79,6 +83,10 @@ class InvoiceLineItem(UUIDPrimaryKeyMixin, Base):
     )
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     description: Mapped[str] = mapped_column(String(500), nullable=False)
     line_type: Mapped[str] = mapped_column(String(20), nullable=False)

@@ -19,10 +19,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import BookingType, PaymentStatus, ReservationStatus
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, SoftDeleteMixin
+from app.shared.mixins import FullMixin, SoftDeleteMixin, BranchScoped
 
 
-class Reservation(FullMixin, SoftDeleteMixin, Base):
+class Reservation(BranchScoped, FullMixin, SoftDeleteMixin, Base):
     __tablename__ = "reservations"
     __table_args__ = (
         CheckConstraint("check_out_date > check_in_date", name="ck_reservations_dates"),

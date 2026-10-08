@@ -1,7 +1,7 @@
 """Chegirma qoidalari — mehmonxona sozlamasidan.
 
 Administrator qoidani belgilaydi, qolgan xodimlar shu doirada ishlaydi.
-Qoida `hotels.settings["discount"]` da saqlanadi va bron turi bo'yicha
+Qoida `branches.settings["discount"]` da saqlanadi va bron turi bo'yicha
 alohida bo'ladi: kunlik bronda o'lchov KECHA, soatlikda esa SOAT.
 
 Barcha chegaralarda 0 — "cheklov yo'q" degani. Bu ilovadagi mavjud kelishuv

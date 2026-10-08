@@ -32,6 +32,7 @@ from app.application.services.document_scan_service import (
 from app.application.services.reception_service import ReceptionService
 from app.presentation.api.v1._deps import require_active_hotel
 from app.presentation.middleware.auth import get_current_user
+from app.application.services.branch_settings import settings_owner
 
 logger = logging.getLogger(__name__)
 
@@ -214,10 +215,9 @@ async def submit_document_scan(
 
     # Sozlamadagi skaner rejimi (mrz/visual/auto) telefon skaneriga ham
     # birdek amal qiladi
-    from app.infrastructure.database.models.hotel import Hotel
     from app.presentation.api.v1.guests import _resolve_scan
 
-    hotel = await session.get(Hotel, hotel_id)
+    hotel = await settings_owner(session, hotel_id)
     hotel_settings = hotel.settings if hotel else None
     mode = _resolve_scan(hotel_settings)["mode"]
     document = await intake.run_scan(images, document_type, mode)

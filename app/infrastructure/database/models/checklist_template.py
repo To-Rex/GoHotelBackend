@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import uuid
+from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import FullMixin, BranchScoped
 
 
-class ChecklistTemplate(FullMixin, Base):
+class ChecklistTemplate(BranchScoped, FullMixin, Base):
     """Vazifa turi uchun STANDART ish bandi.
 
     Administrator "xonani tozalash", "shampun va sovunni almashtirish"
@@ -30,6 +31,10 @@ class ChecklistTemplate(FullMixin, Base):
         ForeignKey("hotels.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     #: Qaysi vazifa turiga tegishli: CLEANING, DEEP_CLEANING, MAINTENANCE,
     #: INSPECTION, TURN_DOWN. Har turning o'z ro'yxati bo'ladi — ta'mir

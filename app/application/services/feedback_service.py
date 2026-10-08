@@ -500,6 +500,8 @@ class FeedbackService:
                     User.is_deleted.is_(False),
                     User.status == "ACTIVE",
                     Permission.code == "shift.force_close",
+                    # Faqat shikoyat tushgan filial menejerlari
+                    *((User.branch_id == fb.branch_id,) if fb.branch_id else ()),
                 )
             )
             targets = {row[0] for row in admins.all()} | {row[0] for row in managers.all()}

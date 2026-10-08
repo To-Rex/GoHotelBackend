@@ -16,6 +16,7 @@ import pytest
 from app.application.services import checklist_template_service as cts
 from app.application.services.mobile_tasks_service import MobileTasksService
 from app.core.exceptions import ValidationException
+from tests._branch_fakes import BranchResult, fake_branch, is_branch_query
 
 HOUSEKEEPER = ["room.view", "room.status.update", "housekeeping.task.update"]
 MANAGER = ["shift.force_close", "housekeeping.task.assign", "reservation.create"]
@@ -36,6 +37,8 @@ class FakeSession:
         self.hotel = SimpleNamespace(settings=hotel_settings or {})
 
     async def execute(self, statement):
+        if is_branch_query(statement):  # sozlamalar filialda
+            return BranchResult(fake_branch(None, self.hotel.settings))
         self.statements.append(statement)
         return FakeUpdateResult(self.rowcount)
 

@@ -44,6 +44,11 @@ ADMIN_TYPE = "ADMIN"
 #: Mehmonxona va filialni o'zi tanlay oladiganlar
 CONTEXT_SWITCH_TYPES = (CONFIGURATOR_TYPE, SUPER_ADMIN_TYPE)
 
+#: Faqat O'Z mehmonxonasining filialini tanlay oladiganlar — filiallar
+#: to'liq ajratilgan, boshqa filial ma'lumotini administrator faqat shu
+#: tanlov orqali ko'radi (app/infrastructure/tenant/branch_scope.py)
+BRANCH_SWITCH_TYPES = (ADMIN_TYPE,)
+
 #: Mehmonxona sozlamalarini o'zgartira oladiganlar
 SETTINGS_MANAGER_TYPES = (CONFIGURATOR_TYPE, SUPER_ADMIN_TYPE)
 
@@ -71,6 +76,11 @@ def is_configurator(current_user: dict | None) -> bool:
 
 def can_switch_context(current_user: dict | None) -> bool:
     return actual_user_type(current_user) in CONTEXT_SWITCH_TYPES
+
+
+def can_switch_branch(current_user: dict | None) -> bool:
+    """Filial tanlay oladimi (administrator — o'z mehmonxonasida)."""
+    return can_switch_context(current_user) or actual_user_type(current_user) in BRANCH_SWITCH_TYPES
 
 
 def can_manage_settings(current_user: dict | None) -> bool:

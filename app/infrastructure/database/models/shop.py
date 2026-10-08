@@ -19,10 +19,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin
+from app.shared.mixins import FullMixin, BranchScoped
 
 
-class ShopProduct(FullMixin, Base):
+class ShopProduct(BranchScoped, FullMixin, Base):
     """Do'kon mahsuloti (ichimlik, shirinlik va h.k.) — mehmonxonaga tegishli.
 
     Narx mahsulotda emas, partiyada (ShopBatch) saqlanadi: yangi partiya
@@ -32,11 +32,15 @@ class ShopProduct(FullMixin, Base):
 
     __tablename__ = "shop_products"
     __table_args__ = (
-        Index("uq_shop_products_hotel_name", "hotel_id", "name", unique=True),
+        Index("uq_shop_products_branch_name", "branch_id", "name", unique=True),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     category: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -51,7 +55,7 @@ class ShopProduct(FullMixin, Base):
     )
 
 
-class ShopBatch(FullMixin, Base):
+class ShopBatch(BranchScoped, FullMixin, Base):
     """Mahsulot partiyasi (kirim): miqdor, qoldiq va shu partiyaning narxi."""
 
     __tablename__ = "shop_batches"
@@ -62,6 +66,10 @@ class ShopBatch(FullMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     product_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("shop_products.id", ondelete="CASCADE"), nullable=False, index=True
@@ -78,7 +86,7 @@ class ShopBatch(FullMixin, Base):
     product: Mapped["ShopProduct"] = relationship("ShopProduct", back_populates="batches")
 
 
-class ShopSale(FullMixin, Base):
+class ShopSale(BranchScoped, FullMixin, Base):
     """Sotuv cheki. reservation_id bo'lsa — bron hisobiga yozilgan (PENDING),
     to'lov keyin olinadi; oddiy sotuvda darhol PAID bo'ladi.
 
@@ -90,6 +98,10 @@ class ShopSale(FullMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     reservation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("reservations.id", ondelete="SET NULL"), nullable=True, index=True
@@ -122,7 +134,7 @@ class ShopSale(FullMixin, Base):
     )
 
 
-class ShopSalePayment(Base):
+class ShopSalePayment(BranchScoped, Base):
     """Do'kon savdosi bo'yicha bitta to'lov (qisman yoki to'liq).
 
     Do'kon tushumi va kassa shu jadvaldan hisoblanadi: pul QACHON
@@ -140,6 +152,10 @@ class ShopSalePayment(Base):
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
     )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
+    )
     sale_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("shop_sales.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -152,7 +168,7 @@ class ShopSalePayment(Base):
     )
 
 
-class ShopWriteoff(FullMixin, Base):
+class ShopWriteoff(BranchScoped, FullMixin, Base):
     """Ombor harakati: spisaniye yoki inventarizatsiya tuzatishi.
 
     quantity ISHORALI: musbat — ombordan chiqarilgan (kamomad/spisaniye),
@@ -164,6 +180,10 @@ class ShopWriteoff(FullMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     product_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("shop_products.id", ondelete="CASCADE"), nullable=False, index=True

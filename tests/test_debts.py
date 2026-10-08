@@ -347,7 +347,7 @@ def test_checkout_with_debt_tells_everyone_but_the_person_who_did_it(monkeypatch
     sent = Sent()
     monkeypatch.setattr(reminders, "_send", sent)
 
-    async def fake_recipients(_session, _hotel):
+    async def fake_recipients(_session, _hotel, _branch=None):
         return {CASHIER, uuid.uuid4()}
 
     async def fake_names(_session, _r):

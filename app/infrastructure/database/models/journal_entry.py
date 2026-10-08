@@ -18,10 +18,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import EntryStatus
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, UUIDPrimaryKeyMixin
+from app.shared.mixins import FullMixin, UUIDPrimaryKeyMixin, BranchScoped
 
 
-class JournalEntry(FullMixin, Base):
+class JournalEntry(BranchScoped, FullMixin, Base):
     __tablename__ = "journal_entries"
     __table_args__ = (
         UniqueConstraint("hotel_id", "entry_number", name="uq_journal_entries_hotel_number"),
@@ -29,6 +29,10 @@ class JournalEntry(FullMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     entry_number: Mapped[str] = mapped_column(String(50), nullable=False)
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -62,7 +66,7 @@ class JournalEntry(FullMixin, Base):
     )
 
 
-class JournalEntryLine(UUIDPrimaryKeyMixin, Base):
+class JournalEntryLine(BranchScoped, UUIDPrimaryKeyMixin, Base):
     __tablename__ = "journal_entry_lines"
     __table_args__ = (
         CheckConstraint("debit >= 0", name="ck_journal_entry_lines_debit"),
@@ -78,6 +82,10 @@ class JournalEntryLine(UUIDPrimaryKeyMixin, Base):
     )
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     ledger_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("ledgers.id", ondelete="RESTRICT"), nullable=False

@@ -256,7 +256,7 @@ class HotelPurgeService:
         await self.session.execute(
             text(
                 f"CREATE TEMP TABLE {SHARED_TEMP} (guest_id uuid PRIMARY KEY, "
-                "new_hotel_id uuid NOT NULL) ON COMMIT DROP"
+                "new_hotel_id uuid NOT NULL, new_branch_id uuid) ON COMMIT DROP"
             )
         )
         refs = [
@@ -265,20 +265,24 @@ class HotelPurgeService:
         ]
         if not refs:
             return []
+        branch_tables = await self._tables_with_column("branch_id")
         union = " UNION ALL ".join(
-            f"SELECT {q(fk.child_col)} AS guest_id, {q('hotel_id')} AS hotel_id "
-            f"FROM {q(fk.child)} WHERE {q(fk.child_col)} IS NOT NULL AND {q('hotel_id')} <> :h"
+            f"SELECT {q(fk.child_col)} AS guest_id, {q('hotel_id')} AS hotel_id, "
+            + (f"{q('branch_id')}" if fk.child in branch_tables else "NULL::uuid")
+            + f" AS branch_id FROM {q(fk.child)} "
+            f"WHERE {q(fk.child_col)} IS NOT NULL AND {q('hotel_id')} <> :h"
             for fk in refs
         )
-        # Eng ko'p ishlatgan mehmonxonaga (teng bo'lsa — barqaror tartibda)
+        # Eng ko'p ishlatgan mehmonxona va FILIALiga (teng bo'lsa — barqaror
+        # tartibda): filiallar ajratilgan, mehmon o'sha filial yozuviga aylanadi
         await self.session.execute(
             text(
-                f"INSERT INTO {SHARED_TEMP} (guest_id, new_hotel_id) "
-                "SELECT DISTINCT ON (r.guest_id) r.guest_id, r.hotel_id "
+                f"INSERT INTO {SHARED_TEMP} (guest_id, new_hotel_id, new_branch_id) "
+                "SELECT DISTINCT ON (r.guest_id) r.guest_id, r.hotel_id, r.branch_id "
                 f"FROM ({union}) r JOIN {q(GUESTS)} g ON g.id = r.guest_id "
                 "WHERE g.hotel_id = :h "
-                "GROUP BY r.guest_id, r.hotel_id "
-                "ORDER BY r.guest_id, count(*) DESC, r.hotel_id"
+                "GROUP BY r.guest_id, r.hotel_id, r.branch_id "
+                "ORDER BY r.guest_id, count(*) DESC, r.hotel_id, r.branch_id NULLS LAST"
             ),
             {"h": hotel_id},
         )
@@ -293,13 +297,35 @@ class HotelPurgeService:
         ).all()
         return [{"hotel_id": str(r[0]), "hotel_name": r[1], "guests": int(r[2])} for r in rows]
 
+    async def _tables_with_column(self, column: str) -> set[str]:
+        return set(
+            (
+                await self.session.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND column_name = :c"
+                    ),
+                    {"c": column},
+                )
+            ).scalars().all()
+        )
+
     async def _rehome_guests(self) -> int:
-        result = await self.session.execute(
-            text(
+        if GUESTS in await self._tables_with_column("branch_id"):
+            # Filial: mehmonni ishlatgan yozuvlar filiali, bo'lmasa yangi
+            # mehmonxonaning asosiy filiali
+            sql = (
+                f"UPDATE {q(GUESTS)} g SET hotel_id = s.new_hotel_id, branch_id = COALESCE("
+                "s.new_branch_id, (SELECT b.id FROM branches b WHERE b.hotel_id = s.new_hotel_id "
+                "ORDER BY b.is_main_branch DESC NULLS LAST, b.created_at, b.id LIMIT 1)) "
+                f"FROM {SHARED_TEMP} s WHERE g.id = s.guest_id"
+            )
+        else:
+            sql = (
                 f"UPDATE {q(GUESTS)} g SET hotel_id = s.new_hotel_id "
                 f"FROM {SHARED_TEMP} s WHERE g.id = s.guest_id"
             )
-        )
+        result = await self.session.execute(text(sql))
         return int(result.rowcount or 0)
 
     async def _detach_system_users(self, schema: Schema, hotel_id: UUID) -> list[dict]:

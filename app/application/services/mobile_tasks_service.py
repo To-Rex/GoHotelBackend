@@ -11,7 +11,6 @@ from app.application.services.cleaner_assignment import (
     resolve_assign_mode,
 )
 from app.core.exceptions import NotFoundException, ValidationException
-from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.checklist_item import ChecklistItem
 from app.infrastructure.database.models.room import Room
@@ -49,7 +48,9 @@ class MobileTasksService:
             return False
         if classify_role(permissions) != ROLE_HOUSEKEEPER:
             return False
-        hotel = await self.session.get(Hotel, hotel_id)
+        from app.application.services.branch_settings import settings_owner
+
+        hotel = await settings_owner(self.session, hotel_id)
         return resolve_assign_mode(hotel.settings if hotel else None) == ASSIGN_MODE_CLAIM
 
     async def get_tasks(

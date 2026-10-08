@@ -15,6 +15,7 @@ from app.application.services.reservation_service import (
     ReservationService,
     require_all_guests,
 )
+from tests._branch_fakes import BranchResult, fake_branch, is_branch_query
 
 
 class _Guest:
@@ -43,6 +44,11 @@ class _Session:
             settings = self._settings
 
         return _Hotel()
+
+    async def execute(self, statement, *_a, **_k):
+        # Sozlamalar filialda — mehmonxonaning yagona filiali
+        assert is_branch_query(statement), str(statement)
+        return BranchResult(fake_branch(None, self._settings or {}))
 
 
 def _service(known: set[UUID], hotel_settings=None) -> ReservationService:

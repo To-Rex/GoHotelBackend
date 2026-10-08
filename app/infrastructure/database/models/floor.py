@@ -7,10 +7,10 @@ from sqlalchemy import ForeignKey, Index, SmallInteger, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, SoftDeleteMixin
+from app.shared.mixins import FullMixin, SoftDeleteMixin, BranchScoped
 
 
-class Floor(FullMixin, SoftDeleteMixin, Base):
+class Floor(BranchScoped, FullMixin, SoftDeleteMixin, Base):
     __tablename__ = "floors"
     __table_args__ = (
         # Qavat raqami faqat FAOL qavatlar orasida unikal — arxivga (soft

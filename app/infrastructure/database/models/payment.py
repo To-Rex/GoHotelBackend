@@ -17,10 +17,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import UUIDPrimaryKeyMixin
+from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
-class Payment(UUIDPrimaryKeyMixin, Base):
+class Payment(BranchScoped, UUIDPrimaryKeyMixin, Base):
     __tablename__ = "payments"
     __table_args__ = (
         UniqueConstraint("hotel_id", "payment_number", name="uq_payments_hotel_number"),
@@ -29,6 +29,10 @@ class Payment(UUIDPrimaryKeyMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     invoice_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("invoices.id", ondelete="RESTRICT"), nullable=False

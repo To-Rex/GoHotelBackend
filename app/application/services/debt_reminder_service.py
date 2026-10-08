@@ -42,7 +42,6 @@ from app.application.services.debt_service import (
     reasons_text,
 )
 from app.infrastructure.database.models.guest import Guest
-from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.notification import Notification
 from app.infrastructure.database.models.permission import Permission, UserPermission
 from app.infrastructure.database.models.reservation import Reservation
@@ -91,8 +90,17 @@ def _name(first, last) -> str | None:
     return " ".join(p for p in (first, last) if p).strip() or None
 
 
-async def recipients(session: AsyncSession, hotel_id: UUID) -> set[UUID]:
-    """Administratorlar va to'lov qabul qila oladigan xodimlar."""
+async def recipients(
+    session: AsyncSession, hotel_id: UUID, branch_id: UUID | None = None
+) -> set[UUID]:
+    """Administratorlar va SHU FILIALDA to'lov qabul qila oladigan xodimlar.
+
+    Filial — berilgani yoki so'rov filiali (branch_scope); administratorlar
+    hamma filialni boshqaradi, shuning uchun ular har doim oladi.
+    """
+    from app.infrastructure.tenant.branch_scope import scoped_branch_id
+
+    branch_id = branch_id or scoped_branch_id(session, hotel_id)
     admins = await session.execute(
         select(User.id).where(
             User.hotel_id == hotel_id,
@@ -111,6 +119,7 @@ async def recipients(session: AsyncSession, hotel_id: UUID) -> set[UUID]:
             User.is_deleted.is_(False),
             User.status == "ACTIVE",
             Permission.code == "finance.payment.create",
+            *((User.branch_id == branch_id,) if branch_id else ()),
         )
     )
     return {r[0] for r in admins.all()} | {r[0] for r in cashiers.all()}
@@ -205,7 +214,9 @@ async def notify_checkout_with_debt(
                 "Mehmon ketmasidan to'lovni oling"
             )
             entity_type = TYPE_CLEANER
-        targets = await recipients(session, reservation.hotel_id)
+        targets = await recipients(
+            session, reservation.hotel_id, getattr(reservation, "branch_id", None)
+        )
         if actor_id is not None and event == "acknowledged":
             targets.discard(actor_id)  # o'zi bilib turibdi
         await _send(session, reservation.hotel_id, targets, title, body,
@@ -227,29 +238,46 @@ class DebtReminderService:
         _last_pass = time.monotonic()
         now_local = now_local or local_now()
         stats = {TYPE_LEFT: 0, TYPE_SOON: 0, TYPE_DIGEST: 0}
-        for hotel_id in await self._hotels_with_debt():
-            try:
-                hotel = await self.session.get(Hotel, hotel_id)
-                config = resolve_debt_settings(hotel.settings if hotel else None)
-                if not config["enabled"]:
-                    continue
-                targets = await recipients(self.session, hotel_id)
-                if not targets:
-                    continue
-                stats[TYPE_LEFT] += await self._left(hotel_id, targets, now_local)
-                stats[TYPE_SOON] += await self._soon(hotel_id, targets, now_local)
-                stats[TYPE_DIGEST] += await self._digest(
-                    hotel_id, targets, now_local, config["interval_minutes"]
-                )
-                await self.session.commit()
-            except Exception:
-                await self.session.rollback()
-                logger.exception("Qarz eslatmalari (mehmonxona %s) bajarilmadi", hotel_id)
+        from app.application.services.branch_settings import settings_owner
+        from app.infrastructure.tenant.branch_scope import get_branch_scope, set_branch_scope
+
+        # Har FILIAL alohida: o'z sozlamasi, o'z qarzdorlari, o'z kassirlari.
+        # Filial sessiyaga yoziladi — ichki so'rovlar (bronlar, savdolar,
+        # qarzdorlar ro'yxati, avvalgi xabarlar) shu filial bilan cheklanadi.
+        saved = get_branch_scope(self.session)
+        try:
+            for hotel_id, branch_id in await self._branches_with_debt():
+                try:
+                    set_branch_scope(self.session, hotel_id, branch_id)
+                    owner = await settings_owner(self.session, hotel_id, branch_id)
+                    config = resolve_debt_settings(owner.settings if owner else None)
+                    if not config["enabled"]:
+                        continue
+                    targets = await recipients(self.session, hotel_id, branch_id)
+                    if not targets:
+                        continue
+                    stats[TYPE_LEFT] += await self._left(hotel_id, targets, now_local)
+                    stats[TYPE_SOON] += await self._soon(hotel_id, targets, now_local)
+                    stats[TYPE_DIGEST] += await self._digest(
+                        hotel_id, targets, now_local, config["interval_minutes"]
+                    )
+                    await self.session.commit()
+                except Exception:
+                    await self.session.rollback()
+                    logger.exception(
+                        "Qarz eslatmalari (mehmonxona %s, filial %s) bajarilmadi",
+                        hotel_id, branch_id,
+                    )
+        finally:
+            if saved is None:
+                set_branch_scope(self.session, None, None)
+            else:
+                set_branch_scope(self.session, saved.hotel_id, saved.branch_id)
         return stats
 
-    async def _hotels_with_debt(self) -> list[UUID]:
+    async def _branches_with_debt(self) -> list[tuple[UUID, UUID]]:
         rows = await self.session.execute(
-            select(Reservation.hotel_id)
+            select(Reservation.hotel_id, Reservation.branch_id)
             .where(
                 Reservation.is_deleted.is_(False),
                 or_(
@@ -262,14 +290,14 @@ class DebtReminderService:
             )
             .distinct()
         )
-        hotels = {r[0] for r in rows.all()}
+        pairs = {(r[0], r[1]) for r in rows.all()}
         shop = await self.session.execute(
-            select(ShopSale.hotel_id)
+            select(ShopSale.hotel_id, ShopSale.branch_id)
             .where(ShopSale.status == "PENDING", ShopSale.reservation_id.is_not(None))
             .distinct()
         )
-        hotels |= {r[0] for r in shop.all()}
-        return sorted(hotels, key=str)
+        pairs |= {(r[0], r[1]) for r in shop.all()}
+        return sorted((p for p in pairs if p[1] is not None), key=lambda p: (str(p[0]), str(p[1])))
 
     async def _left(self, hotel_id: UUID, targets: set[UUID], now_local: datetime) -> int:
         since = datetime.now(timezone.utc) - timedelta(hours=LEFT_WINDOW_HOURS)

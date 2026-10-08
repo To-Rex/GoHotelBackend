@@ -26,6 +26,7 @@ from app.application.services.reservation_service import ReservationService
 from app.core.config import settings as app_settings
 from app.core.exceptions import ForbiddenException, ValidationException
 from app.presentation.api.v1 import hotels as hotels_api
+from tests._branch_fakes import BranchResult, fake_branch, is_branch_query
 
 KEY = mdp.MOVE_DISCOUNT_SETTINGS_KEY
 
@@ -167,10 +168,16 @@ PRICES = {OLD_ROOM: 100_000, NEW_ROOM: 150_000, CHEAP_ROOM: 80_000, SAME_ROOM: 1
 class FakeSession:
     def __init__(self, hotel_settings=None):
         self.hotel = SimpleNamespace(id=HOTEL_ID, settings=hotel_settings or {}, status="ACTIVE")
+        # Sozlamalar filialda — mehmonxonaning yagona filiali
+        self.branch = fake_branch(HOTEL_ID, self.hotel.settings)
         self.flushed = 0
 
     async def get(self, model, key):
         return self.hotel if key == HOTEL_ID else None
+
+    async def execute(self, statement, *_a, **_k):
+        assert is_branch_query(statement), str(statement)
+        return BranchResult(self.branch)
 
     async def flush(self):
         self.flushed += 1
@@ -610,7 +617,7 @@ def test_settings_api_round_trip_and_configurator_only():
     saved = asyncio.run(hotels_api.save_move_discount_settings(body, session=session, current_user=configurator))
     assert saved == {"enabled": True, "max_percent": 30.0, "max_amount": 50_000.0}
     # Boshqa sozlamalarga tegilmaydi
-    assert session.hotel.settings["discount"] == {"daily": {"max_percent": 5}}
+    assert session.branch.settings["discount"] == {"daily": {"max_percent": 5}}
     assert asyncio.run(
         hotels_api.get_move_discount_settings(session=session, current_user=employee)
     ) == saved

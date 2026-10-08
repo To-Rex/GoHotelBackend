@@ -14,7 +14,7 @@ Qoidalar:
   qatorlari yo'q bo'lsa qo'shadi (`ensure_penalty_lines`).
 * O'chirilmaydi — bekor qilinadi (kim, qachon, nima uchun). Bekor qilishni
   faqat administrator yoki menejer (`shift.force_close`) qiladi.
-* Kech chiqish summasi uchun sozlama (`hotels.settings["penalty"]`):
+* Kech chiqish summasi uchun sozlama (`branches.settings["penalty"]`):
   soatiga summa (0 — o'chiq) va imtiyozli daqiqalar. Server taklif qiladi,
   xodim summani o'zgartira oladi.
 """
@@ -30,7 +30,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.guest import Guest
-from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.reservation_penalty import ReservationPenalty
@@ -273,7 +272,9 @@ class ReservationPenaltyService:
             ).scalars().all()
         )
         names = await self._names({r.created_by for r in rows} | {r.voided_by for r in rows})
-        hotel = await self.session.get(Hotel, hotel_id)
+        from app.application.services.branch_settings import settings_owner
+
+        hotel = await settings_owner(self.session, hotel_id)
         rules = resolve_penalty_settings(hotel.settings if hotel else None)
         return {
             "items": [self._serialize(r, names) for r in rows],

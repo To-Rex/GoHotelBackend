@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictException, ForbiddenException, NotFoundException
+from app.core.exceptions import (
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
 from app.infrastructure.auth.password import hash_password
 from app.infrastructure.database.models.permission import Permission
 from app.infrastructure.database.models.user import User
@@ -34,10 +39,21 @@ class UserService:
         )
         return await self.repo.create(user)
 
+    async def _assert_branch_of_hotel(self, branch_id, hotel_id) -> None:
+        """Xodim faqat o'z mehmonxonasining filialiga biriktiriladi."""
+        from app.infrastructure.database.models.branch import Branch
+
+        branch = await self.session.get(Branch, branch_id) if branch_id else None
+        if branch is None or str(branch.hotel_id) != str(hotel_id):
+            raise ValidationException(
+                "Filial bu mehmonxonaga tegishli emas", "BRANCH_NOT_IN_HOTEL"
+            )
+
     async def create_employee(self, data: dict) -> User:
         existing = await self.repo.get_by_username(data["username"])
         if existing:
             raise ConflictException("Username already exists", "USERNAME_EXISTS")
+        await self._assert_branch_of_hotel(data.get("branch_id"), data["hotel_id"])
 
         user = User(
             user_type="EMPLOYEE",
@@ -98,6 +114,8 @@ class UserService:
             "allow_outside_work_hours",
         ]
         update_data = {k: v for k, v in data.items() if k in updatable and v is not None}
+        if "branch_id" in update_data and str(update_data["branch_id"]) != str(user.branch_id):
+            await self._assert_branch_of_hotel(update_data["branch_id"], user.hotel_id)
         return await self.repo.update(user, **update_data)
 
     async def delete_employee(self, user_id: UUID, hotel_id: UUID) -> User:

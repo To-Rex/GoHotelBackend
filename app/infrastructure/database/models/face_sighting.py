@@ -19,9 +19,10 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
+from app.shared.mixins import BranchScoped, BranchShared
 
 
-class FaceSighting(Base):
+class FaceSighting(BranchScoped, Base):
     """Kamera ko'rgan bitta odam — qabulxona paneli uchun hodisa.
 
     Bir yozuv = bir track = bir odamning kamera oldida turgan bir epizodi,
@@ -112,7 +113,7 @@ class FaceSighting(Base):
         return self.status == "recognized" and self.guest_id is not None
 
 
-class VisionDevice(Base):
+class VisionDevice(BranchShared, Base):
     """Kamera agenti o'rnatilgan kompyuter — foydalanuvchi emas, qurilma.
 
     Agent xodim tokeni bilan ishlay olmaydi: JWT ikki soatda tugaydi, agent

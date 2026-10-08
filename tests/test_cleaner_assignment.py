@@ -205,10 +205,16 @@ def test_same_branch_preferred_even_if_busier():
     assert pick_cleaner([here, there], BRANCH) == here.user_id
 
 
-def test_other_branch_used_when_own_branch_has_no_cleaner():
+def test_other_branch_cleaner_is_never_used():
+    """Filiallar ajratilgan: o'z filialida farrosh bo'lmasa vazifa boshqa
+    filial farroshiga ketmaydi — biriktirilmay qoladi (o'z filialining
+    farroshi ishga kelganda rejalashtiruvchi biriktiradi)."""
     there = cand(HOUSEKEEPER, active=0, branch=OTHER_BRANCH)
     manager_here = cand(MANAGER, active=0, branch=BRANCH)
-    assert pick_cleaner([there, manager_here], BRANCH) == there.user_id
+    assert pick_cleaner([there, manager_here], BRANCH) == manager_here.user_id
+    assert pick_cleaner([there], BRANCH) is None
+    # Filial noma'lum (eski chaqiruv) — avvalgidek hammasi
+    assert pick_cleaner([there], None) == there.user_id
 
 
 # ------------------------------------------------------------- ish vaqti --

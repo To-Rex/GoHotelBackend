@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -139,6 +139,17 @@ class EstateService:
             status=(data.get("status") or "ACTIVE").upper(),
         )
         self.session.add(hotel)
+        await self.session.flush()
+        # Har mehmonxona kamida bitta (asosiy) filial bilan: ma'lumot doim
+        # biror filialga tegishli bo'ladi (filiallar ajratilgan)
+        from app.application.services.branch_provisioning import provision_branch
+
+        main = Branch(
+            hotel_id=hotel.id, name="Asosiy filial", code="MAIN",
+            is_main_branch=True, status="ACTIVE",
+        )
+        self.session.add(main)
+        await provision_branch(self.session, main)
         await self.session.flush()
         await self.session.refresh(hotel)
         return self._hotel_dict(hotel, full=True)
@@ -269,6 +280,11 @@ class EstateService:
             is_main_branch=bool(data.get("is_main_branch", False)),
         )
         self.session.add(branch)
+        # Yangi filial asosiy filialning sozlama va kataloglari bilan
+        # boshlanadi — darhol ishlay oladi (branch_provisioning)
+        from app.application.services.branch_provisioning import provision_branch
+
+        await provision_branch(self.session, branch)
         await self.session.flush()
         await self.session.refresh(branch)
         return self._branch_dict(branch)
@@ -310,6 +326,26 @@ class EstateService:
                 f"Filialda {rooms} ta xona bor — avval ularni ko'chiring",
                 "BRANCH_NOT_EMPTY",
             )
+        # Filiallar ajratilgan: unda ish ma'lumoti (mehmon, bron, to'lov,
+        # xodim...) bo'lsa o'chirilmaydi; faqat nusxalangan kataloglari
+        # bo'lsa — ular bilan birga o'chadi
+        from app.application.services.branch_provisioning import (
+            branch_usage,
+            drop_branch_catalogs,
+        )
+
+        usage = await branch_usage(self.session, branch.id)
+        if usage:
+            where = ", ".join(f"{t} ({n})" for t, n in usage.items())
+            raise ConflictException(
+                f"Filialda ma'lumot bor — o'chirib bo'lmaydi: {where}",
+                "BRANCH_NOT_EMPTY",
+            )
+        await drop_branch_catalogs(self.session, branch.id)
+        # O'chirilgan (arxivdagi) xodimlar filialga bog'lanib qolmasin
+        await self.session.execute(
+            update(User).where(User.branch_id == branch.id).values(branch_id=None)
+        )
         await self.session.delete(branch)
         await self.session.flush()
 

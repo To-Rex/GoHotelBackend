@@ -8,10 +8,10 @@ from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Numeric, Str
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import UUIDPrimaryKeyMixin
+from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
-class ReservationPenalty(UUIDPrimaryKeyMixin, Base):
+class ReservationPenalty(BranchScoped, UUIDPrimaryKeyMixin, Base):
     """Bron bo'yicha jarima: kech chiqish, shikast (buzilgan narsa) yoki boshqa.
 
     Jarima bron summasiga DARHOL qo'shiladi (`reservations.penalty_amount`)
@@ -30,6 +30,10 @@ class ReservationPenalty(UUIDPrimaryKeyMixin, Base):
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True
     )
     reservation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("reservations.id", ondelete="CASCADE"), nullable=False, index=True
