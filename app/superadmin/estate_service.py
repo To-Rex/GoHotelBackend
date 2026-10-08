@@ -393,6 +393,14 @@ class EstateService:
             .scalars()
             .all()
         )
+        # Filial nomlari (filiallar ajratilgan — xodim qaysi filialda ishlashi ko'rinsin)
+        branches = dict(
+            (
+                await self.session.execute(
+                    select(Branch.id, Branch.name).where(Branch.hotel_id == hotel_id)
+                )
+            ).all()
+        )
         return [
             {
                 "id": str(u.id),
@@ -403,12 +411,30 @@ class EstateService:
                 "status": u.status,
                 "email": u.email,
                 "phone": u.phone,
+                "branch_id": str(u.branch_id) if u.branch_id else None,
+                "branch_name": branches.get(u.branch_id),
                 "last_login_at": (
                     u.last_login_at.isoformat() if u.last_login_at else None
                 ),
             }
             for u in rows
         ]
+
+    async def move_staff_to_branch(self, user_id: UUID, branch_id: UUID) -> dict:
+        """Xodimni o'z mehmonxonasining boshqa filialiga o'tkazish.
+
+        Filiallar ajratilgan: xodim keyingi so'rovidanoq yangi filialda
+        ishlaydi (so'rov filiali har safar xodim yozuvidan olinadi).
+        """
+        user = await self.session.get(User, user_id)
+        if user is None or user.is_deleted or user.hotel_id is None:
+            raise NotFoundException("Xodim topilmadi", "USER_NOT_FOUND")
+        branch = await self.session.get(Branch, branch_id)
+        if branch is None or branch.hotel_id != user.hotel_id:
+            raise ValidationException("Filial bu mehmonxonaga tegishli emas", "BRANCH_NOT_IN_HOTEL")
+        user.branch_id = branch.id
+        await self.session.flush()
+        return {"id": str(user.id), "branch_id": str(branch.id), "branch_name": branch.name}
 
     async def create_staff(self, hotel_id: UUID, data: dict) -> dict:
         """Mehmonxonaga xodim qo'shish.
@@ -516,6 +542,8 @@ class EstateService:
         }
 
     async def list_configurators(self) -> list[dict]:
+        from app.superadmin.enter_service import HIDDEN_PREFIX
+
         rows = (
             (
                 await self.session.execute(
@@ -523,6 +551,8 @@ class EstateService:
                     .where(
                         User.user_type == "CONFIGURATOR",
                         User.is_deleted.is_(False),
+                        # Panelning yashirin "kirish" hisoblari ko'rinmaydi
+                        ~User.username.like(f"{HIDDEN_PREFIX}%"),
                     )
                     .order_by(User.first_name, User.username)
                 )

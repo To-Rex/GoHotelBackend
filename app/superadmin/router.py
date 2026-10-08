@@ -25,7 +25,10 @@ from app.application.services.app_store_service import AppStoreService
 from app.application.services import app_upload_service
 from app.application.services.app_upload_service import AppUploadService
 from app.presentation.api.v1.apps import download_headers
+from app.superadmin.broadcast_service import BroadcastService
+from app.superadmin.enter_service import EnterService
 from app.superadmin.estate_service import EstateService
+from app.superadmin.system_service import SystemService
 from app.superadmin.hotel_purge_service import HotelPurgeService
 from app.superadmin.insight_service import InsightService
 from app.infrastructure.push import firebase as push_firebase
@@ -310,6 +313,29 @@ async def purge_hotel(
     return await HotelPurgeService(session).purge(hotel_id, actor=who)
 
 
+class EnterRequest(BaseModel):
+    branch_id: UUID | None = None
+
+
+@router.post("/hotels/{hotel_id}/enter")
+async def enter_hotel(
+    data: EnterRequest,
+    request: Request,
+    hotel_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    actor: PanelUser = Depends(current_panel_user),
+):
+    """Asosiy tizimni shu mehmonxona/filialda sozlovchi huquqida ochish uchun
+    token juftligi (enter_service). Filial berilmasa — asosiysi."""
+    return await EnterService(session).enter(
+        actor,
+        hotel_id,
+        data.branch_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
+
 @router.get("/hotels/{hotel_id}/branches")
 async def list_branches(
     hotel_id: UUID = Path(),
@@ -370,6 +396,21 @@ async def set_staff_status(
     _: PanelUser = Depends(current_panel_user),
 ):
     return await EstateService(session).set_user_status(user_id, data.status)
+
+
+class StaffBranchRequest(BaseModel):
+    branch_id: UUID
+
+
+@router.patch("/staff/{user_id}/branch")
+async def move_staff_branch(
+    data: StaffBranchRequest,
+    user_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Xodimni o'z mehmonxonasining boshqa filialiga o'tkazish."""
+    return await EstateService(session).move_staff_to_branch(user_id, data.branch_id)
 
 
 @router.post("/staff/{user_id}/password")
@@ -522,6 +563,48 @@ async def guests(
 ):
     """Mehmonlar bazasi — barcha mehmonxonalar uchun umumiy."""
     return await InsightService(session).guests(search=search, limit=limit)
+
+
+# ------------------------------------------------------ tizim holati --
+
+
+@router.get("/system")
+async def system_status(
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Baza, MinIO, push, rejalashtiruvchi, versiya — bir qarashda."""
+    return await SystemService(session).snapshot()
+
+
+# ------------------------------------------------------------- e'lon --
+
+
+class BroadcastRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    body: str | None = Field(default=None, max_length=2000)
+    audience: str = Field(default="admins", max_length=20)
+    hotel_id: UUID | None = None
+    branch_id: UUID | None = None
+    send_push: bool = True
+
+
+@router.post("/broadcast")
+async def broadcast(
+    data: BroadcastRequest,
+    session: AsyncSession = Depends(get_db),
+    actor: PanelUser = Depends(current_panel_user),
+):
+    """E'lon: barcha mehmonxonalarga yoki tanlangan mehmonxona/filialga."""
+    return await BroadcastService(session).send(
+        title=data.title,
+        body=data.body,
+        audience=data.audience,
+        hotel_id=data.hotel_id,
+        branch_id=data.branch_id,
+        send_push=data.send_push,
+        actor=f"{actor.label or security.ROOT_LABEL} ({actor.id})",
+    )
 
 
 # -------------------------------------------------- dasturlar do'koni --

@@ -162,6 +162,11 @@ class PanelAuthService:
                 "Tizim egasining hisobini o'chirib bo'lmaydi", "ROOT_PROTECTED"
             )
         row.is_active = active
+        if not active:
+            # Uning nomidan asosiy tizimga kirgan yashirin sozlovchi ham to'xtaydi
+            from app.superadmin.enter_service import EnterService
+
+            await EnterService(self.session).disable_for(row.id)
         await self.session.flush()
         return self._as_dict(row)
 
@@ -172,6 +177,9 @@ class PanelAuthService:
             raise ForbiddenException(
                 "Tizim egasining hisobini o'chirib bo'lmaydi", "ROOT_PROTECTED"
             )
+        from app.superadmin.enter_service import EnterService
+
+        await EnterService(self.session).disable_for(row.id)
         await self.session.delete(row)
         await self.session.flush()
 

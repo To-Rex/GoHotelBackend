@@ -146,6 +146,22 @@ What it means for the API:
 
 ---
 
+### Superadmin panel: full control
+
+**POST /superadmin/hotels/{id}/enter** — open the main app in a hotel/branch
+
+- Auth: panel token. Body: `{"branch_id": "uuid | null"}` (default — the main branch; another hotel's branch → 422 `BRANCH_NOT_IN_HOTEL`).
+- The panel user gets a hidden `CONFIGURATOR` account in `users` (username `panel__<id>`, unusable password, excluded from `/superadmin/configurators`). The response is a main-app token pair for that account with the chosen hotel/branch in the claims (as after `POST /auth/context`), plus the `/auth/me` profile: `{"access_token", "refresh_token", "user": {...}, "hotel": {"id", "name", "code"}}`. The panel writes them to the browser storage and opens the main app in a new tab — everything a configurator can do (settings, rooms, staff, permissions, cameras, shop…) becomes available without re-implementing it in the panel.
+- Deactivating or deleting the panel user deactivates the hidden account and revokes its sessions (configurator tokens are checked against the session on every request, so they stop working immediately).
+
+**PATCH /superadmin/staff/{id}/branch** — `{"branch_id"}`: move an employee to another branch of the same hotel (422 `BRANCH_NOT_IN_HOTEL`). Takes effect on the employee's next request. `GET /superadmin/hotels/{id}/users` items now carry `branch_id` and `branch_name`.
+
+**GET /superadmin/system** — `{"app": {version, env, uptime_seconds, server_time, tz_offset_minutes}, "database": {ok, version, size, connections, migration, counts, open_shifts, live_sessions}, "storage": {ok, endpoint, buckets}, "push": {ok, project_id, panel_key_stored, …}, "scheduler": {auto_checkout_enabled, interval_seconds, grace_minutes, running}}`. Never fails as a whole: a component that is unreachable reports `ok: false` with `error`.
+
+**POST /superadmin/broadcast** — `{"title", "body"?, "audience": "admins" | "staff", "hotel_id"?, "branch_id"?, "send_push": true}`. Without `hotel_id` — every active hotel; `branch_id` needs `hotel_id` (422 `HOTEL_REQUIRED`). `admins` → the hotel's `ADMIN`s; `staff` → the branch's active employees plus the admins. One notification (`entity_type = "announcement"`) per recipient, written inside the branch; an admin receives it once even with several branches. Response: `{"hotels", "recipients", "push"}`.
+
+---
+
 ### Superadmin panel: app store — chunked upload
 
 `POST /superadmin/apps` (multipart, whole file in one request) still works, but a request whose body takes longer than the proxy's read timeout (Traefik v3 default 60 s) is cut with 504 — a 93 MB APK needs ≥ 1.5 MB/s. The panel therefore uploads in chunks; every request is short, a failed chunk is retried, progress is reported.

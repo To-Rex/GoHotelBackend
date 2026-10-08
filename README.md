@@ -356,6 +356,28 @@ endpointi ikki filial xodimi va filial almashtirgan administrator nomidan:
 boshqa filialning birorta ID'si chiqmasligi), `tests/test_branch_provisioning.py`.
 Uchalasi `GOHOTEL_TEST_PG_URL` (lokal test bazasi) bilan ishlaydi.
 
+### Boshqaruv paneli: to'liq boshqaruv
+
+Panel egasi hamma narsani paneldan boshqaradi:
+
+- **Mehmonxonaga kirish** (Mehmonxonalar → "Kirish", filial kartasida
+  "Kirish" / "Sozlamalar"): asosiy tizim shu mehmonxona/filialda sozlovchi
+  huquqida yangi oynada ochiladi (`app/superadmin/enter_service.py`). Har
+  panel foydalanuvchisi uchun asosiy tizimda yashirin `CONFIGURATOR` hisobi
+  (`panel__<id>`, parol bilan kirib bo'lmaydi, sozlovchilar ro'yxatida
+  ko'rinmaydi) yuritiladi; token sozlovchi `POST /auth/context` qilgandek
+  beriladi. Panel foydalanuvchisi to'xtatilsa/o'chirilsa yashirin hisob
+  ham to'xtaydi, sessiyalari yopiladi.
+- **Xodimni filialga o'tkazish** — mehmonxona sahifasi, Xodimlar jadvali
+  (`PATCH /superadmin/staff/{id}/branch`).
+- **Tizim holati** (`GET /superadmin/system`): baza, MinIO, push,
+  rejalashtiruvchi, versiya, yozuvlar soni.
+- **E'lonlar** (`POST /superadmin/broadcast`): barcha mehmonxonalarga yoki
+  tanlangan mehmonxona/filialga — administratorlarga yoki barcha xodimlarga,
+  bildirishnoma + push (`app/superadmin/broadcast_service.py`).
+
+Test: `GOHOTEL_TEST_PG_URL=... pytest tests/test_panel_control.py`.
+
 ### Dasturlar do'koni: bo'laklab yuklash (boshqaruv paneli)
 
 Panel → Ilovalar. O'rnatish fayllari katta (APK ~100 MB); bitta so'rovda
