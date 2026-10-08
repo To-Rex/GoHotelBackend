@@ -5,7 +5,9 @@ qabulxona telefoni (`/reception/scans`). Rasmni o'qish, hajm chegarasi,
 bir vaqtda ishlaydigan skanerlar soni va xato matnlari ikkalasida ham
 bir xil bo'lishi kerak — shuning uchun ular shu yerda, bitta joyda.
 
-Rasm SAQLANMAYDI: faqat xotirada o'qiladi va javob qaytgach yo'qoladi.
+OCR rasmni faqat xotirada o'qiydi. Hujjat suratini saqlash — alohida
+qadam (`document_images.py`): qabulxona telefoni skanida va vebda mehmon
+yaratilgach/tanlangach.
 """
 from __future__ import annotations
 

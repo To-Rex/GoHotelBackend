@@ -74,8 +74,10 @@ HOTEL_SCOPED_TABLES = [
 ]
 
 # Faqat operatsion fayllar; mehmonxonaning o'z fayllari ('Hotel') va
-# mehmon hujjatlari ('guest' — mehmon bilan birga yashaydi) saqlanadi
-FILE_ENTITY_TYPES = ["task", "task_report", "problem"]
+# mehmon hujjatlari ('guest' — mehmon bilan birga yashaydi) saqlanadi.
+# 'document_scan' — o'chiriladigan skan yozuvlariga biriktirilgan surat
+# qatorlari; mehmonga bog'langan nusxasi ('guest') qoladi.
+FILE_ENTITY_TYPES = ["task", "task_report", "problem", "document_scan"]
 
 
 class MaintenanceService:

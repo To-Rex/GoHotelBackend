@@ -16,7 +16,9 @@ Ikki qaror shu faylda:
    maydonlari o'qilgan holda bandlov oynasiga tushadi va xodim ularni
    qaytadan terib o'tirmaydi.
 
-Rasm saqlanmaydi (`document_scan` modelidagi izohga qarang).
+Hujjat SURATI bu jadvalda emas: u MinIO'da, `file_attachments` orqali
+skan yozuviga (`entity_type="document_scan"`) va mehmonga biriktiriladi
+(`document_images.py`).
 """
 from __future__ import annotations
 
@@ -205,6 +207,53 @@ class DocumentScanService:
             scan.acknowledged_by = user_id
             await self.session.flush()
         return self._as_dict(scan)
+
+    async def link_guest(self, scan_id: UUID, hotel_id: UUID, guest_id: UUID) -> dict:
+        """Skanni (va uning suratlarini) mehmonga bog'laydi.
+
+        Skanda mehmon bo'lmasa — shu mehmon yoziladi. Boshqa mehmon allaqachon
+        yozilgan bo'lsa u o'zgarmaydi (xodim boshqasini tanlagan bo'lishi
+        mumkin), lekin surat tanlangan mehmonga baribir biriktiriladi.
+        """
+        from app.application.services import document_images
+
+        scan = (
+            await self.session.execute(
+                select(DocumentScan).where(
+                    DocumentScan.id == scan_id,
+                    DocumentScan.hotel_id == hotel_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if scan is None:
+            raise NotFoundException("Skaner yozuvi topilmadi", "SCAN_NOT_FOUND")
+        guest = await self.session.get(Guest, guest_id)
+        if guest is None or getattr(guest, "is_deleted", False):
+            raise NotFoundException("Guest not found", "GUEST_NOT_FOUND")
+        if scan.guest_id is None:
+            scan.guest_id = guest.id
+            scan.guest_name = (
+                f"{guest.first_name or ''} {guest.last_name or ''}".strip() or None
+            )
+        attachments = await document_images.attachments_of(
+            self.session,
+            hotel_id=hotel_id,
+            entity_type=document_images.ENTITY_SCAN,
+            entity_id=scan.id,
+        )
+        linked = await document_images.link_to_guest(
+            self.session,
+            hotel_id=hotel_id,
+            attachments=list(attachments),
+            guest_id=guest.id,
+        )
+        await self.session.flush()
+        return {
+            "scan_id": str(scan.id),
+            "guest_id": str(guest.id),
+            "images": len(attachments),
+            "linked": len(linked),
+        }
 
     @staticmethod
     def _as_dict(scan: DocumentScan, duplicate: bool = False) -> dict:

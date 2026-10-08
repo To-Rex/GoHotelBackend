@@ -34,7 +34,9 @@ def get_minio_client() -> Minio:
 
 
 async def upload_file(bucket: str, object_path: str, data: bytes, content_type: str) -> str:
-    client = get_minio_client()
+    # Birinchi chaqiruvda bucket tekshiruvi tarmoqqa chiqadi — alohida
+    # oqimda, aks holda MinIO sekin bo'lsa butun server kutib qolardi
+    client = await asyncio.to_thread(get_minio_client)
     file_stream = io.BytesIO(data)
     try:
         await asyncio.to_thread(

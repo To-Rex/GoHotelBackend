@@ -29,9 +29,9 @@ class DocumentScan(UUIDPrimaryKeyMixin, Base):
       raqam bor, bu yerda hujjat maydonlari — ikkalasi ham bir-biriga
       bo'sh ustun qo'shardi.
 
-    RASM SAQLANMAYDI. Faqat o'qilgan maydonlar yoziladi: hujjat surati
-    shaxsiy ma'lumot va uni qabulxona oynasi uchun saqlashning hojati
-    yo'q.
+    Bu jadvalda faqat o'qilgan maydonlar. Hujjat SURATI MinIO'da turadi va
+    `file_attachments` orqali shu yozuvga (`entity_type="document_scan"`)
+    hamda mehmonga biriktiriladi — `document_images.py` ga qarang.
     """
 
     __tablename__ = "document_scans"

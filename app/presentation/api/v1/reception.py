@@ -7,6 +7,7 @@ mehmon bilan xonani alohida so'rab o'tirmaydi.
 Ruxsat: bron ko'rish huquqi bo'lgan xodim (`reservation.read`) yoki
 administrator. Farrosh bu bo'limni ko'rmaydi.
 """
+import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
@@ -22,6 +23,7 @@ from app.application.services.incoming_call_service import (
     DEFAULT_WINDOW_MINUTES,
     IncomingCallService,
 )
+from app.application.services import document_images
 from app.application.services.document_ocr import intake
 from app.application.services.document_scan_service import (
     DEFAULT_WINDOW_MINUTES as SCAN_WINDOW_MINUTES,
@@ -30,6 +32,8 @@ from app.application.services.document_scan_service import (
 from app.application.services.reception_service import ReceptionService
 from app.presentation.api.v1._deps import require_active_hotel
 from app.presentation.middleware.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -192,7 +196,10 @@ async def submit_document_scan(
     shundagina old tomondagi bosma ma'lumot orqadagi MRZ bilan
     solishtiriladi. Passport uchun bitta sahifa yetarli.
 
-    Rasm saqlanmaydi — javob qaytgach yo'qoladi.
+    Hujjat surati MinIO'ga saqlanadi (skaner sozlamasida `store_images`
+    yoqiq bo'lsa, standart — ha) va skan yozuviga, mehmon topilgan bo'lsa
+    mehmon kartasiga ham biriktiriladi. Saqlash skanerni to'xtatmaydi:
+    fayl ombori ishlamasa natija baribir qaytadi (`images_saved: 0`).
     """
     hotel_id = _require_reception(current_user)
     intake.require_server_ocr()
@@ -211,14 +218,78 @@ async def submit_document_scan(
     from app.presentation.api.v1.guests import _resolve_scan
 
     hotel = await session.get(Hotel, hotel_id)
-    mode = _resolve_scan(hotel.settings if hotel else None)["mode"]
+    hotel_settings = hotel.settings if hotel else None
+    mode = _resolve_scan(hotel_settings)["mode"]
     document = await intake.run_scan(images, document_type, mode)
-    return await DocumentScanService(session).record(
+    result = await DocumentScanService(session).record(
         hotel_id,
         document,
         scanned_by=current_user.get("id"),
         device_id=device_id or current_user.get("device_id"),
     )
+    result["images_saved"] = await _store_scan_images(
+        session,
+        hotel_id=hotel_id,
+        hotel_settings=hotel_settings,
+        scan=result,
+        images=images,
+        document_type=document_type,
+        user_id=current_user["id"],
+    )
+    return result
+
+
+async def _store_scan_images(
+    session: AsyncSession,
+    *,
+    hotel_id: UUID,
+    hotel_settings: dict | None,
+    scan: dict,
+    images: dict[str, bytes],
+    document_type: str,
+    user_id,
+) -> int:
+    """Skan suratini saqlaydi; nechta surat saqlangani qaytadi.
+
+    Takror skanda (bir xil hujjat 90 soniya ichida) yangi nusxa yozilmaydi
+    — oldingi skanning surati bor bo'lsa o'sha yetarli. Hamma narsa
+    SAVEPOINT ichida: xato bo'lsa faqat suratlar yozilmaydi, skan esa
+    qabulxonaga baribir yetib boradi.
+    """
+    if not images or not document_images.store_enabled(hotel_settings):
+        return 0
+    try:
+        scan_id = UUID(str(scan["id"]))
+        async with session.begin_nested():
+            if scan.get("duplicate"):
+                existing = await document_images.attachments_of(
+                    session,
+                    hotel_id=hotel_id,
+                    entity_type=document_images.ENTITY_SCAN,
+                    entity_id=scan_id,
+                )
+                if existing:
+                    return len(existing)
+            stored = await document_images.store_images(
+                session,
+                hotel_id=hotel_id,
+                images=images,
+                entity_type=document_images.ENTITY_SCAN,
+                entity_id=scan_id,
+                uploaded_by=user_id,
+                document_type=document_type,
+            )
+            if stored and scan.get("guest_id"):
+                await document_images.link_to_guest(
+                    session,
+                    hotel_id=hotel_id,
+                    attachments=stored,
+                    guest_id=UUID(str(scan["guest_id"])),
+                )
+            return len(stored)
+    except Exception:  # noqa: BLE001 — surat saqlanmasa ham skaner ishlaydi
+        logger.exception("Skan suratini saqlab bo'lmadi (scan %s)", scan.get("id"))
+        return 0
 
 
 @router.get("/scans")
@@ -236,6 +307,29 @@ async def list_document_scans(
         minutes=minutes,
         include_acknowledged=include_acknowledged,
         limit=limit,
+    )
+
+
+class ScanLinkGuestRequest(BaseModel):
+    guest_id: UUID
+
+
+@router.post("/scans/{scan_id}/link-guest")
+async def link_document_scan_to_guest(
+    data: ScanLinkGuestRequest,
+    scan_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Skan suratini mehmon kartasiga biriktiradi.
+
+    Telefonda skanerlangan mehmon bazada topilmasa, veb oynasi uni yangi
+    mehmon sifatida yaratadi — shundan keyin skan surati shu chaqiruv bilan
+    mehmonga bog'lanadi. Takror chaqiruv nusxa yaratmaydi.
+    """
+    hotel_id = _require_reception(current_user)
+    return await DocumentScanService(session).link_guest(
+        scan_id, hotel_id, data.guest_id
     )
 
 

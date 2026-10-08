@@ -822,6 +822,25 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 
 ---
 
+**POST /guests/{guest_id}/document-images**
+
+- Auth: ADMIN/SUPER_ADMIN or any of `guest.create`, `guest.update`, `reservation.create`, `reservation.update`, `file.upload`
+- Description: Save the scanned passport / ID card image(s) of a guest to MinIO (bucket `MINIO_BUCKET_GUESTS`). The web scanner calls it after the guest is created or picked. Multipart fields: `passport`, `front`, `back` (each optional, at least one; JPEG/PNG/WEBP, max 12 MB), `document_type` (`ID_CARD` | `PASSPORT`, optional).
+- Response 200: `{"stored": [{"id", "category": "document_front", "side": "front", "mime_type", "file_size", "created_at", "uploaded_by_name"}], "disabled": false}`; when the scanner setting `store_images` is off: `{"stored": [], "disabled": true}`
+- Errors: 404 `GUEST_NOT_FOUND`, 403 `DOCUMENT_IMAGES_FORBIDDEN`, 422 `DOCUMENT_IMAGE_INVALID` / `DOCUMENT_IMAGE_REQUIRED` / `IMAGE_TOO_LARGE`, 503 `DOCUMENT_IMAGE_STORAGE_FAILED`
+
+**GET /guests/{guest_id}/document-images**
+
+- Auth: ADMIN/SUPER_ADMIN or any of `guest.view`, `guest.create`, `guest.update`, `reservation.read`, `reservation.create`, `reservation.update`
+- Description: The guest's document images saved IN THIS HOTEL (scanner images `document_passport|front|back` and the manual "passport photo" upload `photo`), newest first.
+
+**GET /guests/{guest_id}/document-images/{file_id}**
+
+- Auth: as above
+- Description: The image bytes, streamed through the API (`Cache-Control: private, no-store`). Errors: 404 `FILE_NOT_FOUND`.
+
+---
+
 **DELETE /guests/{guest_id}**
 
 - Auth: require_permission("guest.create")

@@ -3,13 +3,14 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.configurator_access import assert_can_manage_settings
 from app.application.dto.guest_stay import GuestHistoryResponse
+from app.application.services import document_images
 from app.application.services.document_ocr import intake
 from app.application.services.blacklist_service import BlacklistService
 from app.application.services.guest_history_service import GuestHistoryService
@@ -51,8 +52,11 @@ SCAN_SETTINGS_KEY = "document_scan"
 # engine — OCR qayerda bajariladi:
 #   server — serverdagi PP-OCR (tezroq va aniqroq; brauzer zaif qurilmada
 #            ham yuklanmaydi), aloqa uzilsa qurilmadagi OCR zaxira bo'ladi
-#   device — faqat brauzerda (rasm qurilmadan chiqmaydi)
-DEFAULT_SCAN_SETTINGS = {"mode": "auto", "engine": "server"}
+#   device — faqat brauzerda (OCR uchun rasm serverga yuborilmaydi)
+#
+# store_images — skanerlangan hujjat surati mehmon kartasiga saqlanadimi
+#   (MinIO, `document_images.py`). Standart — ha.
+DEFAULT_SCAN_SETTINGS = {"mode": "auto", "engine": "server", "store_images": True}
 
 #: Rasm o'qish, hajm chegarasi va OCR chaqiruvi qabulxona telefoni bilan
 #: umumiy — qoidalar `document_ocr/intake.py` da.
@@ -62,6 +66,9 @@ MAX_SCAN_IMAGE_BYTES = intake.MAX_SCAN_IMAGE_BYTES
 class ScanSettingsRequest(BaseModel):
     mode: Literal["mrz", "visual", "auto"] = "auto"
     engine: Literal["server", "device"] = "server"
+    #: Berilmasa saqlangan qiymat o'zgarmaydi (eski ilovalar bu maydonni
+    #: yubormaydi — ular bayroqni bilmasdan o'chirib qo'ymasin)
+    store_images: bool | None = None
 
 
 #: Dvigatel bor-yo'qligi — qabulxona telefoni bilan umumiy tekshiruv.
@@ -87,6 +94,7 @@ def _resolve_scan(settings: dict | None) -> dict:
         # Frontend shu bayroqqa qarab serverga yuborishni tanlaydi: dvigatel
         # o'rnatilmagan serverda u qurilmadagi OCR'da qolaveradi.
         "serverAvailable": _server_ocr_available(),
+        "store_images": document_images.store_enabled(settings),
     }
 
 
@@ -118,7 +126,16 @@ async def save_scan_settings(
         raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
     # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
     new_settings = dict(hotel.settings or {})
-    new_settings[SCAN_SETTINGS_KEY] = {"mode": data.mode, "engine": data.engine}
+    store = (
+        data.store_images
+        if data.store_images is not None
+        else document_images.store_enabled(hotel.settings)
+    )
+    new_settings[SCAN_SETTINGS_KEY] = {
+        "mode": data.mode,
+        "engine": data.engine,
+        "store_images": store,
+    }
     hotel.settings = new_settings
     await session.flush()
     return _resolve_scan(new_settings)
@@ -146,7 +163,9 @@ async def scan_document(
     va nazorat raqami bo'yicha tiklangan belgini mustaqil tasdiqlash mumkin.
     Passport uchun bitta sahifa yetarli — unda MRZ ham, bosma maydonlar ham bor.
 
-    Rasm SAQLANMAYDI — faqat xotirada o'qiladi va javob qaytgach yo'qoladi.
+    Bu endpoint rasmni SAQLAMAYDI — mehmon hali tanlanmagan. Surat mehmon
+    yaratilgach/tanlangach `POST /guests/{id}/document-images` bilan
+    saqlanadi (skaner sozlamasida `store_images` yoqiq bo'lsa).
 
     Dvigatel serverda mavjud bo'lmasa 503 qaytadi — frontend buni ko'rib,
     qurilmadagi OCR'ga qaytadi va foydalanuvchi hech narsa sezmaydi.
@@ -172,6 +191,182 @@ async def scan_document(
     hotel = await session.get(Hotel, h_id) if h_id else None
     mode = _resolve_scan(hotel.settings if hotel else None)["mode"]
     return await intake.run_scan(images, document_type, mode)
+
+
+# ------------------------------------------- hujjat suratlari (MinIO) --
+
+#: Hujjat suratini yuklash: mehmonni ro'yxatga oladigan yoki bron ochadigan
+#: xodim (skaner shu oynalarda ishlaydi)
+DOCUMENT_IMAGE_UPLOAD_CODES = (
+    "guest.create",
+    "guest.update",
+    "reservation.create",
+    "reservation.update",
+    "file.upload",
+)
+#: Ko'rish: mehmon kartasini ko'ra oladigan xodim. Surat shaxsiy ma'lumot —
+#: farrosh/usta ko'rmaydi.
+DOCUMENT_IMAGE_VIEW_CODES = (
+    "guest.view",
+    "guest.create",
+    "guest.update",
+    "reservation.read",
+    "reservation.create",
+    "reservation.update",
+)
+
+
+def _document_images_hotel(current_user: dict, codes: tuple[str, ...]) -> UUID:
+    """Surat har doim MEHMONXONAGA tegishli (mehmonlar bazasi global, lekin
+    surat uni olgan mehmonxonadan tashqariga chiqmaydi)."""
+    if current_user["user_type"] not in ("ADMIN", "SUPER_ADMIN"):
+        granted = current_user.get("permissions") or []
+        if not any(code in granted for code in codes):
+            raise ForbiddenException(
+                "Hujjat suratlari bilan ishlashga ruxsat yo'q", "DOCUMENT_IMAGES_FORBIDDEN"
+            )
+    h_id = current_user.get("hotel_id")
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return h_id
+
+
+async def _live_guest(session: AsyncSession, guest_id: UUID) -> Guest:
+    guest = await session.get(Guest, guest_id)
+    if guest is None or getattr(guest, "is_deleted", False):
+        raise NotFoundException("Guest not found", "GUEST_NOT_FOUND")
+    return guest
+
+
+async def _uploader_names(session: AsyncSession, ids: set) -> dict:
+    from app.infrastructure.database.models.user import User
+
+    ids = {i for i in ids if i}
+    if not ids:
+        return {}
+    rows = (await session.execute(select(User).where(User.id.in_(list(ids))))).scalars().all()
+    return {
+        u.id: (" ".join(p for p in (u.first_name, u.last_name) if p) or None) for u in rows
+    }
+
+
+@router.post("/{guest_id}/document-images")
+async def upload_document_images(
+    guest_id: UUID = Path(),
+    document_type: Literal["ID_CARD", "PASSPORT"] | None = Form(default=None),
+    passport: UploadFile | None = File(default=None),
+    front: UploadFile | None = File(default=None),
+    back: UploadFile | None = File(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Vebda skanerlangan hujjat suratini mehmon kartasiga saqlaydi.
+
+    Veb skaneri natijani mehmon hali yo'q paytda beradi — surat mehmon
+    yaratilgach yoki tanlangach shu yerga yuklanadi. Sozlamada saqlash
+    o'chirilgan bo'lsa hech narsa yozilmaydi (`disabled: true`).
+    """
+    h_id = _document_images_hotel(current_user, DOCUMENT_IMAGE_UPLOAD_CODES)
+    await _live_guest(session, guest_id)
+    hotel = await session.get(Hotel, h_id)
+    if not document_images.store_enabled(hotel.settings if hotel else None):
+        return {"stored": [], "disabled": True}
+
+    images: dict[str, bytes] = {}
+    for side, upload, label in (
+        ("passport", passport, "Passport"),
+        ("front", front, "Old tomon"),
+        ("back", back, "Orqa tomon"),
+    ):
+        data = await intake.read_image(upload, label)
+        if not data:
+            continue
+        if document_images.sniff_image(data) is None:
+            raise ValidationException(
+                f"{label}: faqat JPEG, PNG yoki WEBP rasm", "DOCUMENT_IMAGE_INVALID"
+            )
+        images[side] = data
+    if not images:
+        raise ValidationException("Hujjat surati yuborilmadi", "DOCUMENT_IMAGE_REQUIRED")
+
+    stored = await document_images.store_images(
+        session,
+        hotel_id=h_id,
+        images=images,
+        entity_type=document_images.ENTITY_GUEST,
+        entity_id=guest_id,
+        uploaded_by=current_user["id"],
+        document_type=document_type,
+    )
+    if not stored:
+        raise document_images.DocumentStorageUnavailable()
+    return {
+        "stored": [document_images.attachment_dict(att) for att in stored],
+        "disabled": False,
+    }
+
+
+@router.get("/{guest_id}/document-images")
+async def list_document_images(
+    guest_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Mehmonning hujjat suratlari (skaner suratlari va qo'lda yuklangan
+    "pasport surati"), eng yangisi birinchi. Rasmning o'zi
+    `GET /guests/{id}/document-images/{file_id}` dan olinadi."""
+    h_id = _document_images_hotel(current_user, DOCUMENT_IMAGE_VIEW_CODES)
+    rows = await document_images.attachments_of(
+        session,
+        hotel_id=h_id,
+        entity_type=document_images.ENTITY_GUEST,
+        entity_id=guest_id,
+        categories=document_images.GUEST_IMAGE_CATEGORIES,
+    )
+    names = await _uploader_names(session, {row.uploaded_by for row in rows})
+    return [
+        document_images.attachment_dict(row, names.get(row.uploaded_by)) for row in rows
+    ]
+
+
+@router.get("/{guest_id}/document-images/{file_id}")
+async def get_document_image(
+    guest_id: UUID = Path(),
+    file_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Suratning o'zi — server orqali (MinIO havolasi HTTPS sahifada
+    ochilmaydi va tashqariga ko'rinmasligi kerak)."""
+    from app.infrastructure.database.models.file_attachment import FileAttachment
+    from app.infrastructure.storage import minio as storage
+
+    h_id = _document_images_hotel(current_user, DOCUMENT_IMAGE_VIEW_CODES)
+    attachment = (
+        await session.execute(
+            select(FileAttachment).where(
+                FileAttachment.id == file_id,
+                FileAttachment.hotel_id == h_id,
+                FileAttachment.entity_type == document_images.ENTITY_GUEST,
+                FileAttachment.entity_id == guest_id,
+                FileAttachment.is_deleted.is_(False),
+                FileAttachment.category.in_(document_images.GUEST_IMAGE_CATEGORIES),
+            )
+        )
+    ).scalar_one_or_none()
+    if attachment is None:
+        raise NotFoundException("File not found", "FILE_NOT_FOUND")
+    try:
+        data = await storage.download_file(attachment.minio_bucket, attachment.minio_path)
+    except Exception:  # noqa: BLE001
+        logger.exception("Hujjat suratini o'qib bo'lmadi: %s", attachment.minio_path)
+        raise NotFoundException("File not found", "FILE_NOT_FOUND")
+    return Response(
+        content=data,
+        media_type=attachment.mime_type,
+        # Shaxsiy ma'lumot: brauzer/proksi keshida qolmasin
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/", response_model=list[GuestResponse])

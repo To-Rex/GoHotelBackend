@@ -305,6 +305,31 @@ Sozlamalar → "Bron va mehmonlar" → "Kunlik bron hisobi"
 Kod: `app/application/services/daily_unit.py`, migratsiya `d3a4b5c6d7e8`,
 test: `pytest tests/test_daily_unit_pricing.py`.
 
+### Hujjat suratini saqlash (pasport, ID karta)
+
+Pasport yoki ID karta qayerda skanerlansa ham surati MinIO'ga
+(`MINIO_BUCKET_GUESTS`, `{hotel}/{guest|document_scan}/{id}/document-<tomon>-<vaqt>.jpg`)
+saqlanadi va `file_attachments` orqali biriktiriladi
+(`category="document_passport|front|back"`):
+
+- **Qabulxona telefoni** — `POST /reception/scans`: surat skan yozuviga
+  (`entity_type="document_scan"`), hujjat raqami bo'yicha mehmon topilsa
+  mehmonga ham. Javobda `images_saved`. Takror skan (90 soniya) nusxa
+  yozmaydi. Yangi mehmon vebda yaratilgach
+  `POST /reception/scans/{id}/link-guest` `{"guest_id"}` surati unga
+  bog'laydi. Mobil ilova o'zgarmagan — rasm serverga baribir kelardi.
+- **Veb skaneri** — mehmon yaratilgach/tanlangach
+  `POST /guests/{id}/document-images` (multipart `passport|front|back`).
+- Ko'rish: `GET /guests/{id}/document-images` va
+  `.../{file_id}` (rasm API orqali, faqat shu mehmonxona suratlari).
+- O'chirish: skaner sozlamasida `store_images` (`PUT /guests/scan-settings`,
+  standart — yoqiq; yuborilmasa saqlangani o'zgarmaydi).
+- Saqlash skanerni to'xtatmaydi: fayl ombori ishlamasa skan natijasi
+  baribir qaytadi (SAVEPOINT, xato faqat logda).
+
+Kod: `app/application/services/document_images.py`, test:
+`pytest tests/test_document_images.py`.
+
 ### Do'kon: qisman va aralash to'lov
 
 Bronga yozilgan do'kon savdosi istalgancha marta QISMAN to'lanadi, har
