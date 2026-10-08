@@ -311,9 +311,15 @@ test: `pytest tests/test_daily_unit_pricing.py`.
 ### Filiallar to'liq ajratilgan
 
 Bitta mehmonxonaning filiallari bir-birini ko'rmaydi: xonalar, qavatlar,
-xona turlari va narxlari, xizmatlar, mehmonlar, bronlar, moliya, do'kon,
-kassa va smenalar, xo'jalik vazifalari, xabarlar, bildirishnomalar,
-qurilmalar, kameralar, hisobotlar va **sozlamalar** — har filialniki.
+xona turlari va narxlari, xizmatlar, bronlar, moliya, do'kon, kassa va
+smenalar, xo'jalik vazifalari, xabarlar, bildirishnomalar, qurilmalar,
+kameralar, hisobotlar va **sozlamalar** — har filialniki.
+
+**Istisno — mehmonlar.** Mehmonlar bazasi (qora ro'yxat va yuz profillari
+bilan) butun tizim uchun UMUMIY: istalgan mehmonxona va filial hamma
+mehmonni ko'radi, qidiradi va bron qiladi; `guests.hotel_id/branch_id`
+faqat qayerda ro'yxatga olinganini bildiradi. Mehmon tarixi mehmonxonaning
+barcha filiallari bo'yicha ko'rsatiladi.
 
 - **Kim qaysi filialda.** Xodim — doim o'z yozuvidagi filialda (boshqa
   filialga o'tkazilsa darhol, token yangilanishini kutmay). Administrator

@@ -68,6 +68,9 @@ class GuestHistoryService:
         )
         if hotel_id is not None:
             stmt = stmt.where(Reservation.hotel_id == hotel_id)
+        # Mehmon tarixi mehmonxonaning BARCHA filiallari bo'yicha (filial nomi
+        # bilan) — avvalgidek; filial chegarasi bu yerda qo'llanmaydi
+        stmt = stmt.execution_options(all_branches=True)
 
         rows = (await self.session.execute(stmt)).all()
 

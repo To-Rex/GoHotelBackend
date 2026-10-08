@@ -158,6 +158,8 @@ class ReservationRepository(TenantBaseRepository[Reservation]):
         )
         if hotel_id is not None:
             stmt = stmt.where(Reservation.hotel_id == hotel_id)
+        # Mehmon global: uning bronlari mehmonxonaning barcha filiallari bo'yicha
+        stmt = stmt.execution_options(all_branches=True)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

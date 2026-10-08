@@ -8,10 +8,17 @@ from sqlalchemy import Date, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, SoftDeleteMixin, BranchScoped
+from app.shared.mixins import FullMixin, SoftDeleteMixin
 
 
-class Guest(BranchScoped, FullMixin, SoftDeleteMixin, Base):
+class Guest(FullMixin, SoftDeleteMixin, Base):
+    """Mehmon — butun tizim uchun UMUMIY (global) baza.
+
+    Filial va mehmonxona chegarasiga kirmaydi: istalgan mehmonxona/filial
+    hamma mehmonni ko'radi, qidiradi va bron qiladi. `hotel_id` va `branch_id`
+    faqat kim birinchi ro'yxatga olganini bildiradi — filtr emas.
+    """
+
     __tablename__ = "guests"
     __table_args__ = (
         # Qora ro'yxat har bir bron yaratishda tekshiriladi. Qisman indeks
@@ -26,7 +33,7 @@ class Guest(BranchScoped, FullMixin, SoftDeleteMixin, Base):
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
     )
-    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    #: Qaysi filialda ro'yxatga olingan (ma'lumot uchun; filtr EMAS — mehmonlar global)
     branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("branches.id"), nullable=True, index=True
     )

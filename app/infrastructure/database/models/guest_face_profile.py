@@ -19,10 +19,9 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import BranchScoped
 
 
-class GuestFaceProfile(BranchScoped, Base):
+class GuestFaceProfile(Base):
     """Mehmonning yuz shabloni — keyingi tashrifda uni tanib olish uchun.
 
     Rasm SAQLANMAYDI: faqat yuzdan hisoblangan embedding saqlanadi, xuddi
@@ -55,7 +54,7 @@ class GuestFaceProfile(BranchScoped, Base):
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    #: Filial — yozuv faqat shu filial ichida ko'rinadi (branch_scope.py)
+    #: Qaysi filialda biriktirilgan (ma'lumot uchun; mehmonlar global — filtr emas)
     branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("branches.id"), nullable=True, index=True
     )

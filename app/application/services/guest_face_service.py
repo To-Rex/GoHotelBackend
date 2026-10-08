@@ -357,10 +357,9 @@ class _HotelIndex:
 
 
 _index_lock = threading.Lock()
-#: Kalit — (mehmonxona, filial): filiallar ajratilgan, har filial kamerasi
-#: faqat O'Z filiali mehmonlarini taniydi. Versiya mehmonxona bo'yicha —
-#: shablon o'zgarsa shu mehmonxonaning barcha filial indekslari eskiradi.
-_indexes: dict[tuple, _HotelIndex] = {}
+#: Kalit — mehmonxona: mehmonlar bazasi global, yuz profillari esa
+#: mehmonxona bo'yicha (qaysi mehmonxona biriktirgan bo'lsa o'sha taniydi).
+_indexes: dict[UUID, _HotelIndex] = {}
 _versions: dict[UUID, int] = {}
 
 
@@ -377,32 +376,28 @@ def invalidate_hotel(hotel_id: UUID) -> None:
 def index_stats(hotel_id: UUID) -> dict[str, object]:
     """Diagnostika uchun: indeks qurilganmi, nechta shablon bor."""
     with _index_lock:
-        found = [i for key, i in _indexes.items() if key[0] == hotel_id]
+        index = _indexes.get(hotel_id)
         version = _versions.get(hotel_id, 0)
-    if not found:
+    if index is None:
         return {"loaded": False, "profiles": 0, "version": version}
-    newest = max(found, key=lambda i: i.built_at)
     return {
         "loaded": True,
-        "profiles": sum(i.size for i in found),
-        "version": newest.version,
-        "stale": any(i.version != version for i in found),
-        "built_at": newest.built_at.isoformat(),
+        "profiles": index.size,
+        "version": index.version,
+        "stale": index.version != version,
+        "built_at": index.built_at.isoformat(),
     }
 
 
 async def get_index(
     session: AsyncSession, hotel_id: UUID, branch_id: UUID | None = None
 ) -> _HotelIndex:
-    """Filial indeksini qaytaradi, kerak bo'lsa qayta quradi.
+    """Mehmonxona indeksini qaytaradi, kerak bo'lsa qayta quradi.
 
-    Filial — berilgani yoki so'rov filiali (branch_scope); ikkalasi ham
-    bo'lmasa butun mehmonxona (avvalgidek).
+    Mehmonlar global — indeks mehmonxonaning barcha filiallari uchun bitta
+    (`branch_id` moslik uchun qabul qilinadi, filtr emas).
     """
-    from app.infrastructure.tenant.branch_scope import ALL_BRANCHES, scoped_branch_id
-
-    branch_id = branch_id or scoped_branch_id(session, hotel_id)
-    key = (hotel_id, branch_id)
+    key = hotel_id
     with _index_lock:
         current_version = _versions.setdefault(hotel_id, 0)
         cached = _indexes.get(key)
@@ -422,10 +417,7 @@ async def get_index(
             GuestFaceProfile.dim == EMBEDDING_DIM,
             Guest.is_deleted.is_(False),
         )
-        .execution_options(**{ALL_BRANCHES: True})
     )
-    if branch_id is not None:
-        stmt = stmt.where(GuestFaceProfile.branch_id == branch_id, Guest.branch_id == branch_id)
     rows = (await session.execute(stmt)).all()
 
     vectors: list[np.ndarray] = []
@@ -556,8 +548,8 @@ async def identify(
     vector: np.ndarray,
     branch_id: UUID | None = None,
 ) -> SearchResult:
-    """Filial (yoki mehmonxona) doirasida bitta vektorni izlaydi."""
-    index = await get_index(session, hotel_id, branch_id)
+    """Mehmonxona doirasida bitta vektorni izlaydi (mehmonlar global)."""
+    index = await get_index(session, hotel_id)
     return search_index(index, vector)
 
 

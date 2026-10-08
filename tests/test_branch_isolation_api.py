@@ -147,10 +147,11 @@ async def seed(session) -> dict:
         )
     await session.commit()
 
-    # Har filial/mehmonxona yozuvlarining ID'lari (javoblarda qidiriladi)
+    # Har filial/mehmonxona yozuvlarining ID'lari (javoblarda qidiriladi).
+    # Mehmonlar va yuz profillari GLOBAL — ular chegaraga kirmaydi
     rows: dict[str, set[str]] = {"A1": set(), "A2": set(), "B": set()}
     for table in owned:
-        if table in ("hotels",):
+        if table in ("hotels", "guests", "guest_face_profiles"):
             continue
         has_branch = (
             await session.execute(
@@ -340,8 +341,7 @@ def test_other_branch_records_are_not_reachable_by_id(world, client):
 
     ids = run(a2_ids)
     e1 = token(world["e1"], "EMPLOYEE", world["H"], jti="jti-e1")
-    for path in (f"/api/v1/rooms/{ids['rooms']}", f"/api/v1/reservations/{ids['reservations']}",
-                 f"/api/v1/guests/{ids['guests']}"):
+    for path in (f"/api/v1/rooms/{ids['rooms']}", f"/api/v1/reservations/{ids['reservations']}"):
         r = client.get(path, headers=e1)
         assert r.status_code == 404, (path, r.status_code, r.text[:200])
     # Boshqa filial xodimini ochish ham — 404
@@ -387,7 +387,7 @@ def test_settings_are_per_branch(world, client):
     assert client.get("/api/v1/hotels/debt-settings", headers=e1).json()["enabled"] is True
 
 
-def test_new_records_land_in_the_request_branch(world, client):
+def test_guests_are_global_but_remember_where_registered(world, client):
     from sqlalchemy import text
 
     e2 = token(world["e2"], "EMPLOYEE", world["H"], jti="jti-e2")
@@ -401,6 +401,25 @@ def test_new_records_land_in_the_request_branch(world, client):
     async def where(s):
         return (await s.execute(text("SELECT branch_id FROM guests WHERE first_name='Yangi' AND last_name='Mehmon'"))).scalar()
 
-    assert run(where) == world["A2"]
+    assert run(where) == world["A2"]  # qayerda ro'yxatga olingani eslab qolinadi
+    # ...lekin mehmonlar bazasi UMUMIY: boshqa filial va boshqa mehmonxona ham ko'radi
     e1 = token(world["e1"], "EMPLOYEE", world["H"], jti="jti-e1")
-    assert "Yangi" not in client.get("/api/v1/guests/", headers=e1, params={"search": "Yangi"}).text
+    assert "Yangi" in client.get("/api/v1/guests/", headers=e1, params={"search": "Yangi"}).text
+    assert str(world["rows"]) is not None
+    guest_id = r.json()["id"]
+    assert client.get(f"/api/v1/guests/{guest_id}", headers=e1).status_code == 200
+
+
+def test_other_hotel_sees_shared_guests_and_other_branch_records_do_not_leak(world, client):
+    """Mehmon global, lekin bron/to'lov kabi yozuvlar filialniki."""
+    from sqlalchemy import text
+
+    async def a2_guest(s):
+        return str((await s.execute(text("SELECT id FROM guests WHERE branch_id = :b LIMIT 1"), {"b": world["A2"]})).scalar())
+
+    gid = run(a2_guest)
+    e1 = token(world["e1"], "EMPLOYEE", world["H"], jti="jti-e1")
+    assert client.get(f"/api/v1/guests/{gid}", headers=e1).status_code == 200
+    # Tarix — mehmonxonaning barcha filiallari bo'yicha (filial nomi bilan)
+    history = client.get(f"/api/v1/guests/{gid}/history", headers=e1)
+    assert history.status_code == 200, history.text

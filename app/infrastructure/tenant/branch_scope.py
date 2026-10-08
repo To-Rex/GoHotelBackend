@@ -18,6 +18,9 @@ Qanday ishlaydi (endpoint va servislar o'zgarmasdan):
 * Yangi yozuvga filial avtomatik yoziladi (`before_flush`); boshqa
   filialga yozish yoki mavjud yozuvni boshqa filialga ko'chirish
   taqiqlanadi (403 `BRANCH_SCOPE`).
+* MEHMONLAR (`guests`, `guest_face_profiles`) butun tizim uchun umumiy —
+  chegaraga kirmaydi: istalgan filial hamma mehmonni ko'radi va bron qiladi
+  (`hotel_id`/`branch_id` ularda faqat "qayerda ro'yxatga olingan").
 * Xodimlar (`users`) avtomatik filtrlanmaydi — ism ko'rsatish uchun ko'p
   joyda id bo'yicha o'qiladi, xodim boshqa filialga o'tkazilishi ham
   mumkin. Xodimlar RO'YXATI va xabar oluvchilar filial bo'yicha aniq

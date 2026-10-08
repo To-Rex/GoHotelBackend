@@ -346,9 +346,10 @@ async def _record_and_reply(
 
     if result is not None and result.guest_id is not None:
         guest = await session.get(Guest, result.guest_id)
-        if guest is not None and (guest.is_deleted or guest.hotel_id != device.hotel_id):
+        if guest is not None and guest.is_deleted:
             # Indeks eskirgan bo'lishi mumkin — mehmon o'chirilgan bo'lsa
             # moslikni bekor qilamiz va indeksni yangilashga majburlaymiz.
+            # (Mehmonlar global — boshqa mehmonxona ro'yxatga olgani ham moslik.)
             gfs.invalidate_hotel(device.hotel_id)
             guest = None
             status = "unknown"
@@ -986,7 +987,7 @@ async def enroll_sighting(
         )
 
     guest = await session.get(Guest, payload.guest_id)
-    if guest is None or guest.is_deleted or guest.hotel_id != hotel_id:
+    if guest is None or guest.is_deleted:  # mehmonlar global
         raise NotFoundException("Mehmon topilmadi")
 
     if not payload.consent:
@@ -1077,7 +1078,7 @@ async def guest_face_status(
     """Mehmonning yuz profili holati."""
     hotel_id = _hotel_id(current_user)
     guest = await session.get(Guest, guest_id)
-    if guest is None or guest.is_deleted or guest.hotel_id != hotel_id:
+    if guest is None or guest.is_deleted:  # mehmonlar global
         raise NotFoundException("Mehmon topilmadi")
     return await _profile_status(session, guest)
 
@@ -1096,7 +1097,7 @@ async def delete_guest_face(
     """
     hotel_id = _hotel_id(current_user)
     guest = await session.get(Guest, guest_id)
-    if guest is None or guest.is_deleted or guest.hotel_id != hotel_id:
+    if guest is None or guest.is_deleted:  # mehmonlar global
         raise NotFoundException("Mehmon topilmadi")
 
     removed = await gfs.forget_guest(session, hotel_id=hotel_id, guest_id=guest_id)

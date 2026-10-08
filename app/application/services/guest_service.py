@@ -39,8 +39,12 @@ class GuestService:
             await self.session.flush()
             return existing
 
+        from app.infrastructure.tenant.branch_scope import scoped_branch_id
+
         guest = Guest(
             hotel_id=hotel_id,
+            # Qayerda ro'yxatga olingani — faqat ma'lumot (mehmonlar global)
+            branch_id=scoped_branch_id(self.session, hotel_id),
             first_name=data["first_name"],
             last_name=data["last_name"],
             phone=data.get("phone"),
