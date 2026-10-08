@@ -293,16 +293,19 @@ def upgrade() -> None:
         "UPDATE reservations r SET guest_id = c.new_id FROM _bi_gclone c "
         "WHERE r.guest_id = c.old_id AND r.branch_id = c.branch_id"
     )
+    # `companions` massiv bo'lmasligi mumkin (JSON null, satr...). WHERE
+    # shartlari tartibsiz hisoblanadi — shuning uchun massiv funksiyalari
+    # faqat CASE orqali (skalyarga hech qachon qo'llanmaydi)
+    arr = "CASE WHEN jsonb_typeof(r.companions) = 'array' THEN r.companions ELSE '[]'::jsonb END"
     _x(
         "UPDATE reservations r SET companions = ("
         "  SELECT jsonb_agg(CASE WHEN c.new_id IS NOT NULL "
         "    THEN jsonb_set(e.value, '{guest_id}', to_jsonb(c.new_id::text)) ELSE e.value END "
         "    ORDER BY e.ordinality) "
-        "  FROM jsonb_array_elements(r.companions) WITH ORDINALITY e "
+        f"  FROM jsonb_array_elements({arr}) WITH ORDINALITY e "
         "  LEFT JOIN _bi_gclone c ON jsonb_typeof(e.value) = 'object' "
         "    AND c.old_id::text = lower(e.value->>'guest_id') AND c.branch_id = r.branch_id"
-        ") WHERE jsonb_typeof(r.companions) = 'array' AND jsonb_array_length(r.companions) > 0 "
-        "AND EXISTS (SELECT 1 FROM jsonb_array_elements(r.companions) e2 "
+        f") WHERE EXISTS (SELECT 1 FROM jsonb_array_elements({arr}) e2 "
         "  JOIN _bi_gclone c2 ON jsonb_typeof(e2.value) = 'object' "
         "  AND c2.old_id::text = lower(e2.value->>'guest_id') AND c2.branch_id = r.branch_id)"
     )

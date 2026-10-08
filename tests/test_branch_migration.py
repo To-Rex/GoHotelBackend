@@ -154,6 +154,11 @@ async def _seed(db_url: str) -> dict:
             await res("res6", A1, r1, shared)
             await res("res3", A2, r2, shared, companions=[{"guest_id": str(comp), "name": "Hamroh"}], by=emp2)
             await res("res4", A2, r2, only2, companions=[{"guest_id": str(shared).upper(), "name": "Ali"}, {"name": "ismsiz"}])
+            # Massiv bo'lmagan `companions` (prod'da uchraydi) — migratsiyani yiqitmasin
+            # (A1 da — mehmonlarning filial balansi o'zgarmasin)
+            await res("res_null", A1, r1, shared, companions=None)
+            await res("res_str", A1, r1, shared, companions="x")
+            await res("res_obj", A1, r1, ids["g_none"], companions={"guest_id": str(shared)})
             await add("resB", "reservations", "B", branch_id=B1, room_id=ids["rB"], guest_id=ids["g_B"])
 
             inv = await add("inv3", "invoices", "A", reservation_id=ids["res3"], guest_id=shared)
@@ -333,7 +338,10 @@ def test_shared_guest_is_split_without_losing_anything(migrated):
         assert (await q("SELECT count(*) FROM guest_face_profiles WHERE guest_id IN (:a, :b)",
                         a=ids["g_shared"], b=clone)).scalar() == 2
         # Bron soni o'zgarmadi
-        assert (await q("SELECT count(*) FROM reservations")).scalar() == 7
+        assert (await q("SELECT count(*) FROM reservations")).scalar() == 10
+        # Massiv bo'lmagan hamrohlar o'zgarmagan
+        for key, want in (("res_null", None), ("res_str", "x"), ("res_obj", {"guest_id": str(ids["g_shared"])})):
+            assert (await q("SELECT companions FROM reservations WHERE id=:i", i=ids[key])).scalar() == want
     run(db_url, body)
 
 
