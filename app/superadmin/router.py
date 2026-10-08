@@ -15,11 +15,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import UnauthorizedException
+from app.core.exceptions import (
+    ForbiddenException,
+    UnauthorizedException,
+    ValidationException,
+)
 from app.superadmin import security
 from app.application.services.app_store_service import AppStoreService
 from app.presentation.api.v1.apps import download_headers
 from app.superadmin.estate_service import EstateService
+from app.superadmin.hotel_purge_service import HotelPurgeService
 from app.superadmin.insight_service import InsightService
 from app.infrastructure.push import firebase as push_firebase
 from app.superadmin.models import PanelUser
@@ -249,6 +254,58 @@ async def deactivate_hotel(
 ):
     """Mehmonxonani to'xtatadi (yozuv o'chirilmaydi — tarix saqlanadi)."""
     return await EstateService(session).delete_hotel(hotel_id)
+
+
+class HotelPurgeRequest(BaseModel):
+    confirm_code: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1, max_length=200)
+
+
+def check_purge_gates(actor: PanelUser, hotel_code: str, data: HotelPurgeRequest) -> None:
+    """Butunlay o'chirishdan oldingi to'siqlar: tizim egasi, parol, kod.
+
+    Mehmonxona to'xtatilganini va boshqa mehmonxona yozuvlari bog'lanmaganini
+    xizmatning o'zi tekshiradi.
+    """
+    if not actor.is_root:
+        raise ForbiddenException(
+            "Mehmonxonani butunlay o'chirishni faqat tizim egasi bajaradi", "ROOT_ONLY"
+        )
+    # 401 emas — u panel sessiyasini yopardi; bu yerda faqat parol noto'g'ri
+    if not security.verify_password(data.password, actor.password_hash or ""):
+        raise ForbiddenException("Parol noto'g'ri", "WRONG_PASSWORD")
+    typed = data.confirm_code.strip()
+    if not typed or typed != (hotel_code or ""):
+        raise ValidationException(
+            "Tasdiqlash uchun mehmonxona kodini aniq yozing", "CONFIRM_CODE_MISMATCH"
+        )
+
+
+@router.get("/hotels/{hotel_id}/purge-preview")
+async def hotel_purge_preview(
+    hotel_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    _: PanelUser = Depends(current_panel_user),
+):
+    """Butunlay o'chirilsa nima o'chishini ko'rsatadi — hech narsa o'zgarmaydi."""
+    return await HotelPurgeService(session).preview(hotel_id)
+
+
+@router.post("/hotels/{hotel_id}/purge")
+async def purge_hotel(
+    data: HotelPurgeRequest,
+    hotel_id: UUID = Path(),
+    session: AsyncSession = Depends(get_db),
+    actor: PanelUser = Depends(current_panel_user),
+):
+    """Mehmonxonani va unga tegishli HAMMA ma'lumotni butunlay o'chiradi.
+
+    Boshqa mehmonxonalar ma'lumotiga tegilmaydi; qaytarib bo'lmaydi.
+    """
+    hotel = await EstateService(session).get_hotel(hotel_id)
+    check_purge_gates(actor, hotel.get("code") or "", data)
+    who = f"{actor.label or security.ROOT_LABEL} ({actor.id})"
+    return await HotelPurgeService(session).purge(hotel_id, actor=who)
 
 
 @router.get("/hotels/{hotel_id}/branches")

@@ -305,6 +305,35 @@ Sozlamalar → "Bron va mehmonlar" → "Kunlik bron hisobi"
 Kod: `app/application/services/daily_unit.py`, migratsiya `d3a4b5c6d7e8`,
 test: `pytest tests/test_daily_unit_pricing.py`.
 
+### Mehmonxonani butunlay o'chirish (boshqaruv paneli)
+
+Panel → Mehmonxonalar → "O'chirish". "To'xtatish" (`DELETE /superadmin/hotels/{id}`)
+avvalgidek faqat to'xtatadi; butunlay o'chirish alohida
+(`app/superadmin/hotel_purge_service.py`):
+
+- **Avval ko'rib chiqish** (`GET .../purge-preview`) — nima o'chishi jadvallar
+  bo'yicha sanaladi, bazada hech narsa o'zgarmaydi.
+- **To'siqlar** (`POST .../purge`): faqat tizim egasi (`is_root`), o'z panel
+  paroli va mehmonxona kodini aniq yozish; mehmonxona oldin to'xtatilgan
+  (`INACTIVE`) bo'lishi shart.
+- **Nima o'chadi** — `hotels` qatori va unga tegishli HAMMA qator: `hotel_id`
+  ustunli jadvallar va ularga FK orqali bog'langanlar (ro'yxat bazaning o'z
+  katalogidan olinadi — yangi jadval qo'shilsa ham qamrab olinadi). Global
+  ma'lumotlarga (qulayliklar, ruxsatlar, xizmatlar katalogi, umumiy xona
+  turlari, ilova relizlari, panel hisoblari) tegilmaydi.
+- **Boshqa mehmonxonaga tegilmaydi.** Ikkala mehmonxonada bron qilgan mehmon
+  o'chmaydi — uni eng ko'p ishlatgan mehmonxonaga o'tkaziladi. Tizim
+  akkauntlari (SUPER_ADMIN, sozlovchi) ham o'chmaydi — faqat mehmonxonadan
+  ajratiladi (`hotel_id` bo'shatiladi). Boshqa mehmonxona
+  qatori shu mehmonxonaga RESTRICT/CASCADE bilan qarasa — o'chirish to'xtaydi
+  (409 `CROSS_HOTEL_REFERENCES`), hech narsa o'zgarmaydi.
+- Hammasi bitta tranzaksiyada; MinIO fayllari commit'dan keyin o'chiriladi.
+
+Test: `pytest tests/test_hotel_purge_gates.py`; algoritm haqiqiy PostgreSQL'da —
+`GOHOTEL_TEST_PG_URL=postgresql+asyncpg://postgres@127.0.0.1:55432/gohotel_test
+pytest tests/test_hotel_purge.py` (har jadval to'ldiriladi, boshqa mehmonxona
+qatorlari baytma-bayt solishtiriladi; o'zgaruvchi berilmasa o'tkazib yuboriladi).
+
 ### Qarzlar: sababi, eslatmalar, chiqishda tekshiruv
 
 Maqsad — mijoz bilan qarz qolib ketmasin. Qarz hamma joyda SABABI bilan

@@ -122,6 +122,27 @@ For `SUPER_ADMIN`, pass `hotel_id` as a query parameter to scope requests to a s
 
 ---
 
+### Superadmin panel: delete a hotel permanently
+
+`DELETE /superadmin/hotels/{id}` only stops a hotel (`status = INACTIVE`, everything kept). Permanent deletion is a separate, two-step action:
+
+**GET /superadmin/hotels/{id}/purge-preview**
+
+- Auth: panel token. Changes nothing (the plan is computed in a transaction that is rolled back).
+- Response 200: `{"hotel": {"id", "name", "code", "status"}, "tables": [{"table", "rows"}], "total_rows", "shared_guests": {"count", "hotels": [{"hotel_id", "hotel_name", "guests"}]}, "system_users": [{"id", "username", "user_type"}], "conflicts": [{"table", "column", "references", "rows", "on_delete", "blocking"}], "files", "can_purge", "blocked_by": ["HOTEL_ACTIVE" | "CROSS_HOTEL_REFERENCES"]}`
+
+**POST /superadmin/hotels/{id}/purge**
+
+- Auth: panel token of the **system owner** (`is_root`), else 403 `ROOT_ONLY`.
+- Body: `{"confirm_code": "<hotel code, exact>", "password": "<the owner's panel password>"}` — wrong password 403 `WRONG_PASSWORD` (not 401, the panel session stays), code mismatch 422 `CONFIRM_CODE_MISMATCH`.
+- 409 `HOTEL_ACTIVE` — stop the hotel first. 409 `CROSS_HOTEL_REFERENCES` — another hotel's rows point at this hotel's rows with a blocking rule (NO ACTION / RESTRICT / CASCADE); nothing is deleted.
+- What is deleted: the `hotels` row and every row that belongs to it — tables with `hotel_id`, and tables without it that hang off those rows through foreign keys (found from the database catalog, so new tables are covered automatically). Global data is not touched: amenities, permissions, services, room types without a hotel, app releases, panel accounts.
+- A guest who also has rows in another hotel (e.g. a booking) is not deleted: they are moved to the hotel that references them most. System accounts (`SUPER_ADMIN`, `CONFIGURATOR`) assigned to the hotel are not deleted either — `hotel_id` (and `branch_id` if it is this hotel's branch) is cleared. Non-blocking references from other rows (`SET NULL`) are cleared.
+- Everything runs in one transaction (all or nothing). MinIO files of the hotel (attachment paths and the `{hotel_id}/` prefix in the documents and guests buckets) are removed after the commit; an object still referenced by another `file_attachments` row is kept.
+- Response 200: `{"hotel", "deleted": {"<table>": rows}, "total_rows", "guests_moved", "guests_moved_to", "system_users_kept", "set_null", "files_removed", "files_failed", "seconds"}`
+
+---
+
 ### Configurator (CONFIGURATOR)
 
 A configurator is a hotel-less account (`users.user_type = "CONFIGURATOR"`, `hotel_id` NULL) created only in the superadmin panel (`/superadmin/configurators`). It signs in to the main app with `POST /auth/login`, chooses a hotel and branch, and in the chosen hotel works like a hotel `ADMIN` (`require_permission` bypass, admin-only actions). It is exempt from trusted-device approval and from the "hotel suspended" block (like `SUPER_ADMIN`).
