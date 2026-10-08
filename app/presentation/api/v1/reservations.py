@@ -539,11 +539,46 @@ async def remove_companion(
     )
 
 
+class CheckoutRequestBody(BaseModel):
+    """Qarz bilan chiqarish: sababi majburiy (kim/qachon bilan yoziladi)."""
+
+    acknowledge_debt: bool = False
+    debt_note: str | None = Field(default=None, max_length=1000)
+
+
+@router.get("/{reservation_id}/debt")
+async def get_reservation_debt(
+    reservation_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Bron qarzi va uning SABABLARI: hisoblangan haqlar (to'lanmagan
+    qismi bilan), do'kon savdolari, to'lovlar tarixi, qarz bilan chiqarilgan
+    bo'lsa — kim va nima uchun. Hisob `debt_service` da."""
+    from app.application.services.debt_service import DebtService
+
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    stmt = select(Reservation).where(
+        Reservation.id == reservation_id, Reservation.is_deleted.is_(False)
+    )
+    if h_id is not None:
+        stmt = stmt.where(Reservation.hotel_id == h_id)
+    reservation = (await session.execute(stmt)).scalar_one_or_none()
+    if reservation is None:
+        raise NotFoundException("Reservation not found", "RESERVATION_NOT_FOUND")
+    return await DebtService(session).detail(reservation)
+
+
 @router.post("/{reservation_id}/request-checkout", response_model=ReservationResponse)
 async def request_checkout(
     reservation_id: UUID = Path(),
     self_assign: bool = Query(default=False),
     hotel_id: UUID | None = Query(default=None),
+    data: CheckoutRequestBody | None = None,
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -573,11 +608,16 @@ async def request_checkout(
     if not h_id:
         raise ForbiddenException("Hotel context required")
     service = ReservationService(session)
+    body = data or CheckoutRequestBody()
     return await service.request_checkout(
         reservation_id,
         h_id,
         current_user["id"],
         assign_to=current_user["id"] if self_assign else None,
+        acknowledge_debt=body.acknowledge_debt,
+        debt_note=body.debt_note,
+        # Farrosh tugmasi pul olmaydi — to'xtatilmaydi, kassirlarga xabar ketadi
+        enforce_debt=not self_assign,
     )
 
 

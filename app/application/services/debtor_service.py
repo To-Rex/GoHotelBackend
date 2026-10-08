@@ -7,14 +7,25 @@ uni qarzdorlar ro'yxatiga qo'shish xodimni chalg'itardi.
 
 Bekor qilingan va kelmagan bronlar ham kirmaydi: ular bo'yicha xizmat
 ko'rsatilmagan, pul qaytarilgan bo'lsa esa hisob-faktura VOID qilingan.
+
+Qarzning o'zi va SABABI `debt_service` da hisoblanadi: kirgan mehmon uchun
+chiqishda hisoblanadigan summa (uzaytirilgan muddat ham), to'lanmagan
+jarimalar va bronga yozilgan do'kon savdolari. Faqat do'kon qarzi bor
+tasdiqlangan bron ham ro'yxatga tushadi.
 """
 from __future__ import annotations
 
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.application.services.debt_service import (
+    SHOP_STATUSES,
+    DebtService,
+    reasons_text,
+)
 
 from app.infrastructure.database.models.branch import Branch
 from app.infrastructure.database.models.guest import Guest
@@ -40,12 +51,15 @@ class DebtorService:
         date_to: date | None = None,
         created_by: UUID | None = None,
         guest_id: UUID | None = None,
+        today: date | None = None,
     ) -> dict:
         """To'lovi tugallanmagan bronlar va ular bo'yicha jamlanma.
 
         `created_by` — xodimning o'z hisobotida faqat o'zi ochgan bronlar
         ko'rinishi uchun. `guest_id` — bitta mehmon bo'yicha.
         """
+        debts = DebtService(self.session)
+        shop_ids = list(await debts.shop_reservation_ids(hotel_id))
         stmt = (
             select(
                 Reservation,
@@ -64,9 +78,20 @@ class DebtorService:
             .where(
                 Reservation.hotel_id == hotel_id,
                 Reservation.is_deleted.is_(False),
-                Reservation.status.in_(DEBT_STATUSES),
-                # Qarz — to'lanmagan qoldiq
-                Reservation.total_amount > Reservation.paid_amount + MIN_DEBT,
+                or_(
+                    # Chiqib ketgan — to'lanmagan qoldiq bor
+                    and_(
+                        Reservation.status == "CHECKED_OUT",
+                        Reservation.total_amount > Reservation.paid_amount + MIN_DEBT,
+                    ),
+                    # Kirgan — qarz chiqishdagi hisob bo'yicha (pastda) aniqlanadi
+                    Reservation.status == "CHECKED_IN",
+                    # Do'kon savdosi to'lanmagan
+                    and_(
+                        Reservation.status.in_(SHOP_STATUSES),
+                        Reservation.id.in_(shop_ids or [None]),
+                    ),
+                ),
             )
             # Eng eski qarz yuqorida: u ko'proq e'tibor talab qiladi
             .order_by(Reservation.check_out_date.asc())
@@ -81,18 +106,26 @@ class DebtorService:
             stmt = stmt.where(Reservation.guest_id == guest_id)
 
         rows = (await self.session.execute(stmt)).all()
+        breakdowns = await debts.breakdowns([row[0] for row in rows], today=today)
 
         def full_name(first, last) -> str | None:
             return " ".join(p for p in (first, last) if p).strip() or None
 
         items = []
         total_debt = 0.0
+        reservation_debt_sum = 0.0
+        shop_debt_sum = 0.0
         by_guest: dict[UUID | None, dict] = {}
 
         for row in rows:
             res = row[0]
-            debt = round(float(res.total_amount or 0) - float(res.paid_amount or 0), 2)
+            info = breakdowns[res.id]
+            debt = info["total_debt"]
+            if debt <= MIN_DEBT:
+                continue
             total_debt += debt
+            reservation_debt_sum += info["reservation_debt"]
+            shop_debt_sum += info["shop_debt"]
 
             guest_name = full_name(row.first_name, row.last_name)
             items.append(
@@ -110,7 +143,18 @@ class DebtorService:
                     "status": res.status,
                     "total_amount": float(res.total_amount or 0),
                     "paid_amount": float(res.paid_amount or 0),
+                    # Jami qarz: bron + do'kon
                     "debt_amount": debt,
+                    "reservation_debt": info["reservation_debt"],
+                    "shop_debt": info["shop_debt"],
+                    "expected_total": info["expected_total"],
+                    # Chiqishda qayta hisoblanadi (uzaytirilgan muddat)
+                    "projected": info["projected"],
+                    # NIMA UCHUN qarz — to'lanmagan haqlar
+                    "reasons": info["items"],
+                    "reason_text": reasons_text(info["items"]),
+                    "overdue_days": info["overdue_days"],
+                    "acknowledged": info["acknowledged"],
                     "created_by": res.created_by,
                     "created_by_name": full_name(row.creator_first, row.creator_last),
                 }
@@ -147,6 +191,8 @@ class DebtorService:
                 "count": len(items),
                 "guests": len(by_guest),
                 "total_debt": round(total_debt, 2),
+                "reservation_debt": round(reservation_debt_sum, 2),
+                "shop_debt": round(shop_debt_sum, 2),
             },
             "items": items,
             "guests": guests,

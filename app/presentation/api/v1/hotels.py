@@ -8,7 +8,7 @@ from app.application.services.configurator_access import assert_can_manage_setti
 from app.core.database import get_db
 from pydantic import BaseModel, Field
 
-from app.core.exceptions import ForbiddenException, NotFoundException
+from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.hotel import Hotel
 from app.application.services.hotel_service import HotelService
 from app.application.services.amenity_service import AmenityService
@@ -384,6 +384,76 @@ async def save_penalty_settings(
     hotel.settings = new_settings
     await session.flush()
     return _penalty_payload(new_settings)
+
+
+# ------------------------------------------------- qarz eslatmalari --
+
+
+class DebtSettingsRequest(BaseModel):
+    enabled: bool = True
+    interval_minutes: int = Field(default=120)
+
+
+@router.get("/debt-settings")
+async def get_debt_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qarz eslatmalari — HAR QANDAY xodim o'qiydi (veb eslatmasi oralig'i
+    shundan olinadi)."""
+    from app.application.services.debt_reminder_service import (
+        ALLOWED_INTERVALS,
+        DEFAULT_DEBT_SETTINGS,
+        resolve_debt_settings,
+    )
+
+    hotel_id = current_user.get("hotel_id")
+    hotel = await session.get(Hotel, hotel_id) if hotel_id else None
+    return {
+        **resolve_debt_settings(hotel.settings if hotel else None),
+        "allowed_intervals": list(ALLOWED_INTERVALS),
+        "default": DEFAULT_DEBT_SETTINGS,
+    }
+
+
+@router.put("/debt-settings")
+async def save_debt_settings(
+    data: DebtSettingsRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Saqlash — faqat sozlovchi (configurator_access)."""
+    from app.application.services.debt_reminder_service import (
+        ALLOWED_INTERVALS,
+        DEBT_SETTINGS_KEY,
+        DEFAULT_DEBT_SETTINGS,
+        resolve_debt_settings,
+    )
+
+    assert_can_manage_settings(current_user)
+    if data.interval_minutes not in ALLOWED_INTERVALS:
+        raise ValidationException(
+            f"Oraliq quyidagilardan biri bo'lishi kerak: {list(ALLOWED_INTERVALS)}",
+            "INVALID_INTERVAL",
+        )
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        raise ForbiddenException("Hotel context required")
+    hotel = await session.get(Hotel, hotel_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    new_settings = dict(hotel.settings or {})
+    new_settings[DEBT_SETTINGS_KEY] = {
+        "enabled": data.enabled,
+        "interval_minutes": data.interval_minutes,
+    }
+    hotel.settings = new_settings
+    await session.flush()
+    return {
+        **resolve_debt_settings(new_settings),
+        "allowed_intervals": list(ALLOWED_INTERVALS),
+        "default": DEFAULT_DEBT_SETTINGS,
+    }
 
 
 # ------------------------------------- ish vaqtidan tashqarida ishlash --

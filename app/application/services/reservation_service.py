@@ -651,6 +651,24 @@ class ReservationService:
         paid = float(reservation.paid_amount or 0)
         invoice = await self.invoice_repo.get_by_reservation(reservation_id, hotel_id)
 
+        if direction == "PAY" and reservation.status == "CHECKED_IN":
+            # Uzaytirilgan muddat puli chiqishgacha jamiga kirmaydi — mehmon
+            # ketmasidan undirish uchun to'lovda chiqishdagi hisob qo'llanadi
+            # (`check_out` bilan bir xil formula; u yerda qayta hisoblansa ham
+            # natija shu bo'ladi, ikki marta qo'shilmaydi). Faqat KO'TARILADI.
+            from app.application.services.debt_service import (
+                RECALC_TOLERANCE,
+                DebtService,
+            )
+
+            info = await DebtService(self.session).breakdown(reservation)
+            expected = float(info["expected_total"] or 0)
+            if expected > total + RECALC_TOLERANCE:
+                total = expected
+                reservation.total_amount = expected
+                if invoice is not None:
+                    invoice.total_amount = expected
+
         if direction == "PAY":
             remaining = total - paid
             if remaining <= 0:
@@ -2029,6 +2047,9 @@ class ReservationService:
         hotel_id: UUID,
         user_id: UUID,
         assign_to: UUID | None = None,
+        acknowledge_debt: bool = False,
+        debt_note: str | None = None,
+        enforce_debt: bool = True,
     ) -> Reservation:
         """Chiqish jarayonini boshlash: resepsiya "mehmon chiqmoqda" deb
         belgilaydi yoki farrosh "xonani tozalash"ni bosadi.
@@ -2038,6 +2059,13 @@ class ReservationService:
         housekeeping oqimi bron holatini avtomatik CHECKED_OUT qiladi.
         assign_to berilsa (farroshning o'zi bosganda) vazifa aynan unga
         biriktiriladi. Takroriy chaqiruv xavfsiz (idempotent).
+
+        QARZ (debt_service): mehmon pulini to'lamay ketmasligi kerak.
+        Qarz bor bo'lsa resepsiya (`enforce_debt`) to'xtatiladi — 409
+        CHECKOUT_DEBT; to'lovni olib yoki `acknowledge_debt` bilan sababini
+        yozib (`debt_note`) davom etadi, bu kim/qachon/nima uchun bilan
+        bronga yoziladi. Farrosh tugmasi (`enforce_debt=False`) to'xtatilmaydi:
+        u pul olmaydi — buning o'rniga kassirlarga darhol xabar ketadi.
         """
         reservation = await self.repo.get_by_id(reservation_id, hotel_id)
         if not reservation:
@@ -2055,6 +2083,10 @@ class ReservationService:
         room = await self.room_repo.get_by_id(reservation.room_id, hotel_id)
         if not room:
             raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
+
+        debt_event, debt = await self._checkout_debt_gate(
+            reservation, user_id, acknowledge_debt, debt_note, enforce_debt
+        )
 
         if reservation.checkout_requested_at is None:
             reservation.checkout_requested_at = datetime.now(timezone.utc)
@@ -2131,12 +2163,73 @@ class ReservationService:
                 entity_id=notify_task.id,
             )
 
+        if debt_event is not None:
+            # Kassirlar va rahbariyat darhol biladi — xato chiqishni buzmaydi
+            from app.application.services.debt_reminder_service import (
+                notify_checkout_with_debt,
+            )
+
+            await notify_checkout_with_debt(
+                self.session, reservation, debt, room.room_number,
+                event=debt_event, actor_id=user_id,
+            )
+
         await self.session.flush()
         # updated_at (server tomonda onupdate) flush'dan keyin eskirgan bo'ladi —
         # javob serializatsiyasi commit'dan keyin sinxron kontekstda unga murojaat
         # qilib MissingGreenlet xatosiga yiqilmasligi uchun hozir yangilab olamiz
         await self.session.refresh(reservation)
         return reservation
+
+    async def _checkout_debt_gate(
+        self,
+        reservation: Reservation,
+        user_id: UUID,
+        acknowledge: bool,
+        note: str | None,
+        enforce: bool,
+    ) -> tuple[str | None, dict | None]:
+        """Chiqishdan oldin qarzni tekshiradi.
+
+        ``(hodisa, hisob)`` qaytaradi: hodisa — "acknowledged" (qarz bilan
+        chiqarildi), "cleaner" (farrosh boshladi) yoki qarz yo'q bo'lsa None.
+        """
+        from app.application.services.debt_service import (
+            MIN_DEBT,
+            DebtService,
+            fmt_sum,
+            reasons_text,
+        )
+
+        debt = await DebtService(self.session).breakdown(reservation)
+        amount = float(debt["total_debt"])
+        if amount <= MIN_DEBT:
+            return None, debt
+        already = (
+            reservation.debt_ack_at is not None
+            and amount <= float(reservation.debt_ack_amount or 0) + 0.5
+        )
+        if acknowledge and not already:
+            text = (note or "").strip()
+            if len(text) < 3:
+                raise ValidationException(
+                    "Qarz bilan chiqarish sababini yozing", "DEBT_NOTE_REQUIRED"
+                )
+            reservation.debt_ack_at = datetime.now(timezone.utc)
+            reservation.debt_ack_by = user_id
+            reservation.debt_ack_note = text[:1000]
+            reservation.debt_ack_amount = amount
+            return "acknowledged", debt
+        if already:
+            return None, debt
+        if enforce:
+            raise ConflictException(
+                f"Mehmonning qarzi bor: {fmt_sum(amount)} so'm"
+                f" ({reasons_text(debt['items'])}). Avval to'lovni qabul qiling "
+                "yoki sababini yozib, qarz bilan chiqaring",
+                "CHECKOUT_DEBT",
+            )
+        return "cleaner", debt
 
     async def mark_no_show(
         self, reservation_id: UUID, hotel_id: UUID, user_id: UUID

@@ -305,6 +305,30 @@ Sozlamalar → "Bron va mehmonlar" → "Kunlik bron hisobi"
 Kod: `app/application/services/daily_unit.py`, migratsiya `d3a4b5c6d7e8`,
 test: `pytest tests/test_daily_unit_pricing.py`.
 
+### Qarzlar: sababi, eslatmalar, chiqishda tekshiruv
+
+Maqsad — mijoz bilan qarz qolib ketmasin. Qarz hamma joyda SABABI bilan
+ko'rinadi va unutilmaydi (`app/application/services/debt_service.py`):
+
+- **Sabab.** To'lovlar haqlarni vaqt tartibida yopadi (xona → uzaytirilgan
+  muddat → xizmat → jarima); yopilmay qolgan qism — sabab. Bronga yozilgan
+  do'kon savdosining qoldig'i ham mehmon qarzi. Kirgan mehmon uchun summa
+  `check_out` formulasi bilan (uzaytirish chiqishda qo'shilardi — endi oldindan
+  ko'rinadi). `GET /reservations/{id}/debt`, `GET /finance/debtors` (`reasons`).
+- **Chiqishda tekshiruv.** Resepsiya qarzdor mehmonni chiqara olmaydi (409
+  `CHECKOUT_DEBT`): to'lov olinadi yoki sababi yozilib qarz bilan chiqariladi
+  (`debt_ack_*` — kim, qachon, qancha, nima uchun; migratsiya `f5c6d7e8f9a0`).
+  Farrosh tugmasi va avtomatik chiqish to'xtatilmaydi — xabar ketadi.
+- **Oldindan undirish.** Kirgan mehmon to'lov qilganda jami chiqishdagi
+  hisobga ko'tariladi — uzaytirish puli ketishdan oldin olinadi.
+- **Eslatmalar** (`debt_reminder_service.py`, avtomatlashtirish tik'idan, har
+  5 daqiqada): "qarz bilan chiqib ketdi" va "bugun chiqadi, qarzi bor" —
+  har bron uchun bir marta; qarzdorlar ro'yxati — sozlamadagi oraliqda
+  (`/hotels/debt-settings`, standart 2 soat, 08:00–22:00). Oluvchilar —
+  administratorlar va `finance.payment.create` egalari (push + bildirishnoma).
+
+Test: `pytest tests/test_debts.py`.
+
 ### Hujjat suratini saqlash (pasport, ID karta)
 
 Pasport yoki ID karta qayerda skanerlansa ham surati MinIO'ga

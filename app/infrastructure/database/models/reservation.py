@@ -110,6 +110,19 @@ class Reservation(FullMixin, SoftDeleteMixin, Base):
     checkout_requested_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Mehmon QARZ BILAN chiqarildi: kim, qachon, qancha va nima uchun
+    # (debt_service, request_checkout). Qarz shundan keyin ham ro'yxatda
+    # turadi — bu faqat javobgarlik izi.
+    debt_ack_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    debt_ack_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    debt_ack_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    debt_ack_amount: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
     # Xona ko'chirishlar auditi: [{qaysi xonadan/xonaga, kim, qachon, narx}, ...]
     room_moves: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 

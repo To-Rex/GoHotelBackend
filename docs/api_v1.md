@@ -1768,6 +1768,32 @@ Yozuv shakli:
 
 ---
 
+**GET /hotels/debt-settings** / **PUT /hotels/debt-settings**
+
+- Auth: GET — any employee; PUT — configurator / SUPER_ADMIN (`assert_can_manage_settings`)
+- Body (PUT): `{"enabled": true, "interval_minutes": 120}` — interval one of 30/60/120/240/480 (422 `INVALID_INTERVAL`)
+- Response 200: `{"enabled": true, "interval_minutes": 120, "allowed_intervals": [...], "default": {...}}`
+- Debt reminders (`debt_reminder_service`, run from the automation tick every 5 min): a digest of debtors with reasons every `interval_minutes` (08:00–22:00 local), plus once-per-booking alerts "left with debt" (checked out in the last 24 h) and "leaves today with debt". Recipients: hotel ADMINs and employees with `finance.payment.create`; DB notification + FCM push. Notification `type` in `/notifications` is `debt` (`entity_type` `debt_*`).
+
+---
+
+**GET /reservations/{id}/debt**
+
+- Auth: required (hotel-scoped)
+- Description: The booking's account — how much is owed and WHY. Payments cover charges chronologically (room first, then extension, services, penalties); the unpaid part of each charge is a reason. For CHECKED_IN the amount is what `check-out` will charge (extended stays included). Shop sales charged to the booking (PENDING remainder) are part of the guest debt.
+- Response 200: `{"reservation_id", "status", "total_amount", "expected_total", "paid_amount", "projected", "reservation_debt", "shop_debt", "total_debt", "items": [{"kind": "room|extension|service|penalty|shop", "amount", "charged", ...}], "charges", "shop_sales", "payments", "overdue_days", "acknowledged": {"at", "by", "by_name", "note", "amount"} | null}`
+
+**POST /reservations/{id}/request-checkout** — debt check
+
+- Body (optional): `{"acknowledge_debt": true, "debt_note": "ertaga keltiradi"}`
+- With an outstanding debt (booking + shop) the reception call is refused with 409 `CHECKOUT_DEBT` (message lists the reasons) unless `acknowledge_debt` is sent with a note (422 `DEBT_NOTE_REQUIRED` if empty); who/when/amount/note are saved on the booking (`debt_ack_*`) and managers are notified. The cleaner's button (`self_assign=true`) is never blocked — cashiers are notified instead. Automatic check-outs are not blocked; the reminder service reports them.
+
+**POST /reservations/{id}/settle-payment** — for a CHECKED_IN guest a PAY first raises `total_amount` to the check-out total (extended stay), so the extension can be collected before the guest leaves.
+
+**GET /finance/debtors** — each item now also has `reservation_debt`, `shop_debt`, `expected_total`, `projected`, `reasons`, `reason_text`, `overdue_days`, `acknowledged`; `debt_amount` = booking + shop. Includes CHECKED_IN guests whose check-out total exceeds what they paid, and bookings with only an unpaid shop sale. `summary` adds `reservation_debt` and `shop_debt`.
+
+---
+
 **GET /hotels/penalty-settings** / **PUT /hotels/penalty-settings**
 
 - Auth: GET — any employee; PUT — configurator / SUPER_ADMIN (`assert_can_manage_settings`, 403 `SETTINGS_CONFIGURATOR_ONLY`)

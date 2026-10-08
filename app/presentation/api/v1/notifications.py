@@ -43,6 +43,9 @@ def _map_notification_type(n: Notification) -> str:
         return "critical"
     if n.entity_type == "inventory":
         return "inventory"
+    # Qarz eslatmalari (debt_reminder_service): debt_left, debt_digest, ...
+    if n.entity_type and n.entity_type.startswith("debt"):
+        return "debt"
     return "system"
 
 

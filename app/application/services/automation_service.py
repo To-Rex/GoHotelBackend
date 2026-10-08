@@ -163,6 +163,20 @@ class AutomationService:
             await self.session.rollback()
             logger.exception("Pending task assignment tick failed")
 
+        # Qarz eslatmalari: qarz bilan chiqib ketgan, bugun chiqadigan
+        # qarzdorlar va davriy ro'yxat. Avto-chiqishdan KEYIN — shu tikda
+        # qarz bilan yopilgan bron ham darhol xabar qilinadi. O'zi
+        # siyrakroq ishlaydi (debt_reminder_service.PASS_SECONDS).
+        try:
+            from app.application.services.debt_reminder_service import (
+                DebtReminderService,
+            )
+
+            await DebtReminderService(self.session).run(now)
+        except Exception:
+            await self.session.rollback()
+            logger.exception("Debt reminder tick failed")
+
     async def _assign_pending_tasks(self) -> None:
         """Farroshsiz qolgan avtomatik tozalash vazifalarini biriktiradi.
 
