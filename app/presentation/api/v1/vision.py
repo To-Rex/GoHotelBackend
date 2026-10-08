@@ -567,6 +567,40 @@ def _hotel_id(current_user: dict) -> UUID:
     return hotel_id
 
 
+#: `distinct_guests` rejimida oynadan olinadigan qatorlar chegarasi —
+#: guruhlash uchun hammasi kerak, `limit` esa guruhlarga qo'llanadi
+DISTINCT_SCAN_ROWS = 500
+
+
+def distinct_by_guest(rows, limit: int):
+    """Ko'rinishlarni MEHMON bo'yicha yig'adi: bir odam kamera oldida
+    turgan yoki qayta o'tgan har safar yangi epizod yoziladi, panelda esa u
+    bir marta ko'rinishi kerak.
+
+    `rows` eng yangisi birinchi tartibda. Har mehmon uchun: eng so'nggi
+    ko'rinish (vaqt, kamera — qabulxonaga hozirgi holat kerak), soni va
+    surati bor eng sifatli kadr (surat aniqroq ko'rinsin). Tanilmagan
+    ko'rinishlar guruhlanmaydi. Qaytadi: [(oxirgi, soni, surat_qatori)].
+    """
+    groups: dict = {}
+    order: list = []
+    for row in rows:
+        key = row.guest_id or ("sighting", row.id)
+        group = groups.get(key)
+        if group is None:
+            group = groups[key] = {"latest": row, "count": 0, "image": None}
+            order.append(key)
+        group["count"] += 1
+        if row.has_thumbnail:
+            best = group["image"]
+            if best is None or float(row.quality_score or 0) > float(best.quality_score or 0):
+                group["image"] = row
+    return [
+        (groups[key]["latest"], groups[key]["count"], groups[key]["image"])
+        for key in order[:limit]
+    ]
+
+
 @router.get("/sightings", response_model=SightingListResponse)
 async def list_sightings(
     minutes: int = Query(default=PANEL_WINDOW_MINUTES, ge=1, le=720),
@@ -583,6 +617,13 @@ async def list_sightings(
             "Faqat shu filial kameralaridan kelgan suratlar. Yangi mehmon "
             "qo'shishda MAJBURIY: xodim boshqa filialning odamini tasodifan "
             "biriktirmasligi kerak."
+        ),
+    ),
+    distinct_guests: bool = Query(
+        default=False,
+        description=(
+            "Bir mehmon bir marta: uning ko'rinishlari bitta qatorga "
+            "yig'iladi (eng so'nggisi, soni va eng aniq surati)"
         ),
     ),
     session: AsyncSession = Depends(get_db),
@@ -635,9 +676,15 @@ async def list_sightings(
             .outerjoin(Guest, Guest.id == FaceSighting.guest_id)
             .where(*conditions)
             .order_by(FaceSighting.seen_at.desc())
-            .limit(limit)
+            .limit(DISTINCT_SCAN_ROWS if distinct_guests else limit)
         )
     ).all()
+
+    if distinct_guests:
+        grouped = distinct_by_guest(rows, limit)
+    else:
+        grouped = [(row, 1, row if row.has_thumbnail else None) for row in rows]
+    rows = [row for row, _count, _image in grouped]
 
     guest_ids = {row.guest_id for row in rows if row.guest_id}
     visits: dict[UUID, tuple[int, datetime | None]] = {}
@@ -671,7 +718,7 @@ async def list_sightings(
                 active.add(gid)
 
     items = []
-    for row in rows:
+    for row, seen_count, image_row in grouped:
         count, last = visits.get(row.guest_id, (0, None)) if row.guest_id else (0, None)
         name = None
         if row.first_name or row.last_name:
@@ -694,11 +741,13 @@ async def list_sightings(
                 visits=count,
                 has_active_reservation=row.guest_id in active,
                 branch_id=row.branch_id,
-                has_thumbnail=bool(row.has_thumbnail),
+                has_thumbnail=image_row is not None,
                 # Biriktirish faqat vektori saqlangan, tanilmagan ko'rinish
                 # uchun mantiqiy.
                 can_enroll=bool(row.has_embedding) and row.guest_id is None,
                 acknowledged=row.acknowledged_at is not None,
+                sighting_count=seen_count,
+                image_sighting_id=image_row.id if image_row is not None else None,
             )
         )
 
@@ -852,6 +901,13 @@ async def sighting_image(
 @router.post("/sightings/{sighting_id}/ack")
 async def acknowledge_sighting(
     sighting_id: UUID,
+    all_for_guest: bool = Query(
+        default=False,
+        description=(
+            "Shu mehmonning (shu filialdagi) barcha yopilmagan ko'rinishlari "
+            "ham yopiladi — panelda u bitta qator bo'lib turadi"
+        ),
+    ),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("guest.view")),
 ):
@@ -860,11 +916,34 @@ async def acknowledge_sighting(
     sighting = await session.get(FaceSighting, sighting_id)
     if sighting is None or sighting.hotel_id != hotel_id:
         raise NotFoundException("Ko'rinish topilmadi")
+    now = datetime.now(timezone.utc)
     if sighting.acknowledged_at is None:
-        sighting.acknowledged_at = datetime.now(timezone.utc)
+        sighting.acknowledged_at = now
         sighting.acknowledged_by = current_user["id"]
-        await session.flush()
-    return {"acknowledged": True}
+    closed = 1
+    if all_for_guest and sighting.guest_id is not None:
+        # Boshqa filialdagi ko'rinishlarga tegilmaydi: u yerdagi qabulxona
+        # o'z panelida o'zi ko'rib chiqadi
+        branch = (
+            FaceSighting.branch_id.is_(None)
+            if sighting.branch_id is None
+            else FaceSighting.branch_id == sighting.branch_id
+        )
+        result = await session.execute(
+            update(FaceSighting)
+            .where(
+                FaceSighting.hotel_id == hotel_id,
+                FaceSighting.guest_id == sighting.guest_id,
+                FaceSighting.acknowledged_at.is_(None),
+                FaceSighting.id != sighting.id,
+                branch,
+            )
+            .values(acknowledged_at=now, acknowledged_by=current_user["id"])
+            .execution_options(synchronize_session=False)
+        )
+        closed += int(result.rowcount or 0)
+    await session.flush()
+    return {"acknowledged": True, "closed": closed}
 
 
 @router.post("/sightings/{sighting_id}/enroll", response_model=FaceProfileStatus)

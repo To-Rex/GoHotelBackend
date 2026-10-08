@@ -114,6 +114,11 @@ class SightingResponse(BaseModel):
     has_thumbnail: bool = False
     can_enroll: bool = False
     acknowledged: bool = False
+    #: `distinct_guests` rejimida: shu mehmonning oynadagi nechta ko'rinishi
+    #: bitta qatorga yig'ildi (oddiy rejimda doim 1)
+    sighting_count: int = 1
+    #: Ko'rsatiladigan surat — guruhdagi eng sifatli kadr. Bo'lmasa `id`
+    image_sighting_id: Optional[UUID] = None
 
     class Config:
         from_attributes = True

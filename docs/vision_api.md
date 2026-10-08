@@ -139,9 +139,9 @@ qayta urinmaydi.
 
 | Endpoint | Ruxsat | Vazifasi |
 |---|---|---|
-| `GET /vision/sightings` | `guest.view` | Oxirgi ko'rinishlar; `minutes`, `limit`, `include_acknowledged`, `only_matched` |
+| `GET /vision/sightings` | `guest.view` | Oxirgi ko'rinishlar; `minutes`, `limit`, `include_acknowledged`, `only_matched`, `distinct_guests` (bir mehmon — bir qator: eng so'nggi ko'rinish, `sighting_count`, eng aniq surat `image_sighting_id`; `limit` odamlarga qo'llanadi) |
 | `GET /vision/sightings/{id}/image` | `guest.view` | Paneldagi yuz surati |
-| `POST /vision/sightings/{id}/ack` | `guest.view` | Ko'rib chiqildi — paneldan olinadi |
+| `POST /vision/sightings/{id}/ack` | `guest.view` | Ko'rib chiqildi — paneldan olinadi; `?all_for_guest=true` — shu mehmonning shu filialdagi barcha yopilmagan ko'rinishlari ham (javobda `closed`) |
 | `POST /vision/sightings/{id}/enroll` | `guest.update` | Tanilmaganni mehmonga biriktirish |
 | `GET /vision/guests/{id}/face` | `guest.view` | Yuz profili holati |
 | `DELETE /vision/guests/{id}/face` | `guest.update` | Biometriyani butunlay o'chirish |
