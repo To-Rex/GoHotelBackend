@@ -25,6 +25,7 @@ from app.core.database import get_db
 from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
+    ServiceUnavailableException,
     UnauthorizedException,
     ValidationException,
 )
@@ -53,12 +54,43 @@ async def _read_image(file: UploadFile) -> bytes:
     return content
 
 
+#: Server yuzni tekshira olmaydi — mijoz shu kod bo'yichagina "kamerasiz
+#: kirish" yo'lini taklif qiladi (auth.py: login/no-camera)
+ENGINE_UNAVAILABLE_CODE = "FACE_ENGINE_UNAVAILABLE"
+
+
 def _require_engine() -> None:
     if not face_service.engine_importable():
-        raise HTTPException(
-            status_code=503,
-            detail="Face login is not available on this server",
+        raise ServiceUnavailableException(
+            "Bu serverda yuz tekshiruvi mavjud emas", ENGINE_UNAVAILABLE_CODE
         )
+
+
+async def _user_profiles(session: AsyncSession, user_id) -> list[UserFaceProfile]:
+    return list(
+        (
+            await session.execute(
+                select(UserFaceProfile)
+                .where(UserFaceProfile.user_id == user_id)
+                .order_by(UserFaceProfile.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _best_match(embedding: list[float], profiles) -> tuple[float, UserFaceProfile | None]:
+    """Namunaning xodim profillari ichidagi eng yaqini (kosinus o'xshashlik)."""
+    best, best_profile = 0.0, None
+    for profile in profiles:
+        stored = face_service.parse_embedding(profile.embedding)
+        if not stored:
+            continue
+        score = face_service.cosine_similarity(embedding, stored)
+        if score > best:
+            best, best_profile = score, profile
+    return best, best_profile
 
 
 @router.get("/availability")
@@ -118,15 +150,7 @@ async def verify_login(
             code,
         )
 
-    profiles = (
-        (
-            await session.execute(
-                select(UserFaceProfile).where(UserFaceProfile.user_id == user.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    profiles = await _user_profiles(session, user.id)
     if not profiles:
         # Token berilgandan keyin yuz o'chirilgan bo'lsa — parol yetarli
         logger.info("Yuz profili topilmadi, parol bilan kiritildi: %s", user.username)
@@ -137,16 +161,7 @@ async def verify_login(
             device_id=request.headers.get("x-device-id"),
         )
 
-    best = 0.0
-    best_profile = None
-    for profile in profiles:
-        stored = face_service.parse_embedding(profile.embedding)
-        if not stored:
-            continue
-        score = face_service.cosine_similarity(embedding, stored)
-        if score > best:
-            best = score
-            best_profile = profile
+    best, best_profile = _best_match(embedding, profiles)
 
     if best_profile is None or best < face_service.MATCH_THRESHOLD:
         logger.warning(
@@ -196,7 +211,14 @@ async def face_enroll(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Joriy xodim o'z yuzini biriktiradi (bir nechta namunagacha)."""
+    """Joriy xodim o'z yuzini biriktiradi (bir nechta namunagacha).
+
+    Yuz allaqachon biriktirilgan bo'lsa, yangi namuna O'SHA odamniki bo'lishi
+    shart (avvalgi profillar bilan mos kelishi kerak). Aks holda parolni
+    bilgan odam loginga o'z yuzini ham qo'shib, keyin kirib yurardi. Yuzni
+    butunlay almashtirish uchun avval profillar o'chiriladi (o'zi yoki
+    menejer orqali).
+    """
     _require_engine()
     content = await _read_image(file)
     try:
@@ -211,6 +233,20 @@ async def face_enroll(
             else "Rasm o'qilmadi",
             code,
         )
+
+    current = await _user_profiles(session, current_user["id"])
+    if current:
+        best, _ = _best_match(embedding, current)
+        if best < face_service.MATCH_THRESHOLD:
+            logger.warning(
+                "Yuz biriktirish rad etildi — boshqa odamning yuzi: user=%s (o'xshashlik %.3f)",
+                current_user["id"], best,
+            )
+            raise ValidationException(
+                "Bu yuz hisobga biriktirilgan yuzga mos kelmadi. Yuzni almashtirish "
+                "uchun avval eski profilni o'chiring",
+                "FACE_NOT_SAME_PERSON",
+            )
 
     profile = UserFaceProfile(
         user_id=current_user["id"],

@@ -147,6 +147,14 @@ What it means for the API:
 
 ---
 
+### Face login: only the enrolled face
+
+- `POST /auth/login` → `face_required` for an employee with a face profile; `POST /auth/face/verify-login` compares the frame only with that employee's own profiles (cosine ≥ 0.40) — 401 `FACE_MISMATCH` otherwise.
+- `POST /auth/login/no-camera` is accepted **only when the server cannot verify faces** (no face engine); otherwise 403 `FACE_REQUIRED`. Clients offer "login without camera" only after `503 FACE_ENGINE_UNAVAILABLE`. An employee on a device without a camera asks a manager/admin to remove the face (`DELETE /auth/face/enroll/{user_id}`), after which the password is enough.
+- `POST /auth/face/enroll`: when profiles already exist, the new sample must match them (same person) — 422 `FACE_NOT_SAME_PERSON` otherwise; to replace the face, delete the profiles first.
+
+---
+
 ### Superadmin panel: full control
 
 **POST /superadmin/hotels/{id}/enter** — open the main app in a hotel/branch

@@ -39,6 +39,12 @@ class ValidationException(AppException):
         self.status_code = 422
 
 
+class ServiceUnavailableException(AppException):
+    def __init__(self, detail: str = "Service unavailable", error_code: str = "SERVICE_UNAVAILABLE") -> None:
+        super().__init__(detail=detail, error_code=error_code)
+        self.status_code = 503
+
+
 class BadRequestException(AppException):
     def __init__(self, detail: str = "Bad request", error_code: str = "BAD_REQUEST") -> None:
         super().__init__(detail=detail, error_code=error_code)

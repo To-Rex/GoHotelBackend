@@ -362,6 +362,25 @@ endpointi ikki filial xodimi va filial almashtirgan administrator nomidan:
 boshqa filialning birorta ID'si chiqmasligi), `tests/test_branch_provisioning.py`.
 Uchalasi `GOHOTEL_TEST_PG_URL` (lokal test bazasi) bilan ishlaydi.
 
+### Yuz bilan kirish: faqat biriktirilgan yuz
+
+Yuz biriktirgan xodim hisobiga faqat O'SHA yuz bilan kiriladi
+(`app/presentation/api/v1/face.py`):
+
+- `verify-login` kadrni faqat shu xodimning profillari bilan solishtiradi
+  (kosinus ≥ 0.40), mos kelmasa 401 `FACE_MISMATCH`.
+- "Kamerasiz kirish" (`POST /auth/login/no-camera`) faqat server yuzni
+  tekshira olmaganda (dvigatel yo'q, 503 `FACE_ENGINE_UNAVAILABLE`) ishlaydi;
+  aks holda 403 `FACE_REQUIRED`. Ilgari bu yo'l mijozning "kamera yo'q"
+  so'ziga ishonib, parol bilan yuzsiz kiritardi. Kamerasiz qurilmada
+  ishlash kerak bo'lsa menejer/administrator xodimning yuzini o'chiradi —
+  shunda parol yetarli.
+- Yuz biriktirishda yangi namuna avvalgi profillarga mos bo'lishi shart
+  (422 `FACE_NOT_SAME_PERSON`) — loginga boshqa odamning yuzini qo'shib
+  bo'lmaydi; almashtirish uchun avval eski profil o'chiriladi.
+
+Test: `pytest tests/test_face_login_policy.py`.
+
 ### Boshqaruv paneli: to'liq boshqaruv
 
 Panel egasi hamma narsani paneldan boshqaradi:
