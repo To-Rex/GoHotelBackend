@@ -31,6 +31,7 @@ from app.core.exceptions import (
 from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.reservation import Reservation
+from app.infrastructure.database.models.room import Room
 from app.infrastructure.database.models.shop import (
     ShopBatch,
     ShopProduct,
@@ -230,17 +231,20 @@ def _sale_dict(
     creator: User | None = None,
     reservation: Reservation | None = None,
     guest: Guest | None = None,
+    room_number: str | None = None,
 ) -> dict:
     return {
         "id": str(s.id),
         "reservation_id": str(s.reservation_id) if s.reservation_id else None,
         "reservation_number": reservation.reservation_number if reservation else None,
-        # Bron kimga tegishli — chek tafsilotida mijoz ko'rsatiladi
+        # Bron kimga tegishli — sotuvlar ro'yxati va chek tafsilotida mijoz
         "guest_name": (
             f"{guest.first_name or ''} {guest.last_name or ''}".strip() or None
             if guest
             else None
         ),
+        # Bronning xonasi — bronga yozilgan savdo kimga sotilgani
+        "room_number": room_number,
         "total_amount": float(s.total_amount),
         "payment_method": s.payment_method,
         # Bo'lib to'lash bo'laklari (bo'lmasa None) — chek va hisobotlar uchun
@@ -263,6 +267,14 @@ def _sale_dict(
             for i in s.items
         ],
     }
+
+
+async def _room_number(session: AsyncSession, reservation: Reservation | None) -> str | None:
+    """Bronning xona raqami (bronga yozilgan savdo kimga sotilgani)."""
+    if not reservation or not reservation.room_id:
+        return None
+    room = await session.get(Room, reservation.room_id)
+    return room.room_number if room else None
 
 
 # ------------------------------------------------------ chek dizayni --
@@ -500,12 +512,15 @@ async def list_sales(
         conditions.append(ShopSale.status == status)
     text = (search or "").strip()
     if text:
-        # Xodim ko'rib turgan narsasi bo'yicha qidiradi: bron raqami yoki
-        # chekdagi mahsulot nomi
+        # Xodim ko'rib turgan narsasi bo'yicha qidiradi: bron raqami, kimga
+        # sotilgani (mijoz ismi, xona) yoki chekdagi mahsulot nomi
         like = f"%{text}%"
         conditions.append(
             or_(
                 Reservation.reservation_number.ilike(like),
+                Guest.first_name.ilike(like),
+                Guest.last_name.ilike(like),
+                Room.room_number.ilike(like),
                 ShopSale.items.any(ShopSaleItem.product_name.ilike(like)),
             )
         )
@@ -517,6 +532,8 @@ async def list_sales(
                 select(func.count(func.distinct(ShopSale.id)))
                 .select_from(ShopSale)
                 .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
+                .outerjoin(Guest, Guest.id == Reservation.guest_id)
+                .outerjoin(Room, Room.id == Reservation.room_id)
                 .where(*conditions)
             )
         ).scalar()
@@ -525,10 +542,11 @@ async def list_sales(
 
     column = SALE_SORTS.get(sort_by or "", ShopSale.created_at)
     stmt = (
-        select(ShopSale, User, Reservation, Guest)
+        select(ShopSale, User, Reservation, Guest, Room.room_number)
         .join(User, User.id == ShopSale.created_by)
         .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
         .outerjoin(Guest, Guest.id == Reservation.guest_id)
+        .outerjoin(Room, Room.id == Reservation.room_id)
         .options(selectinload(ShopSale.items))
         .where(*conditions)
         # `ShopSale.id` — sahifalar orasida qator takrorlanib ketmasligi uchun
@@ -540,7 +558,7 @@ async def list_sales(
         .limit(limit)
     )
     rows = (await session.execute(stmt)).all()
-    return [_sale_dict(s, u, r, g) for s, u, r, g in rows]
+    return [_sale_dict(s, u, r, g, room_no) for s, u, r, g, room_no in rows]
 
 
 @router.post("/sales")
@@ -654,7 +672,7 @@ async def create_sale(
     guest = (
         await session.get(Guest, reservation.guest_id) if reservation else None
     )
-    return _sale_dict(sale, creator, reservation, guest)
+    return _sale_dict(sale, creator, reservation, guest, await _room_number(session, reservation))
 
 
 @router.post("/sales/{sale_id}/pay")
@@ -695,7 +713,7 @@ async def pay_sale(
     guest = (
         await session.get(Guest, reservation.guest_id) if reservation else None
     )
-    return _sale_dict(sale, creator, reservation, guest)
+    return _sale_dict(sale, creator, reservation, guest, await _room_number(session, reservation))
 
 
 @router.delete("/sales/{sale_id}")
