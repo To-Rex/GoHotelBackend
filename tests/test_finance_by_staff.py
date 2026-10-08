@@ -24,6 +24,7 @@ HOTEL = uuid.uuid4()
 DILNOZA = uuid.uuid4()
 AZIZ = uuid.uuid4()
 GONE = uuid.uuid4()
+SALE_A, SALE_B = uuid.uuid4(), uuid.uuid4()
 
 
 class Rows:
@@ -44,7 +45,8 @@ class StaffSession:
         self.sql.append(sql)
         if "FROM payments" in sql:
             return Rows(list(self.payments))
-        if "FROM shop_sales" in sql:
+        # Do'kon — har to'lov qatori (qisman to'lovlar ham)
+        if "FROM shop_sale_payments" in sql:
             return Rows(list(self.shop))
         if "FROM expenses" in sql:
             return Rows(list(self.expenses))
@@ -70,14 +72,12 @@ def test_revenue_is_split_by_who_took_the_money():
             # Qaytarim manfiy to'lov — tushumni kamaytiradi
             (AZIZ, "CASH", Decimal("250000"), 3, Decimal("50000")),
         ],
-        # (created_by, jami, usul, bo'laklar)
+        # To'lov qatorlari: (qabul qilgan, savdo, summa, usul)
         shop=[
-            (DILNOZA, Decimal("30000"), "CASH", None),
-            # Bo'lib to'langan savdo — har bo'lagi o'z usuliga
-            (AZIZ, Decimal("40000"), "MIXED", [
-                {"amount": 10000, "payment_method": "CASH"},
-                {"amount": 30000, "payment_method": "CARD"},
-            ]),
+            (DILNOZA, SALE_A, Decimal("30000"), "CASH"),
+            # Bo'lib to'langan savdo — har bo'lagi alohida qator, o'z usulida
+            (AZIZ, SALE_B, Decimal("10000"), "CASH"),
+            (AZIZ, SALE_B, Decimal("30000"), "CARD"),
         ],
         # (created_by, usul, summa, soni)
         expenses=[
@@ -117,7 +117,8 @@ def test_dates_match_summary_definition():
     build(session)
     pay, shop, exp = session.sql
     assert "payments.payment_date >=" in pay and "payments.payment_date <=" in pay
-    assert "shop_sales.paid_at >=" in shop and "shop_sales.status" in shop
+    # Do'kon — to'lov sanasi bo'yicha (qisman to'lovlar o'z kunida)
+    assert "shop_sale_payments.paid_at >=" in shop and "shop_sale_payments.hotel_id" in shop
     assert "expenses.expense_date >=" in exp
     # Faoliyat bo'lmasa — bo'sh, foydalanuvchilar so'ralmaydi
     assert build(StaffSession())["items"] == []

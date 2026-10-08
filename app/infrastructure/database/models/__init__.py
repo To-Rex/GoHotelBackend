@@ -34,7 +34,7 @@ from app.infrastructure.database.models.report import Report
 from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.webauthn_credential import WebAuthnCredential
 from app.infrastructure.database.models.webauthn_challenge import WebAuthnChallenge
-from app.infrastructure.database.models.shop import ShopProduct, ShopBatch, ShopSale, ShopSaleItem, ShopWriteoff
+from app.infrastructure.database.models.shop import ShopProduct, ShopBatch, ShopSale, ShopSaleItem, ShopSalePayment, ShopWriteoff
 from app.infrastructure.database.models.user_face_profile import UserFaceProfile
 from app.infrastructure.database.models.trusted_device import TrustedDevice
 from app.infrastructure.database.models.shift import ShiftSession
@@ -54,7 +54,7 @@ __all__ = [
     "FileAttachment", "Notification", "Report", "Expense",
     "Amenity", "HotelAmenity", "RoomAmenity",
     "WebAuthnCredential", "WebAuthnChallenge",
-    "ShopProduct", "ShopBatch", "ShopSale", "ShopSaleItem", "ShopWriteoff",
+    "ShopProduct", "ShopBatch", "ShopSale", "ShopSaleItem", "ShopSalePayment", "ShopWriteoff",
     "UserFaceProfile",
     "ShiftSession",
     "StaffMessage",

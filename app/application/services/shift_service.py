@@ -29,7 +29,7 @@ from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.shift import ShiftSession
-from app.infrastructure.database.models.shop import ShopSale
+from app.infrastructure.database.models.shop import ShopSalePayment
 from app.infrastructure.database.models.user import User
 
 # hotels.settings JSONB ichidagi kalit va standart qiymatlar
@@ -341,32 +341,19 @@ class ShiftService:
         )
         cash_in = _dec(pay.scalar() or 0)
 
-        # Do'kon naqd savdolari (to'lov sessiya oynasida olingan).
-        # Bo'lib to'lashda (payments ro'yxati bor, method "MIXED") kassaga
-        # faqat NAQD bo'laklar tushadi — jami emas
-        shop_rows = (
-            await self.session.execute(
-                select(
-                    ShopSale.total_amount,
-                    ShopSale.payment_method,
-                    ShopSale.payments,
-                ).where(
-                    ShopSale.hotel_id == s.hotel_id,
-                    ShopSale.created_by == s.user_id,
-                    ShopSale.status == "PAID",
-                    ShopSale.paid_at >= start,
-                    ShopSale.paid_at <= end,
-                )
+        # Do'kon naqd to'lovlari — sessiya egasi QABUL QILGAN, sessiya
+        # oynasidagi har to'lov (qisman ham). Bo'lib to'lashda kassaga faqat
+        # NAQD bo'laklar tushadi — har bo'lak alohida qator
+        shop = await self.session.execute(
+            select(func.coalesce(func.sum(ShopSalePayment.amount), 0)).where(
+                ShopSalePayment.hotel_id == s.hotel_id,
+                ShopSalePayment.created_by == s.user_id,
+                ShopSalePayment.payment_method == "CASH",
+                ShopSalePayment.paid_at >= start,
+                ShopSalePayment.paid_at <= end,
             )
-        ).all()
-        shop_in = Decimal("0")
-        for sale_total, sale_method, sale_parts in shop_rows:
-            if sale_parts:
-                for part in sale_parts:
-                    if part.get("payment_method") == "CASH":
-                        shop_in += _dec(part.get("amount") or 0)
-            elif sale_method == "CASH":
-                shop_in += _dec(sale_total)
+        )
+        shop_in = _dec(shop.scalar() or 0)
 
         # Naqd xarajatlar
         exp = await self.session.execute(

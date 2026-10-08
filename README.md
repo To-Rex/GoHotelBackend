@@ -305,6 +305,30 @@ Sozlamalar → "Bron va mehmonlar" → "Kunlik bron hisobi"
 Kod: `app/application/services/daily_unit.py`, migratsiya `d3a4b5c6d7e8`,
 test: `pytest tests/test_daily_unit_pricing.py`.
 
+### Do'kon: qisman va aralash to'lov
+
+Bronga yozilgan do'kon savdosi istalgancha marta QISMAN to'lanadi, har
+to'lov bir yoki bir necha usulda (masalan naqd + karta). Qoldiq qolgan
+ekan savdo `PENDING` (qarz), to'liq to'langanda `PAID`.
+
+- `POST /shop/sales/{id}/pay`: `{"payment_method": "CASH", "amount": 20000}`
+  (summasiz — butun qoldiq, avvalgidek) yoki `{"payments": [{"amount":
+  10000, "payment_method": "CASH"}, {"amount": 5000, "payment_method":
+  "CARD"}]}` — jami qoldiqdan oshmaydi (422 `SHOP_PAYMENT_EXCEEDS_REMAINING`).
+- `POST /shop/sales` bronga yozishda `payments` — hozir to'lanadigan qism
+  (ixtiyoriy, jami summadan oshmaydi). Oddiy sotuvda `payments` avvalgidek
+  jami summaga teng bo'lishi shart.
+- Javobda `paid_amount`, `remaining_amount`; `payments` — har to'lov
+  qachon (`paid_at`), qaysi usulda va kim qabul qilgani.
+- Har to'lov `shop_sale_payments` da (migratsiya `e4b5c6d7e8f9` mavjud
+  to'langan savdolarni ko'chiradi). Do'kon tushumi, kunlik grafik,
+  xodimlar kesimi, smena kassasi va shaxsiy hisobot SHU jadvaldan: qisman
+  to'lov o'sha kuni va pulni QABUL QILGAN xodim kassasiga tushadi. Do'kon
+  qarzi — to'lanmagan qoldiq.
+
+Kod: `app/application/services/shop_payments.py`, test:
+`pytest tests/test_shop_partial_payments.py`.
+
 ### Jarimalar (kech chiqish, shikast)
 
 Mehmon kech chiqsa yoki biror narsani sindirsa bronga jarima yoziladi.
@@ -389,7 +413,7 @@ sanash" saqlanadi). Test: `pytest tests/test_shift_handovers.py`.
 **Tushum xodimlar kesimida.** Moliya sahifasida "Tushum — xodimlar
 bo'yicha" kartasi: kim qancha bron to'lovi va do'kon savdosi olgan,
 naqd/karta, qaytarim va xarajat. `GET /finance/by-staff?date_from&date_to`
-— pul yozuvning o'zidan bog'lanadi (`Payment/ShopSale/Expense.created_by`,
+— pul yozuvning o'zidan bog'lanadi (`Payment/ShopSalePayment/Expense.created_by`,
 "Mening hisobotim" va smena kassasi bilan bir xil), sana ta'rifi
 `/finance/summary` bilan bir xil, ya'ni xodimlar yig'indisi jami tushumga
 teng. Ko'rish — admin yoki `finance.view` / `shift.force_close` /

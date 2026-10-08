@@ -32,7 +32,9 @@ from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.hotel import Hotel
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
+from app.application.services.shop_payments import apply_payment, remaining_of
 from app.infrastructure.database.models.shop import (
+    ShopSalePayment,
     ShopBatch,
     ShopProduct,
     ShopSale,
@@ -112,7 +114,9 @@ class SalePaymentPart(BaseModel):
 class SaleCreateRequest(BaseModel):
     items: list[SaleItemRequest] = Field(..., min_length=1)
     payment_method: Literal["CASH", "CARD", "ONLINE", "BANK_TRANSFER", "TRANSFER"] | None = None
-    # Bo'lib to'lash: berilsa bo'laklar jami sotuv summasiga teng bo'lishi shart
+    # Oddiy sotuvda — bo'lib to'lash: bo'laklar jami sotuv summasiga teng.
+    # Bronga yozishda — hozir to'lanadigan QISM (ixtiyoriy, jami summadan
+    # oshmaydi): qolgani bron hisobida qoladi
     payments: list[SalePaymentPart] | None = None
     reservation_id: UUID | None = None
 
@@ -121,6 +125,9 @@ class SalePayRequest(BaseModel):
     # Bitta usul YOKI bo'lib to'lash bo'laklari — kamida bittasi bo'lishi kerak
     payment_method: Literal["CASH", "CARD", "ONLINE", "BANK_TRANSFER", "TRANSFER"] | None = None
     payments: list[SalePaymentPart] | None = None
+    # Qisman to'lash (bitta usulda): berilmasa — butun qoldiq. Bo'laklar
+    # bilan to'lashda summa bo'laklarning o'zidan olinadi (qoldiqdan oshmaydi)
+    amount: float | None = Field(default=None, gt=0)
 
 
 def _resolve_payments(
@@ -246,6 +253,9 @@ def _sale_dict(
         # Bronning xonasi — bronga yozilgan savdo kimga sotilgani
         "room_number": room_number,
         "total_amount": float(s.total_amount),
+        # To'langan qism va qoldiq (qisman to'lov)
+        "paid_amount": _paid_of(s),
+        "remaining_amount": max(float(s.total_amount) - _paid_of(s), 0.0),
         "payment_method": s.payment_method,
         # Bo'lib to'lash bo'laklari (bo'lmasa None) — chek va hisobotlar uchun
         "payments": s.payments,
@@ -267,6 +277,19 @@ def _sale_dict(
             for i in s.items
         ],
     }
+
+
+def _paid_of(s: ShopSale) -> float:
+    """To'langan qism. Ustun hali to'ldirilmagan eski yozuvda — holatdan."""
+    paid = getattr(s, "paid_amount", None)
+    if paid is None:
+        return float(s.total_amount) if s.status == "PAID" else 0.0
+    return float(paid)
+
+
+async def _user_name(session: AsyncSession, user_id) -> str | None:
+    user = await session.get(User, user_id)
+    return f"{user.first_name} {user.last_name}".strip() if user else None
 
 
 async def _room_number(session: AsyncSession, reservation: Reservation | None) -> str | None:
@@ -654,6 +677,7 @@ async def create_sale(
             data.payments, data.payment_method, total
         )
 
+    now = datetime.now(timezone.utc)
     sale = ShopSale(
         hotel_id=h_id,
         reservation_id=data.reservation_id,
@@ -661,12 +685,40 @@ async def create_sale(
         payment_method=pay_method,
         payments=pay_parts,
         status="PENDING" if data.reservation_id else "PAID",
-        paid_at=None if data.reservation_id else datetime.now(timezone.utc),
+        paid_at=None if data.reservation_id else now,
         created_by=current_user["id"],
         items=sale_items,
+        paid_amount=0 if data.reservation_id else total,
     )
     session.add(sale)
     await session.flush()
+
+    if not data.reservation_id:
+        # Oddiy sotuv darhol to'lanadi — to'lov qatorlari (tushum va kassa
+        # shulardan hisoblanadi); bo'lib to'lashda har bo'lak alohida
+        parts = pay_parts or [{"amount": total, "payment_method": pay_method}]
+        for part in parts:
+            if float(part["amount"]) > 0:
+                session.add(ShopSalePayment(
+                    hotel_id=h_id,
+                    sale_id=sale.id,
+                    amount=part["amount"],
+                    payment_method=part.get("payment_method"),
+                    paid_at=now,
+                    created_by=current_user["id"],
+                ))
+        await session.flush()
+    elif data.payments:
+        # Bronga yozishda hozir to'langan QISM (qolgani bron hisobida)
+        apply_payment(
+            session,
+            sale,
+            [{"amount": p.amount, "payment_method": p.payment_method} for p in data.payments],
+            user_id=current_user["id"],
+            user_name=await _user_name(session, current_user["id"]),
+            now=now,
+        )
+        await session.flush()
 
     creator = await session.get(User, current_user["id"])
     guest = (
@@ -685,23 +737,37 @@ async def pay_sale(
     _shift: None = Depends(require_open_shift),
 ):
     h_id = _get_hotel_id(current_user, hotel_id)
-    sale = await session.get(ShopSale, sale_id, options=[selectinload(ShopSale.items)])
+    # Qator qulflanadi: ikki xodim bir vaqtda qisman to'lov kiritsa ham
+    # jami summadan oshib ketmasin (ikkinchisi yangilangan qoldiqni ko'radi)
+    sale = await session.get(
+        ShopSale, sale_id, options=[selectinload(ShopSale.items)], with_for_update=True
+    )
     if not sale or sale.hotel_id != h_id:
         raise NotFoundException("Sale not found", "SHOP_SALE_NOT_FOUND")
-    if sale.status == "PAID":
+    if sale.status == "PAID" or remaining_of(sale) <= 0.01:
         raise ConflictException("Sale is already paid", "SHOP_SALE_ALREADY_PAID")
     if not data.payment_method and not data.payments:
         raise ValidationException(
             "Payment method is required", "PAYMENT_METHOD_REQUIRED"
         )
 
-    pay_method, pay_parts = _resolve_payments(
-        data.payments, data.payment_method, float(sale.total_amount)
+    # To'liq yoki QISMAN, bir yoki bir necha usulda — istalgancha marta.
+    # Summa berilmasa butun qoldiq (avvalgi xatti-harakat)
+    if data.payments:
+        parts = [{"amount": p.amount, "payment_method": p.payment_method} for p in data.payments]
+    else:
+        parts = [{
+            "amount": data.amount if data.amount is not None else remaining_of(sale),
+            "payment_method": data.payment_method,
+        }]
+    apply_payment(
+        session,
+        sale,
+        parts,
+        user_id=current_user["id"],
+        user_name=await _user_name(session, current_user["id"]),
+        now=datetime.now(timezone.utc),
     )
-    sale.status = "PAID"
-    sale.payment_method = pay_method
-    sale.payments = pay_parts
-    sale.paid_at = datetime.now(timezone.utc)
     await session.flush()
 
     creator = await session.get(User, sale.created_by)

@@ -36,7 +36,7 @@ from app.infrastructure.database.models.invoice import Invoice
 from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
-from app.infrastructure.database.models.shop import ShopSale
+from app.infrastructure.database.models.shop import ShopSale, ShopSalePayment
 
 #: Hisobot ustunlari — ilovadagi to'rtta to'lov usuli.
 #:
@@ -310,48 +310,51 @@ class PersonalReportService:
     async def _shop(self, hotel_id, user_id, start, end) -> dict:
         """Do'kon savdolari — TO'LANGANLAR pul sifatida, qolganlari alohida.
 
-        Sana `paid_at` bo'yicha: hisobot pul qachon olinganini ko'rsatishi
-        kerak, chek qachon yozilganini emas. To'lanmagan savdolar tushumga
-        qo'shilmaydi, lekin ko'rinmay ham qolmaydi — ular alohida sanaladi.
+        Pul — xodim QABUL QILGAN har to'lov (qisman ham), to'lov sanasi
+        bo'yicha: hisobot pul qachon olinganini ko'rsatishi kerak, chek qachon
+        yozilganini emas. To'lanmagan qoldiqlar tushumga qo'shilmaydi, lekin
+        ko'rinmay ham qolmaydi — ular alohida sanaladi.
         """
-        stmt = select(ShopSale).where(ShopSale.created_by == user_id)
-        if hotel_id is not None:
-            stmt = stmt.where(ShopSale.hotel_id == hotel_id)
-
-        paid_stmt = stmt.where(
-            ShopSale.status == "PAID",
-            ShopSale.paid_at.is_not(None),
-            ShopSale.paid_at >= start,
-            ShopSale.paid_at <= end,
+        pay_stmt = select(
+            ShopSalePayment.sale_id, ShopSalePayment.amount, ShopSalePayment.payment_method
+        ).where(
+            ShopSalePayment.created_by == user_id,
+            ShopSalePayment.paid_at >= start,
+            ShopSalePayment.paid_at <= end,
         )
-        paid_rows = (await self.session.execute(paid_stmt)).scalars().all()
+        if hotel_id is not None:
+            pay_stmt = pay_stmt.where(ShopSalePayment.hotel_id == hotel_id)
+        pay_rows = (await self.session.execute(pay_stmt)).all()
 
         by_method = _empty_methods()
         total = Decimal("0")
-        for sale in paid_rows:
-            total += _dec(sale.total_amount)
-            # Bo'lib to'langan savdoda har bo'lak o'z turiga yoziladi
-            if sale.payments:
-                for part in sale.payments:
-                    by_method[bucket_of(part.get("payment_method"))] += _dec(
-                        part.get("amount")
-                    )
-            else:
-                by_method[bucket_of(sale.payment_method)] += _dec(sale.total_amount)
+        sale_ids: set = set()
+        for sale_id, amount, pay_method in pay_rows:
+            total += _dec(amount)
+            sale_ids.add(sale_id)
+            # Bo'lib to'lashda har bo'lak o'z turiga — alohida qator
+            by_method[bucket_of(pay_method)] += _dec(amount)
 
-        unpaid_stmt = stmt.where(
+        unpaid_stmt = select(ShopSale).where(
+            ShopSale.created_by == user_id,
             ShopSale.status != "PAID",
             ShopSale.created_at >= start,
             ShopSale.created_at <= end,
         )
+        if hotel_id is not None:
+            unpaid_stmt = unpaid_stmt.where(ShopSale.hotel_id == hotel_id)
         unpaid_rows = (await self.session.execute(unpaid_stmt)).scalars().all()
 
+        def _left(sale) -> Decimal:
+            # Qisman to'langanining qoldig'i (eski yozuvda paid_amount yo'q)
+            return max(_dec(sale.total_amount) - _dec(getattr(sale, "paid_amount", 0)), Decimal("0"))
+
         return {
-            "count": len(paid_rows),
+            "count": len(sale_ids),
             "total": float(total),
             "by_method": _money(by_method),
             "unpaid_count": len(unpaid_rows),
-            "unpaid_total": float(sum((_dec(s.total_amount) for s in unpaid_rows), Decimal("0"))),
+            "unpaid_total": float(sum((_left(s) for s in unpaid_rows), Decimal("0"))),
         }
 
     # ------------------------------------------------------------ xarajatlar

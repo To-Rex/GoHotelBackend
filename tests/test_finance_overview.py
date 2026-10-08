@@ -44,7 +44,8 @@ class DailySession:
             return Rows(self.payments)
         if "FROM expenses" in sql:
             return Rows(self.expenses)
-        if "FROM shop_sales" in sql:
+        # Do'kon tushumi — har to'lov (qisman ham) o'z kunida
+        if "FROM shop_sale_payments" in sql:
             return Rows(self.shop)
         raise AssertionError(sql)
 

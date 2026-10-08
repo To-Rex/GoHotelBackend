@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.invoice import Invoice
 from app.infrastructure.database.models.payment import Payment
-from app.infrastructure.database.models.shop import ShopSale
+from app.infrastructure.database.models.shop import ShopSale, ShopSalePayment
 from app.infrastructure.database.models.user import User
 
 #: Bekor qilingan va qaytarilgan hujjatlar qarzdorlikka kirmaydi —
@@ -130,7 +130,8 @@ class FinanceSummaryService:
         """Davr tushumi KIM tomonidan olingan — xodimlar kesimida.
 
         Pul har doim yozuvning o'zidan bog'lanadi: to'lov — `Payment.created_by`,
-        do'kon savdosi — `ShopSale.created_by`, xarajat — `Expense.created_by`
+        do'kon — `ShopSalePayment.created_by` (to'lovni qabul qilgan xodim,
+        qisman to'lovlar ham), xarajat — `Expense.created_by`
         ("Mening hisobotim" va smena kassasi bilan bir xil ta'rif). Sana
         chegaralari `build` bilan AYNAN bir xil, ya'ni xodimlar bo'yicha
         tushum yig'indisi "Jami tushum" (bron to'lovlari + do'kon) ga teng.
@@ -183,30 +184,28 @@ class FinanceSummaryService:
             r["refunds"] += _num(refunds)
             method(r, pay_method)["pay"] += _num(total)
 
-        # Do'kon: to'langan savdo, TO'LOV sanasi bo'yicha (build bilan bir xil)
+        # Do'kon: har TO'LOV (qisman ham) — uni qabul qilgan xodimga, to'lov
+        # sanasi bo'yicha (build bilan bir xil)
         shop = select(
-            ShopSale.created_by,
-            ShopSale.total_amount,
-            ShopSale.payment_method,
-            ShopSale.payments,
-        ).where(ShopSale.status == SHOP_PAID)
+            ShopSalePayment.created_by,
+            ShopSalePayment.sale_id,
+            ShopSalePayment.amount,
+            ShopSalePayment.payment_method,
+        )
         if hotel_id is not None:
-            shop = shop.where(ShopSale.hotel_id == hotel_id)
+            shop = shop.where(ShopSalePayment.hotel_id == hotel_id)
         if date_from:
-            shop = shop.where(ShopSale.paid_at >= datetime.combine(date_from, time.min))
+            shop = shop.where(ShopSalePayment.paid_at >= datetime.combine(date_from, time.min))
         if date_to:
-            shop = shop.where(ShopSale.paid_at <= datetime.combine(date_to, time.max))
-        for user_id, total_amount, sale_method, parts in (
-            await self.session.execute(shop)
-        ).all():
+            shop = shop.where(ShopSalePayment.paid_at <= datetime.combine(date_to, time.max))
+        sales_by_user: dict = {}
+        for user_id, sale_id, amount, pay_method in (await self.session.execute(shop)).all():
             r = row(user_id)
-            r["shop"] += _num(total_amount)
-            r["shop_count"] += 1
-            if parts:
-                for part in parts:
-                    method(r, part.get("payment_method"))["shop"] += _num(part.get("amount"))
-            else:
-                method(r, sale_method)["shop"] += _num(total_amount)
+            r["shop"] += _num(amount)
+            sales_by_user.setdefault(user_id, set()).add(sale_id)
+            method(r, pay_method)["shop"] += _num(amount)
+        for user_id, sale_ids in sales_by_user.items():
+            rows[user_id]["shop_count"] = len(sale_ids)
 
         # Xarajatlar — kim kassadan pul chiqargani
         exp = select(
@@ -335,14 +334,14 @@ class FinanceSummaryService:
             if row is not None:
                 row["expense"] += _num(total)
 
-        paid_day = func.date(ShopSale.paid_at)
-        shop = select(paid_day, func.coalesce(func.sum(ShopSale.total_amount), 0)).where(
-            ShopSale.status == SHOP_PAID,
-            ShopSale.paid_at >= datetime.combine(date_from, time.min),
-            ShopSale.paid_at <= datetime.combine(date_to, time.max),
+        # Do'kon — har TO'LOV o'z kuniga (qisman to'lovlar ham)
+        paid_day = func.date(ShopSalePayment.paid_at)
+        shop = select(paid_day, func.coalesce(func.sum(ShopSalePayment.amount), 0)).where(
+            ShopSalePayment.paid_at >= datetime.combine(date_from, time.min),
+            ShopSalePayment.paid_at <= datetime.combine(date_to, time.max),
         )
         if hotel_id is not None:
-            shop = shop.where(ShopSale.hotel_id == hotel_id)
+            shop = shop.where(ShopSalePayment.hotel_id == hotel_id)
         for day, total in (await self.session.execute(shop.group_by(paid_day))).all():
             if isinstance(day, datetime):
                 day = day.date()
@@ -514,37 +513,31 @@ class FinanceSummaryService:
     # ---------------------------------------------------------- do'kon --
 
     async def _shop(self, hotel_id, date_from, date_to, bucket) -> dict:
-        # To'langan savdo TO'LOV sanasi bo'yicha olinadi: bronga yozilib
-        # keyin to'langan sotuv aynan to'langan kun tushumiga tushadi
+        # Do'kon tushumi — har TO'LOV o'z sanasida: bronga yozilib keyin
+        # (qisman ham) to'langan sotuvning har to'lovi o'sha kun tushumiga
+        # tushadi. Bo'lib to'lashda har bo'lak o'z usuliga ("MIXED" emas)
         paid = select(
-            ShopSale.total_amount, ShopSale.payment_method, ShopSale.payments
-        ).where(ShopSale.status == SHOP_PAID)
+            ShopSalePayment.sale_id, ShopSalePayment.amount, ShopSalePayment.payment_method
+        )
         if hotel_id is not None:
-            paid = paid.where(ShopSale.hotel_id == hotel_id)
+            paid = paid.where(ShopSalePayment.hotel_id == hotel_id)
         if date_from:
-            paid = paid.where(ShopSale.paid_at >= datetime.combine(date_from, time.min))
+            paid = paid.where(ShopSalePayment.paid_at >= datetime.combine(date_from, time.min))
         if date_to:
-            paid = paid.where(ShopSale.paid_at <= datetime.combine(date_to, time.max))
+            paid = paid.where(ShopSalePayment.paid_at <= datetime.combine(date_to, time.max))
 
         revenue = 0.0
-        paid_count = 0
-        for total_amount, method, parts in (await self.session.execute(paid)).all():
-            revenue += _num(total_amount)
-            paid_count += 1
-            # Bo'lib to'langan savdo har bo'lagi o'z usuliga yoziladi —
-            # jami "MIXED" bo'lib qolmasligi uchun
-            if parts:
-                for part in parts:
-                    bucket(part.get("payment_method"))["shop"] += _num(
-                        part.get("amount")
-                    )
-            else:
-                bucket(method)["shop"] += _num(total_amount)
+        sale_ids: set = set()
+        for sale_id, amount, method in (await self.session.execute(paid)).all():
+            revenue += _num(amount)
+            sale_ids.add(sale_id)
+            bucket(method)["shop"] += _num(amount)
+        paid_count = len(sale_ids)
 
-        # Bronga yozilgan to'lanmagan savdo — JORIY qoldiq, davrga bog'liq
-        # emas, shuning uchun sana filtri qo'llanmaydi
+        # Bronga yozilgan to'lanmagan QOLDIQ (qisman to'langanining qolgani
+        # ham) — JORIY holat, davrga bog'liq emas, sana filtri qo'llanmaydi
         debts = select(
-            func.coalesce(func.sum(ShopSale.total_amount), 0),
+            func.coalesce(func.sum(ShopSale.total_amount - ShopSale.paid_amount), 0),
             func.count(ShopSale.id),
         ).where(ShopSale.status == SHOP_PENDING)
         if hotel_id is not None:

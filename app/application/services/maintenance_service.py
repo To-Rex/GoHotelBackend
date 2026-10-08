@@ -32,6 +32,9 @@ HOTEL_SCOPED_TABLES = [
     "housekeeping_tasks",
     "reservation_services",
     "payments",
+    # Bron jarimalari (bron bilan CASCADE o'chardi, lekin soni hisobotda
+    # ko'rinishi uchun ataylab alohida)
+    "reservation_penalties",
     "invoice_line_items",
     "journal_entry_lines",
     "journal_entries",
@@ -56,6 +59,9 @@ HOTEL_SCOPED_TABLES = [
     # Mahsulotlar ham o'chiriladi: sotuvlar o'chib, partiyalar qolsa
     # ombordagi qoldiq o'chirilgan sotuvlar bilan kamaytirilgan holda
     # qolib ketardi — ya'ni "yangidek" holat emas, buzuq holat bo'lardi.
+    # Savdo to'lovlari (qisman to'lovlar) — sotuvdan oldin; sotuv bilan
+    # CASCADE ham o'chardi, lekin soni hisobotda ko'rinsin
+    "shop_sale_payments",
     "shop_sales",
     "shop_writeoffs",
     "shop_batches",

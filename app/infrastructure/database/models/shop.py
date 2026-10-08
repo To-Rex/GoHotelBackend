@@ -80,7 +80,11 @@ class ShopBatch(FullMixin, Base):
 
 class ShopSale(FullMixin, Base):
     """Sotuv cheki. reservation_id bo'lsa — bron hisobiga yozilgan (PENDING),
-    to'lov keyin olinadi; oddiy sotuvda darhol PAID bo'ladi."""
+    to'lov keyin olinadi; oddiy sotuvda darhol PAID bo'ladi.
+
+    Bronga yozilgan savdo QISMAN ham to'lanishi mumkin (istalgancha marta,
+    har safar bir yoki bir necha usulda): to'langan qism `paid_amount` da,
+    har to'lov `shop_sale_payments` da. Qoldiq qolgan ekan — PENDING."""
 
     __tablename__ = "shop_sales"
 
@@ -108,9 +112,43 @@ class ShopSale(FullMixin, Base):
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    # To'langan qism (qisman to'lovlar yig'indisi). PAID sotuvda = jami
+    paid_amount: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0, server_default="0"
+    )
 
     items: Mapped[list["ShopSaleItem"]] = relationship(
         "ShopSaleItem", back_populates="sale", cascade="all, delete-orphan"
+    )
+
+
+class ShopSalePayment(Base):
+    """Do'kon savdosi bo'yicha bitta to'lov (qisman yoki to'liq).
+
+    Do'kon tushumi va kassa shu jadvaldan hisoblanadi: pul QACHON
+    (`paid_at`) va KIM tomonidan (`created_by` — pulni qabul qilgan xodim)
+    olingan bo'lsa, o'sha kun va o'sha kassaga yoziladi. Bo'lib to'lashda
+    har usul alohida qator. Sotuv o'chirilsa — to'lovlari ham (CASCADE).
+    """
+
+    __tablename__ = "shop_sale_payments"
+    __table_args__ = (
+        Index("ix_shop_sale_payments_hotel_paid_at", "hotel_id", "paid_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    hotel_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
+    )
+    sale_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shop_sales.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    # Eski (to'lov usulisiz) yozuvlar uchun bo'sh bo'lishi mumkin
+    payment_method: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
 
 

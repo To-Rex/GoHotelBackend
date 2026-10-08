@@ -1715,7 +1715,7 @@ Yozuv shakli:
 
 - Auth: ADMIN / SUPER_ADMIN or any of `finance.view`, `shift.force_close`, `report.view` (403 `STAFF_REPORT_FORBIDDEN`); `?hotel_id=` for SUPER_ADMIN
 - Query: `?date_from=2026-10-01&date_to=2026-10-07` (optional; 422 `INVALID_RANGE` if from > to)
-- Description: Revenue of the period split by the employee who took the money — booking payments (`Payment.created_by`, by `payment_date`, refunds are negative), paid shop sales (`ShopSale.created_by`, by `paid_at`; split payments go to each part's method) and expenses (`Expense.created_by`, by `expense_date`). Same day definitions as `/finance/summary`, so the sum of `revenue` equals summary `income + shop_revenue`. Sorted by revenue, then expense. An employee with only expenses is listed too.
+- Description: Revenue of the period split by the employee who took the money — booking payments (`Payment.created_by`, by `payment_date`, refunds are negative), shop payments (`ShopSalePayment.created_by` — the employee who took the money, partial payments included, by the payment's `paid_at`; split payments go to each part's method) and expenses (`Expense.created_by`, by `expense_date`). Same day definitions as `/finance/summary`, so the sum of `revenue` equals summary `income + shop_revenue`. Sorted by revenue, then expense. An employee with only expenses is listed too.
 - Response 200:
 
 ```json
