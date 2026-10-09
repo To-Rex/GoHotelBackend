@@ -147,6 +147,14 @@ What it means for the API:
 
 ---
 
+### Guest face recognition: one index for the whole system
+
+- Guest face templates (`guest_face_profiles`) are matched **across all hotels and branches**: a guest enrolled at one hotel is recognized by any camera of any other hotel or branch. `hotel_id`/`branch_id` on a profile only record where it was enrolled.
+- `GET /vision/stats`: `profiles` / `guests_with_face` count the whole recognition pool; `enrolled_here` — templates enrolled at the current hotel.
+- `DELETE /vision/guests/{id}/face` removes the guest's biometrics everywhere (consent withdrawal is global).
+
+---
+
 ### Face login: only the enrolled face
 
 - `POST /auth/login` → `face_required` for an employee with a face profile; `POST /auth/face/verify-login` compares the frame only with that employee's own profiles (cosine ≥ 0.40) — 401 `FACE_MISMATCH` otherwise.

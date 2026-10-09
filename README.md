@@ -362,6 +362,18 @@ endpointi ikki filial xodimi va filial almashtirgan administrator nomidan:
 boshqa filialning birorta ID'si chiqmasligi), `tests/test_branch_provisioning.py`.
 Uchalasi `GOHOTEL_TEST_PG_URL` (lokal test bazasi) bilan ishlaydi.
 
+### Mehmonni yuzidan tanish — butun tizim uchun bitta indeks
+
+Mehmonlar bazasi umumiy bo'lgani kabi yuz ham mehmonning o'ziniki
+(`app/application/services/guest_face_service.py`): indeks mehmonxona yoki
+filialga bo'linmaydi — Grand'da ro'yxatdan o'tib yuz biriktirgan mehmon
+Anna Hostel'ning istalgan filialiga kelsa ham kamera uni taniydi va
+qabulxona panelida ko'rsatadi. Profildagi `hotel_id`/`branch_id` faqat
+"qayerda biriktirilgan" (statistika: `/vision/stats` → `enrolled_here`).
+Biometriyani o'chirish ham butun tizim bo'yicha.
+
+Test: `pytest tests/test_guest_face_global.py`.
+
 ### Yuz bilan kirish: faqat biriktirilgan yuz
 
 Yuz biriktirgan xodim hisobiga faqat O'SHA yuz bilan kiriladi

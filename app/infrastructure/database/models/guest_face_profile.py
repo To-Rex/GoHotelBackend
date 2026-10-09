@@ -31,10 +31,10 @@ class GuestFaceProfile(Base):
        bayt). 1:N qidiruvda har qatorni ``json.loads`` qilish minglab profilda
        soniyalarga aylanadi; ``np.frombuffer`` esa nusxasiz va bir zumda
        ishlaydi. Butun mehmonxona indeksi bitta matritsaga yig'iladi.
-    2. ``hotel_id`` alohida ustun bo'lib turibdi (mehmon orqali ham
-       topilardi). Qidiruv indeksi HAR DOIM mehmonxona bo'yicha quriladi, va
-       bu ustun bo'lmasa har indeks yangilanishida ``guests`` bilan JOIN
-       kerak bo'lardi.
+    2. ``hotel_id`` — QAYERDA biriktirilgani (ma'lumot va statistika uchun).
+       Qidiruv indeksi butun tizim uchun bitta: mehmonlar bazasi umumiy, yuz
+       ham mehmonning o'ziniki — Grand'da biriktirilgan mehmon Anna Hostel
+       filialida ham taniladi. Mehmonxona bo'yicha filtr yo'q.
 
     Bir mehmonga bir nechta shablon saqlanadi (turli yorug'lik va burchak) —
     bu 1:N aniqligini sezilarli oshiradi.

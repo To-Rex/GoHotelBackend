@@ -316,8 +316,9 @@ async def _handle_event(
     if template is None:
         raise ValidationException("Vektor ham, rasm ham yuborilmadi", "NO_EMBEDDING")
 
-    # -- qidiruv ----------------------------------------------------------
-    result = await gfs.identify(session, device.hotel_id, template.vector)
+    # -- qidiruv: butun tizim mehmonlari ichidan (mehmonxona/filialdan
+    #    qat'i nazar — Grand'da biriktirilgan yuz Anna Hostel'da ham taniladi)
+    result = await gfs.identify(session, template.vector)
 
     return await _record_and_reply(
         session, device, camera, event, thumbnail, template, result,
@@ -350,7 +351,7 @@ async def _record_and_reply(
             # Indeks eskirgan bo'lishi mumkin — mehmon o'chirilgan bo'lsa
             # moslikni bekor qilamiz va indeksni yangilashga majburlaymiz.
             # (Mehmonlar global — boshqa mehmonxona ro'yxatga olgani ham moslik.)
-            gfs.invalidate_hotel(device.hotel_id)
+            gfs.invalidate_index()
             guest = None
             status = "unknown"
 
@@ -1100,7 +1101,7 @@ async def delete_guest_face(
     if guest is None or guest.is_deleted:  # mehmonlar global
         raise NotFoundException("Mehmon topilmadi")
 
-    removed = await gfs.forget_guest(session, hotel_id=hotel_id, guest_id=guest_id)
+    removed = await gfs.forget_guest(session, guest_id=guest_id)
     guest.face_consent_at = None
     await session.flush()
     logger.info(
@@ -1308,18 +1309,23 @@ async def vision_stats(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("guest.view")),
 ):
-    """Diagnostika: indeks holati, shablonlar va kameralar soni."""
+    """Diagnostika: indeks holati, shablonlar va kameralar soni.
+
+    Shablonlar BUTUN tizim bo'yicha sanaladi — kamera aynan shu to'plam
+    ichidan taniydi; ``enrolled_here`` — shu mehmonxonada biriktirilganlari.
+    """
     hotel_id = _hotel_id(current_user)
     profiles = (
-        await session.execute(
-            select(func.count(GuestFaceProfile.id)).where(
-                GuestFaceProfile.hotel_id == hotel_id
-            )
-        )
+        await session.execute(select(func.count(GuestFaceProfile.id)))
     ).scalar() or 0
     guests_with_face = (
         await session.execute(
-            select(func.count(func.distinct(GuestFaceProfile.guest_id))).where(
+            select(func.count(func.distinct(GuestFaceProfile.guest_id)))
+        )
+    ).scalar() or 0
+    enrolled_here = (
+        await session.execute(
+            select(func.count(GuestFaceProfile.id)).where(
                 GuestFaceProfile.hotel_id == hotel_id
             )
         )
@@ -1334,9 +1340,10 @@ async def vision_stats(
     return {
         "profiles": int(profiles),
         "guests_with_face": int(guests_with_face),
+        "enrolled_here": int(enrolled_here),
         "active_devices": int(devices),
         "model": gfs.MODEL_NAME,
         "match_threshold": gfs.MATCH_THRESHOLD,
         "match_margin": gfs.MATCH_MARGIN,
-        "index": gfs.index_stats(hotel_id),
+        "index": gfs.index_stats(),
     }

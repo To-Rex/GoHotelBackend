@@ -7,11 +7,15 @@ vektor arifmetikasini qiladi. Shu sababli bitta VPS o'nlab filialni ko'taradi.
 
 Uch qaror bu faylning shaklini belgilaydi:
 
-1. **Indeks xotirada, mehmonxona bo'yicha.** Har so'rovda ``guest_face_profiles``
-   dan o'qish — minglab qatorni SQLAlchemy obyektiga aylantirish demak.
-   O'rniga bir marta ``(N x 128)`` numpy matritsasi quriladi va keyingi
-   qidiruvlar bitta matritsa-vektor ko'paytmasiga aylanadi: N=10 000 uchun
-   ~1 ms. Indeks versiya hisoblagichi bilan bekor qilinadi.
+1. **Indeks xotirada, BUTUN TIZIM uchun bitta.** Mehmonlar bazasi umumiy —
+   Grand'da ro'yxatdan o'tgan mehmon Anna Hostel'ning istalgan filialiga
+   kelsa ham tanilishi kerak, shuning uchun indeks mehmonxona bo'yicha
+   bo'linmaydi (``hotel_id`` profilda faqat "qayerda biriktirilgan").
+   Har so'rovda ``guest_face_profiles`` dan o'qish — minglab qatorni
+   SQLAlchemy obyektiga aylantirish demak. O'rniga bir marta ``(N x 128)``
+   numpy matritsasi quriladi va keyingi qidiruvlar bitta matritsa-vektor
+   ko'paytmasiga aylanadi: N=10 000 uchun ~1 ms. Indeks versiya
+   hisoblagichi bilan bekor qilinadi.
 
 2. **Chegara 1:1 dan qat'iyroq.** Xodim login qilganda (``face_service``)
    0.40 yetarli: u allaqachon kim ekanini da'vo qilyapti. Bu yerda esa
@@ -337,13 +341,13 @@ def group_cohesion(vectors: Sequence[np.ndarray], members: Sequence[int]) -> flo
 
 
 # ---------------------------------------------------------------------------
-# Mehmonxona indeksi
+# Umumiy indeks (barcha mehmonxona va filiallar)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
-class _HotelIndex:
-    """Bitta mehmonxonaning barcha yuz shablonlari — bitta matritsada."""
+class _FaceIndex:
+    """Tizimdagi barcha mehmonlarning yuz shablonlari — bitta matritsada."""
 
     matrix: np.ndarray          # (N, 128) float32, satrlari normallashtirilgan
     guest_ids: np.ndarray       # (N,) object — mehmon UUID'lari
@@ -357,27 +361,29 @@ class _HotelIndex:
 
 
 _index_lock = threading.Lock()
-#: Kalit — mehmonxona: mehmonlar bazasi global, yuz profillari esa
-#: mehmonxona bo'yicha (qaysi mehmonxona biriktirgan bo'lsa o'sha taniydi).
-_indexes: dict[UUID, _HotelIndex] = {}
-_versions: dict[UUID, int] = {}
+#: Bitta indeks — mehmonxona yoki filialga bo'linmaydi. Mehmon qayerda
+#: ro'yxatdan o'tgan bo'lsa ham, istalgan mehmonxonaning istalgan kamerasi
+#: uni taniydi.
+_index: _FaceIndex | None = None
+_version: int = 0
 
 
-def invalidate_hotel(hotel_id: UUID) -> None:
+def invalidate_index() -> None:
     """Shablon qo'shilgan/o'chirilganda indeksni eskirgan deb belgilaydi.
 
     Indeks darhol qayta qurilmaydi — keyingi qidiruvda quriladi. Bu bir necha
     profilni ketma-ket o'chirishda indeksni har safar qayta yig'ishdan saqlaydi.
     """
+    global _version
     with _index_lock:
-        _versions[hotel_id] = _versions.get(hotel_id, 0) + 1
+        _version += 1
 
 
-def index_stats(hotel_id: UUID) -> dict[str, object]:
-    """Diagnostika uchun: indeks qurilganmi, nechta shablon bor."""
+def index_stats() -> dict[str, object]:
+    """Diagnostika uchun: indeks qurilganmi, nechta shablon bor (butun tizim)."""
     with _index_lock:
-        index = _indexes.get(hotel_id)
-        version = _versions.get(hotel_id, 0)
+        index = _index
+        version = _version
     if index is None:
         return {"loaded": False, "profiles": 0, "version": version}
     return {
@@ -389,22 +395,13 @@ def index_stats(hotel_id: UUID) -> dict[str, object]:
     }
 
 
-async def get_index(
-    session: AsyncSession, hotel_id: UUID, branch_id: UUID | None = None
-) -> _HotelIndex:
-    """Mehmonxona indeksini qaytaradi, kerak bo'lsa qayta quradi.
+def index_statement():
+    """Indeksga kiradigan profillar — HAMMA mehmonxona va filiallarniki.
 
-    Mehmonlar global — indeks mehmonxonaning barcha filiallari uchun bitta
-    (`branch_id` moslik uchun qabul qilinadi, filtr emas).
+    Mehmonxona yoki filial sharti ataylab yo'q: mehmonlar bazasi umumiy va
+    yuz ham mehmonning o'zinikidir, u ro'yxatdan o'tgan joyniki emas.
     """
-    key = hotel_id
-    with _index_lock:
-        current_version = _versions.setdefault(hotel_id, 0)
-        cached = _indexes.get(key)
-        if cached is not None and cached.version == current_version:
-            return cached
-
-    stmt = (
+    return (
         select(
             GuestFaceProfile.id,
             GuestFaceProfile.guest_id,
@@ -412,13 +409,23 @@ async def get_index(
         )
         .join(Guest, Guest.id == GuestFaceProfile.guest_id)
         .where(
-            GuestFaceProfile.hotel_id == hotel_id,
             GuestFaceProfile.model == MODEL_NAME,
             GuestFaceProfile.dim == EMBEDDING_DIM,
             Guest.is_deleted.is_(False),
         )
     )
-    rows = (await session.execute(stmt)).all()
+
+
+async def get_index(session: AsyncSession) -> _FaceIndex:
+    """Umumiy indeksni qaytaradi, kerak bo'lsa qayta quradi."""
+    global _index
+    with _index_lock:
+        current_version = _version
+        cached = _index
+        if cached is not None and cached.version == current_version:
+            return cached
+
+    rows = (await session.execute(index_statement())).all()
 
     vectors: list[np.ndarray] = []
     guest_ids: list[UUID] = []
@@ -437,7 +444,7 @@ async def get_index(
     else:
         matrix = np.zeros((0, EMBEDDING_DIM), dtype=np.float32)
 
-    index = _HotelIndex(
+    index = _FaceIndex(
         matrix=matrix,
         guest_ids=np.array(guest_ids, dtype=object),
         profile_ids=profile_ids,
@@ -448,11 +455,9 @@ async def get_index(
         # Qurish davomida yana o'zgargan bo'lsa keshlamaymiz: keyingi qidiruv
         # yangisini quradi. Eskisini saqlab qo'yish jimgina eskirishga olib
         # kelardi.
-        if _versions.get(hotel_id, 0) == current_version:
-            _indexes[key] = index
-    logger.debug(
-        "Yuz indeksi qurildi: mehmonxona=%s, shablon=%d", hotel_id, index.size
-    )
+        if _version == current_version:
+            _index = index
+    logger.debug("Yuz indeksi qurildi (butun tizim): shablon=%d", index.size)
     return index
 
 
@@ -487,7 +492,7 @@ class SearchResult:
 _TOP_K = 32
 
 
-def search_index(index: _HotelIndex, vector: np.ndarray) -> SearchResult:
+def search_index(index: _FaceIndex, vector: np.ndarray) -> SearchResult:
     """Vektorni indeksdagi barcha shablonlar bilan solishtiradi.
 
     Butun qidiruv — bitta matritsa-vektor ko'paytmasi. N=10 000 uchun bu
@@ -542,14 +547,13 @@ def search_index(index: _HotelIndex, vector: np.ndarray) -> SearchResult:
     )
 
 
-async def identify(
-    session: AsyncSession,
-    hotel_id: UUID,
-    vector: np.ndarray,
-    branch_id: UUID | None = None,
-) -> SearchResult:
-    """Mehmonxona doirasida bitta vektorni izlaydi (mehmonlar global)."""
-    index = await get_index(session, hotel_id)
+async def identify(session: AsyncSession, vector: np.ndarray) -> SearchResult:
+    """Bitta vektorni BUTUN tizim mehmonlari ichidan izlaydi.
+
+    Qaysi mehmonxona kamerasi ko'rgani ahamiyatsiz: Grand'da biriktirilgan
+    yuz Anna Hostel filialida ham tanilishi kerak.
+    """
+    index = await get_index(session)
     return search_index(index, vector)
 
 
@@ -571,8 +575,10 @@ async def enroll(
 ) -> GuestFaceProfile:
     """Mehmonga yangi yuz shabloni biriktiradi.
 
-    Chegaradan oshsa eng eski shablon o'chiriladi — mehmonning tashqi
-    ko'rinishi vaqt bilan o'zgaradi va yangi ko'rinishlar foydaliroq.
+    ``hotel_id`` — qayerda biriktirilgani (ma'lumot uchun); shablon
+    hamma mehmonxonada taniydi. Chegaradan oshsa eng eski shablon
+    o'chiriladi — mehmonning tashqi ko'rinishi vaqt bilan o'zgaradi va yangi
+    ko'rinishlar foydaliroq.
     """
     profile = GuestFaceProfile(
         guest_id=guest_id,
@@ -605,7 +611,7 @@ async def enroll(
         await session.delete(stale)
     await session.flush()
 
-    invalidate_hotel(hotel_id)
+    invalidate_index()
     return profile
 
 
@@ -666,12 +672,12 @@ async def learn_from_match(
     return True
 
 
-async def forget_guest(session: AsyncSession, *, hotel_id: UUID, guest_id: UUID) -> int:
+async def forget_guest(session: AsyncSession, *, guest_id: UUID) -> int:
     """Mehmonning barcha biometrik ma'lumotlarini o'chiradi.
 
     Rozilikni qaytarib olish — huquqiy talab, shuning uchun bu amal to'liq
-    va qaytarilmas: shablonlar ham, saqlangan ko'rinishlardagi vektorlar ham
-    o'chadi.
+    va qaytarilmas: shablonlar ham (qaysi mehmonxonada biriktirilgan
+    bo'lsa ham), saqlangan ko'rinishlardagi vektorlar ham o'chadi.
     """
     from sqlalchemy import delete, update
 
@@ -697,7 +703,7 @@ async def forget_guest(session: AsyncSession, *, hotel_id: UUID, guest_id: UUID)
         .values(embedding=None, thumbnail=None)
     )
     await session.flush()
-    invalidate_hotel(hotel_id)
+    invalidate_index()
     return len(profiles)
 
 
