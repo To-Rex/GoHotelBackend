@@ -2,7 +2,7 @@
 
 Yuz biriktirgan hisobga faqat O'SHA yuz bilan kiriladi:
 * verify-login: mos kelmagan yuz 401 FACE_MISMATCH, mos kelgani token oladi;
-* "kamerasiz kirish" faqat server yuzni tekshira olmaganda; aks holda 403;
+* "kamerasiz kirish" kamerasiz qurilmada parol bilan o'tkazadi (sabab yoziladi);
 * yuz biriktirish: avvalgi profilga mos kelmagan (boshqa odam) namuna rad.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pytest
 
 import app.infrastructure.database.models  # noqa: F401
 from app.application.services import face_service
-from app.core.exceptions import ForbiddenException, UnauthorizedException, ValidationException
+from app.core.exceptions import UnauthorizedException, ValidationException
 from app.presentation.api.v1 import auth as auth_api
 from app.presentation.api.v1 import face as face_api
 
@@ -127,18 +127,10 @@ def test_verify_login_accepts_only_the_enrolled_face(engine, auth):
     assert session.profiles[0].last_used_at is not None
 
 
-def test_no_camera_login_is_refused_while_server_can_verify(engine, auth):
+def test_no_camera_login_lets_a_camera_less_device_in(engine, auth):
+    """Kamerasiz kompyuter: parol yetarli (dvigatel bor bo'lsa ham)."""
     _, issued = auth
-    data = SimpleNamespace(face_token="tok", reason="kamera yo'q")
-    with pytest.raises(ForbiddenException) as err:
-        asyncio.run(auth_api.login_without_camera(data, REQ, FakeSession()))
-    assert err.value.error_code == "FACE_REQUIRED" and issued == []
-
-
-def test_no_camera_login_only_when_engine_is_missing(monkeypatch, auth):
-    _, issued = auth
-    monkeypatch.setattr(face_service, "engine_importable", lambda: False)
-    data = SimpleNamespace(face_token="tok", reason="kamera yo'q")
+    data = SimpleNamespace(face_token="tok", reason="qurilmada kamera topilmadi")
     tokens = asyncio.run(auth_api.login_without_camera(data, REQ, FakeSession()))
     assert tokens["access_token"] == "a" and issued == ["no-camera"]
 

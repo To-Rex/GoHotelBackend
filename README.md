@@ -369,12 +369,10 @@ Yuz biriktirgan xodim hisobiga faqat O'SHA yuz bilan kiriladi
 
 - `verify-login` kadrni faqat shu xodimning profillari bilan solishtiradi
   (kosinus ≥ 0.40), mos kelmasa 401 `FACE_MISMATCH`.
-- "Kamerasiz kirish" (`POST /auth/login/no-camera`) faqat server yuzni
-  tekshira olmaganda (dvigatel yo'q, 503 `FACE_ENGINE_UNAVAILABLE`) ishlaydi;
-  aks holda 403 `FACE_REQUIRED`. Ilgari bu yo'l mijozning "kamera yo'q"
-  so'ziga ishonib, parol bilan yuzsiz kiritardi. Kamerasiz qurilmada
-  ishlash kerak bo'lsa menejer/administrator xodimning yuzini o'chiradi —
-  shunda parol yetarli.
+- Kamera BOR qurilmada yuz bosqichi majburiy — mijozlar (web, mobil) uni
+  o'tkazib yuborish tugmasini ko'rsatmaydi. Kamerasiz kompyuterda (yoki
+  serverda dvigatel yo'q bo'lsa, 503 `FACE_ENGINE_UNAVAILABLE`) parol
+  yetarli: `POST /auth/login/no-camera` — sabab sessiya yozuviga tushadi.
 - Yuz biriktirishda yangi namuna avvalgi profillarga mos bo'lishi shart
   (422 `FACE_NOT_SAME_PERSON`) — loginga boshqa odamning yuzini qo'shib
   bo'lmaydi; almashtirish uchun avval eski profil o'chiriladi.

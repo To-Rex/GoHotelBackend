@@ -60,26 +60,15 @@ async def login_without_camera(
     request: Request,
     session: AsyncSession = Depends(get_db),
 ):
-    """Ikkinchi bosqichni o'tkazib yuborish — FAQAT server yuzni tekshira
-    olmaganda (dvigatel yo'q).
+    """Kamerasiz qurilmada ikkinchi bosqichni o'tkazib yuborish.
 
-    Ilgari bu yo'l mijozning "kamera yo'q" so'ziga ishonardi: parolni bilgan
-    har kim yuz tekshiruvini chetlab o'tardi. Endi yuz biriktirilgan hisobga
-    faqat o'sha yuz bilan kiriladi. Kamerasiz qurilmada ishlash kerak bo'lsa
-    menejer/administrator xodimning yuzini o'chiradi (`DELETE
-    /auth/face/enroll/{user_id}`) — shunda parol yetarli bo'ladi.
-    Sabab sessiya yozuviga tushadi (kim qaysi yo'l bilan kirgani ko'rinadi).
+    Qoida: kamera BOR qurilmada yuz tasdiqlash shart (mijoz bu yo'lni
+    taklif qilmaydi), kamerasiz kompyuterda esa parol yetarli. Kamera
+    bor-yo'qligini faqat qurilmaning o'zi biladi, shuning uchun qaror
+    mijozdan keladi. Lekin parolsiz ochilmaydi: `face_token` faqat login va
+    parol to'g'ri kelganda beriladi va besh daqiqada kuchini yo'qotadi.
+    Sabab sessiya yozuviga tushadi — kim qaysi yo'l bilan kirgani ko'rinadi.
     """
-    from app.application.services import face_service
-    from app.core.exceptions import ForbiddenException
-
-    if face_service.engine_importable():
-        raise ForbiddenException(
-            "Bu hisobga kirish uchun yuz tasdiqlash shart. Kamera bo'lmasa "
-            "administrator yoki menejer yuzingizni o'chirib, parol bilan "
-            "kirishga ruxsat beradi",
-            "FACE_REQUIRED",
-        )
     service = AuthService(session)
     return await service.complete_login_without_face(
         data.face_token,
