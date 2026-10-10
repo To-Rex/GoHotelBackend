@@ -153,6 +153,16 @@ What it means for the API:
 - `GET /vision/stats`: `profiles` / `guests_with_face` count the whole recognition pool; `enrolled_here` — templates enrolled at the current hotel.
 - `DELETE /vision/guests/{id}/face` removes the guest's biometrics everywhere (consent withdrawal is global).
 
+### Guest face recognition: never name the wrong person
+
+A camera episode is **recognized** only when all of these hold (`guest_face_service.decide`): best cosine ≥ 0.60, margin over the best *other* guest ≥ 0.10, the best score is a statistical outlier (≥ 2.5σ above the other candidates when the index has ≥ 8 of them), a majority (≥ 60%) of the episode's individual frames point to the same guest, the template is coherent, and the frame quality is sufficient (face ≥ 72 px, quality ≥ 0.45). Anything else is **uncertain** at most: it is stored with `guest_id = NULL` and the candidate in `matched_profile_id`, shows up in the *unrecognized* groups (`candidate_guest_id` / `candidate_name` on `GET /vision/sightings`), never in the "camera recognized" list or the guest's history. `FaceEventResponse.reason` tells the agent why (`threshold | margin | outlier | consensus | quality | cohesion`).
+
+- `POST /vision/sightings/{id}/reject` ("not them", `guest.update`): clears the match (the sighting keeps its vector and returns to *unrecognized* so it can be assigned to the right guest), deletes the template learned from this episode and the matched template if it was auto-learned, and clears the guest's other open sightings from the same camera within ±10 minutes. Returns `{rejected, profiles_removed, sightings_cleared, can_enroll}`.
+- `POST /vision/sightings/{id}/enroll`: if the face already belongs to **another** guest (cosine ≥ 0.60) → 409 `FACE_BELONGS_TO_OTHER_GUEST` with the other guest's name; resend with `force: true` after the operator confirms.
+- `POST /vision/sightings/{id}/thumbnail`: the first picture wins (`{"stored": false, "reason": "exists"}` on a repeat) — a late upload can no longer replace another person's photo.
+- Adaptive learning happens only from recognized episodes with score ≥ 0.72 and quality ≥ 0.45; the learned template is linked to the sighting (`learned_profile_id`).
+- Migration `c9d0e1f2a3b4` adds `face_sightings.matched_profile_id / learned_profile_id / rejected_at / rejected_by`.
+
 ---
 
 ### Face login: only the enrolled face

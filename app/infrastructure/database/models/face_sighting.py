@@ -82,8 +82,26 @@ class FaceSighting(BranchScoped, Base):
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cohesion: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
-    #: Tanilmagan odamni keyin biriktirish uchun saqlanadigan shablon.
+    #: Epizod shabloni. Tanilmaganni keyin biriktirish uchun; tanilganda ham
+    #: saqlanadi — xodim "bu u emas" desa, ko'rinish to'g'ri mehmonga
+    #: biriktirilishi mumkin bo'lsin.
     embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    #: Qaysi shablon mos keldi ("aniq emas"da — nomzod) va shu epizoddan
+    #: nima o'rganildi. "Bu u emas" bosilganda o'rganilgani o'chiriladi,
+    #: mos kelgani avtomatik o'rganilgan bo'lsa u ham.
+    matched_profile_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("guest_face_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    learned_profile_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("guest_face_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    #: Xodim moslikni rad etdi ("bu u emas") — ko'rinish "tanilmagan"ga qaytdi.
+    rejected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rejected_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     #: Panelda ko'rsatiladigan kichik JPEG (odatda 4-25 KB).
     thumbnail: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
 

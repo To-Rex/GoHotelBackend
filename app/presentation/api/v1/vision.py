@@ -37,6 +37,7 @@ from fastapi import (
 from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.application.services.configurator_access import assert_can_manage_settings
 from app.application.dto.vision import (
@@ -57,6 +58,7 @@ from app.application.dto.vision import (
 )
 from app.application.services import guest_face_service as gfs
 from app.core.database import get_db
+from app.core.exceptions import ConflictException
 from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
@@ -66,6 +68,9 @@ from app.core.exceptions import (
 from app.infrastructure.database.models.face_sighting import FaceSighting, VisionDevice
 from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.guest_face_profile import GuestFaceProfile
+
+#: "Aniq emas" ko'rinishning nomzodi (mos kelgan shablon egasi)
+Candidate = aliased(Guest, name="candidate_guest")
 from app.infrastructure.database.models.vision_camera import VisionCamera
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.tenant.branch_scope import scoped_branch_id, set_branch_scope
@@ -316,9 +321,23 @@ async def _handle_event(
     if template is None:
         raise ValidationException("Vektor ham, rasm ham yuborilmadi", "NO_EMBEDDING")
 
-    # -- qidiruv: butun tizim mehmonlari ichidan (mehmonxona/filialdan
-    #    qat'i nazar — Grand'da biriktirilgan yuz Anna Hostel'da ham taniladi)
-    result = await gfs.identify(session, template.vector)
+    # -- qaror: butun tizim mehmonlari ichidan (mehmonxona/filialdan qat'i
+    #    nazar), lekin "tanilgan" faqat to'rt shart birga bajarilsa: ball,
+    #    margin, kadrlar konsensusi, statistik ustunlik — va kadr sifati
+    #    yetarli bo'lsa (gfs.decide)
+    result = await gfs.identify_episode(
+        session,
+        template,
+        samples,
+        quality=quality_score if event.quality else None,
+        face_pixels=int(event.quality.face_pixels) if event.quality else None,
+    )
+    if result.status == "uncertain" and result.reason:
+        logger.info(
+            "Yuz aniq emas (%s): kamera=%s ball=%.3f margin=%.3f z=%.1f nomzodlar=%d",
+            result.reason, event.camera_id, result.score, result.margin,
+            result.outlier_z, result.candidates,
+        )
 
     return await _record_and_reply(
         session, device, camera, event, thumbnail, template, result,
@@ -343,7 +362,7 @@ async def _record_and_reply(
 ) -> FaceEventResponse:
     """Ko'rinishni yozadi, kerak bo'lsa o'rganadi va javobni yig'adi."""
     guest: Guest | None = None
-    learned = False
+    learned_profile = None
 
     if result is not None and result.guest_id is not None:
         guest = await session.get(Guest, result.guest_id)
@@ -354,6 +373,13 @@ async def _record_and_reply(
             gfs.invalidate_index()
             guest = None
             status = "unknown"
+
+    # Mehmon ko'rinishga FAQAT "tanilgan"da yoziladi. "Aniq emas" — nomzod:
+    # u `matched_profile_id` orqali panelda "tasdiqlang" sifatida ko'rinadi,
+    # lekin "Kamera tanidi" ro'yxatiga va mehmon tarixiga tushmaydi. Ilgari
+    # 0.42 balli nomzod ham mehmon nomi bilan chiqardi — bu "boshqa odamni
+    # tanidi" shikoyatlarining asosiy sababi edi.
+    recognized = status == "recognized" and guest is not None
 
     sighting = FaceSighting(
         hotel_id=device.hotel_id,
@@ -372,26 +398,24 @@ async def _record_and_reply(
         track_uid=event.track_uid[:64],
         capture_id=(event.capture_id or None) and event.capture_id[:64],
         status=status,
-        guest_id=guest.id if guest is not None else None,
+        guest_id=guest.id if recognized else None,
+        matched_profile_id=result.profile_id if (result and guest is not None) else None,
         similarity=result.score if result else 0.0,
         margin=result.margin if result else 0.0,
         quality_score=quality_score,
         sample_count=template.sample_count if template else 0,
         cohesion=template.cohesion if template else 0.0,
-        # Tanilgan odamning vektorini qayta saqlamaymiz — u profilda bor.
-        # Tanilmaganniki esa keyin biriktirish uchun kerak.
-        embedding=(
-            gfs.pack_embedding(template.vector)
-            if template is not None and guest is None
-            else None
-        ),
+        # Vektor har doim saqlanadi (512 bayt, ko'rinish bilan birga
+        # eskiradi): tanilmaganni biriktirish uchun, tanilganni esa xodim
+        # "bu u emas" desa to'g'ri mehmonga o'tkazish uchun.
+        embedding=gfs.pack_embedding(template.vector) if template is not None else None,
         thumbnail=thumbnail,
         seen_at=event.timestamp or now,
         expires_at=now + timedelta(hours=SIGHTING_TTL_HOURS),
     )
     session.add(sighting)
 
-    if guest is not None and result is not None and template is not None:
+    if recognized and result is not None and template is not None:
         if result.profile_id is not None:
             await session.execute(
                 update(GuestFaceProfile)
@@ -401,16 +425,17 @@ async def _record_and_reply(
                     match_count=GuestFaceProfile.match_count + 1,
                 )
             )
-        if status == "recognized":
-            learned = await gfs.learn_from_match(
-                session,
-                hotel_id=device.hotel_id,
-                guest_id=guest.id,
-                result=result,
-                template=template,
-                quality=quality_score,
-                camera_id=event.camera_id,
-            )
+        learned_profile = await gfs.learn_from_match(
+            session,
+            hotel_id=device.hotel_id,
+            guest_id=guest.id,
+            result=result,
+            template=template,
+            quality=quality_score,
+            camera_id=event.camera_id,
+        )
+        if learned_profile is not None:
+            sighting.learned_profile_id = learned_profile.id
 
     device.events_received = (device.events_received or 0) + 1
     await session.flush()
@@ -431,8 +456,9 @@ async def _record_and_reply(
         similarity=result.score if result else None,
         margin=result.margin if result else None,
         candidates=result.candidates if result else 0,
-        learned=learned,
+        learned=learned_profile is not None,
         message=message,
+        reason=(result.reason or None) if result else None,
     )
 
 
@@ -554,6 +580,13 @@ async def attach_thumbnail(
             "IMAGE_TOO_LARGE",
         )
 
+    if sighting.thumbnail:
+        # Birinchi surat g'olib: takror yuborish bir xil kadr, lekin agent
+        # xato (eski) ko'rinish id'si bilan kelsa boshqa odamning surati
+        # ustiga yozilib, panelda "mening suratim — boshqa odamning ismi"
+        # chiqardi.
+        return {"stored": False, "bytes": len(sighting.thumbnail), "reason": "exists"}
+
     sighting.thumbnail = payload
     await session.flush()
     return {"stored": True, "bytes": len(payload)}
@@ -662,7 +695,9 @@ async def list_sightings(
     if not include_acknowledged:
         conditions.append(FaceSighting.acknowledged_at.is_(None))
     if only_matched:
+        # Faqat chinakam tanilganlar: "aniq emas" nomzodi mehmon emas
         conditions.append(FaceSighting.guest_id.is_not(None))
+        conditions.append(FaceSighting.status == "recognized")
     if only_unmatched:
         conditions.append(FaceSighting.guest_id.is_(None))
     if branch_id is not None:
@@ -691,8 +726,19 @@ async def list_sightings(
                 Guest.first_name,
                 Guest.last_name,
                 Guest.phone,
+                Candidate.id.label("candidate_id"),
+                Candidate.first_name.label("candidate_first"),
+                Candidate.last_name.label("candidate_last"),
             )
             .outerjoin(Guest, Guest.id == FaceSighting.guest_id)
+            # "Aniq emas" nomzodi — mos kelgan shablon orqali
+            .outerjoin(
+                GuestFaceProfile, GuestFaceProfile.id == FaceSighting.matched_profile_id
+            )
+            .outerjoin(
+                Candidate,
+                (Candidate.id == GuestFaceProfile.guest_id) & FaceSighting.guest_id.is_(None),
+            )
             .where(*conditions)
             .order_by(FaceSighting.seen_at.desc())
             .limit(DISTINCT_SCAN_ROWS if distinct_guests else limit)
@@ -742,6 +788,9 @@ async def list_sightings(
         name = None
         if row.first_name or row.last_name:
             name = f"{row.first_name or ''} {row.last_name or ''}".strip()
+        candidate_name = None
+        if row.candidate_id is not None and (row.candidate_first or row.candidate_last):
+            candidate_name = f"{row.candidate_first or ''} {row.candidate_last or ''}".strip()
         items.append(
             SightingResponse(
                 id=row.id,
@@ -765,6 +814,8 @@ async def list_sightings(
                 # uchun mantiqiy.
                 can_enroll=bool(row.has_embedding) and row.guest_id is None,
                 acknowledged=row.acknowledged_at is not None,
+                candidate_guest_id=row.candidate_id,
+                candidate_name=candidate_name,
                 sighting_count=seen_count,
                 image_sighting_id=image_row.id if image_row is not None else None,
             )
@@ -965,6 +1016,94 @@ async def acknowledge_sighting(
     return {"acknowledged": True, "closed": closed}
 
 
+@router.post("/sightings/{sighting_id}/reject")
+async def reject_sighting(
+    sighting_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("guest.update")),
+):
+    """Xodim: "bu u emas" — moslik bekor qilinadi.
+
+    Nima bo'ladi:
+    * ko'rinish "tanilmagan"ga qaytadi (vektori saqlangan — to'g'ri mehmonga
+      biriktirish mumkin) va panelda "tanilmagan yuzlar" ichida chiqadi;
+    * shu epizoddan o'rganilgan shablon o'chiriladi — u xato;
+    * mos kelgan shablon avtomatik o'rganilgan bo'lsa (``source='vision'``)
+      u ham o'chiriladi — ishonchsiz; xodim qo'lda biriktirgani qoladi;
+    * shu mehmonga shu kameradan 10 daqiqa ichida yozilgan ochiq
+      ko'rinishlar ham bekor qilinadi — kamera oldida turgan odam har necha
+      soniyada qayta "tanilgan" bo'lib yozilgan.
+    """
+    hotel_id = _hotel_id(current_user)
+    sighting = await session.get(FaceSighting, sighting_id)
+    if sighting is None or sighting.hotel_id != hotel_id:
+        raise NotFoundException("Ko'rinish topilmadi")
+    if sighting.guest_id is None:
+        raise ValidationException("Bu ko'rinish hech kimga biriktirilmagan", "NOT_MATCHED")
+
+    now = datetime.now(timezone.utc)
+    guest_id = sighting.guest_id
+    removed = 0
+
+    for profile_id, auto_only in (
+        (sighting.learned_profile_id, False),
+        (sighting.matched_profile_id, True),
+    ):
+        if profile_id is None:
+            continue
+        profile = await session.get(GuestFaceProfile, profile_id)
+        if profile is None or profile.guest_id != guest_id:
+            continue
+        if auto_only and profile.source != "vision":
+            continue
+        await session.delete(profile)
+        removed += 1
+
+    window = timedelta(minutes=10)
+    siblings = list(
+        (
+            await session.execute(
+                select(FaceSighting).where(
+                    FaceSighting.hotel_id == hotel_id,
+                    FaceSighting.guest_id == guest_id,
+                    FaceSighting.camera_id == sighting.camera_id,
+                    FaceSighting.id != sighting.id,
+                    FaceSighting.acknowledged_at.is_(None),
+                    FaceSighting.seen_at >= sighting.seen_at - window,
+                    FaceSighting.seen_at <= sighting.seen_at + window,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for member in (sighting, *siblings):
+        member.guest_id = None
+        member.status = "unknown"
+        member.matched_profile_id = None
+        member.learned_profile_id = None
+        member.rejected_at = now
+        member.rejected_by = current_user["id"]
+        # Qayta ko'rib chiqilsin: "tanilmagan" ro'yxatiga tushadi
+        member.acknowledged_at = None
+        member.acknowledged_by = None
+    await session.flush()
+    gfs.invalidate_index()
+
+    logger.warning(
+        "Yuz mosligi rad etildi: ko'rinish=%s mehmon=%s kamera=%s ball=%.3f; "
+        "shablon o'chirildi=%d, ko'rinish bekor=%d (xodim %s)",
+        sighting.id, guest_id, sighting.camera_id, sighting.similarity,
+        removed, 1 + len(siblings), current_user["id"],
+    )
+    return {
+        "rejected": True,
+        "profiles_removed": removed,
+        "sightings_cleared": 1 + len(siblings),
+        "can_enroll": sighting.embedding is not None,
+    }
+
+
 @router.post("/sightings/{sighting_id}/enroll", response_model=FaceProfileStatus)
 async def enroll_sighting(
     sighting_id: UUID,
@@ -1032,6 +1171,26 @@ async def enroll_sighting(
     template = gfs.build_template(vectors)
     if template is None:
         raise ValidationException("Shablon yasab bo'lmadi", "BAD_EMBEDDING")
+
+    if not payload.force:
+        # Bir yuz — bir mehmon. Shu yuz boshqa mehmonga biriktirilgan bo'lsa,
+        # ikkalasi bir-birining marginini yeb hech biri tanilmay qoladi yoki
+        # navbatma-navbat tanilib qabulxonani adashtiradi. Xodim bu haqiqatan
+        # boshqa odam deb tasdiqlasa `force` bilan qayta yuboradi.
+        other = await gfs.conflicting_guest(session, template.vector, guest.id)
+        if other is not None and other.guest_id is not None:
+            other_guest = await session.get(Guest, other.guest_id)
+            other_name = (
+                f"{other_guest.first_name} {other_guest.last_name}".strip()
+                if other_guest is not None
+                else "boshqa mehmon"
+            )
+            raise ConflictException(
+                f"Bu yuz allaqachon «{other_name}» mehmoniga biriktirilgan "
+                f"(o'xshashlik {other.score:.2f}). Agar bu haqiqatan boshqa odam "
+                "bo'lsa, tasdiqlab qayta biriktiring",
+                "FACE_BELONGS_TO_OTHER_GUEST",
+            )
 
     await gfs.enroll(
         session,

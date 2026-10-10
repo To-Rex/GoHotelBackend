@@ -83,6 +83,9 @@ class FaceEventResponse(BaseModel):
     candidates: int = 0
     learned: bool = False
     message: Optional[str] = None
+    #: "aniq emas" bo'lsa — nega: threshold | margin | outlier | consensus |
+    #: quality | cohesion (agent logi va diagnostika uchun)
+    reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +117,10 @@ class SightingResponse(BaseModel):
     has_thumbnail: bool = False
     can_enroll: bool = False
     acknowledged: bool = False
+    #: "aniq emas" ko'rinishda — kim bo'lishi mumkin (xodim tasdiqlaydi yoki
+    #: boshqa mehmonga biriktiradi). Tanilganda bo'sh.
+    candidate_guest_id: Optional[UUID] = None
+    candidate_name: Optional[str] = None
     #: `distinct_guests` rejimida: shu mehmonning oynadagi nechta ko'rinishi
     #: bitta qatorga yig'ildi (oddiy rejimda doim 1)
     sighting_count: int = 1
@@ -172,6 +179,10 @@ class EnrollSightingRequest(BaseModel):
     #: vektorlari shablonga qo'shiladi — bir necha epizoddan yig'ilgan
     #: shablon bittasidan sezilarli aniqroq bo'ladi.
     sighting_ids: list[UUID] = Field(default_factory=list)
+    #: Yuz boshqa mehmonga allaqachon biriktirilgan bo'lsa server 409
+    #: `FACE_BELONGS_TO_OTHER_GUEST` qaytaradi; xodim tasdiqlagach shu bayroq
+    #: bilan qayta yuboriladi.
+    force: bool = False
 
 
 class FaceProfileStatus(BaseModel):

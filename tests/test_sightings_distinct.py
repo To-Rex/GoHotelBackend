@@ -27,6 +27,7 @@ def row(guest_id, minutes_ago, quality=0.5, thumb=True, camera="Kirish"):
         camera_name=camera, location=None, seen_at=T0 - timedelta(minutes=minutes_ago),
         similarity=0.8, margin=0.2, quality_score=quality, guest_id=guest_id, branch_id=BRANCH,
         acknowledged_at=None, has_embedding=True, has_thumbnail=thumb,
+        candidate_id=None, candidate_first=None, candidate_last=None,
         first_name="Ali" if guest_id == ALI else "Vali", last_name="Karimov", phone=None,
     )
 

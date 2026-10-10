@@ -374,6 +374,35 @@ Biometriyani o'chirish ham butun tizim bo'yicha.
 
 Test: `pytest tests/test_guest_face_global.py`.
 
+### Yuz tanish aniqligi: boshqa odamni "tanimaslik"
+
+Kichik yoki xira yuzning vektori "o'rtacha yuz"ga yaqinlashib HAMMA bilan
+birdek 0.5–0.6 o'xshaydi — ilgari shu holat 0.52 chegaradan oshib "tanilgan"
+bo'lardi, 0.42+ "aniq emas" nomzod esa panelda mehmon nomi bilan chiqardi.
+Endi (`guest_face_service.decide`) "tanilgan" uchun hamma shart birga kerak:
+
+- ball ≥ 0.60 va boshqa mehmondan margin ≥ 0.10;
+- **statistik ustunlik** — eng yaxshi ball qolgan nomzodlar taqsimotidan
+  ≥ 2.5σ yuqori (indeksda ≥ 8 boshqa shablon bo'lsa);
+- **kadrlar konsensusi** — epizod kadrlarining ≥ 60% i o'sha mehmonni
+  ko'rsatsin (o'rtacha shablon ikki odamdan yig'ilgan bo'lishi mumkin);
+- shablon izchil (cohesion) va kadr sifati yetarli (yuz ≥ 72 px, sifat ≥ 0.45).
+
+Bajarilmasa — ko'pi bilan "aniq emas": mehmonga YOZILMAYDI (`guest_id`
+bo'sh, nomzod `matched_profile_id` da), "tanilmagan yuzlar" ichida
+`candidate_name` bilan chiqadi, xodim tasdiqlaydi yoki to'g'ri mehmonga
+biriktiradi. Avtomatik o'rganish faqat ball ≥ 0.72 va sifatli kadrdan.
+
+Qo'shimcha himoyalar: **"Bu u emas"** (`POST /vision/sightings/{id}/reject`)
+— moslik bekor, shu epizoddan o'rganilgan (va avtomatik o'rganilgan mos)
+shablon o'chadi, yuz "tanilmagan"ga qaytadi; biriktirishda yuz **boshqa
+mehmonniki** bo'lsa 409 `FACE_BELONGS_TO_OTHER_GUEST` (xodim tasdiqlasa
+`force`); surat ustiga yozilmaydi (birinchi surat g'olib). Migratsiya
+`c9d0e1f2a3b4`. Test: `pytest tests/test_face_recognition_accuracy.py`.
+
+Agent tomonida tavsiya: `recognition.min_face_pixels` ≥ 80 (56 — juda
+kichik yuz, 112×112 ga kattalashtirish tafsilotni "ixtiro" qiladi).
+
 ### Yuz bilan kirish: faqat biriktirilgan yuz
 
 Yuz biriktirgan xodim hisobiga faqat O'SHA yuz bilan kiriladi

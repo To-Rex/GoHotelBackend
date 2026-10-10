@@ -17,13 +17,19 @@ Uch qaror bu faylning shaklini belgilaydi:
    ko'paytmasiga aylanadi: N=10 000 uchun ~1 ms. Indeks versiya
    hisoblagichi bilan bekor qilinadi.
 
-2. **Chegara 1:1 dan qat'iyroq.** Xodim login qilganda (``face_service``)
-   0.40 yetarli: u allaqachon kim ekanini da'vo qilyapti. Bu yerda esa
-   yuzlab mehmon ichidan qidiriladi va noto'g'ri moslik qabulxonada boshqa
-   odamning broni ochilishi demak. Shuning uchun chegara yuqoriroq VA
-   qo'shimcha **margin** sharti bor: eng yaxshi nomzod ikkinchi (boshqa
-   mehmon) nomzoddan sezilarli ustun bo'lishi kerak. Ikki odam bir xil
-   darajada o'xshash bo'lsa — javob "aniq emas", "u" emas.
+2. **Chegara 1:1 dan qat'iyroq, va bitta ball yetarli emas.** Xodim login
+   qilganda (``face_service``) 0.40 yetarli: u allaqachon kim ekanini da'vo
+   qilyapti. Bu yerda esa butun tizim mehmonlari ichidan qidiriladi va
+   noto'g'ri moslik qabulxonada boshqa odamning broni ochilishi demak.
+   "Tanilgan" deyish uchun TO'RT mustaqil shart birga bajarilishi kerak
+   (``decide``): yuqori ball, boshqa mehmondan sezilarli **margin**,
+   alohida kadrlarning **konsensusi** (o'rtacha shablon emas, har kadr ham
+   o'sha mehmonni ko'rsatsin) va **statistik ustunlik** (eng yaxshi ball
+   qolgan nomzodlar taqsimotidan ajralib tursin). Oxirgisi eng muhimi:
+   kichik yoki xira yuzning vektori "o'rtacha yuz"ga yaqinlashib, HAMMA
+   bilan birdek 0.5–0.6 o'xshaydi — shunda margin bor-u, ustunlik yo'q, va
+   javob "aniq emas" bo'ladi, "u" emas. Sifatsiz kadr (kichik yuz, past
+   sifat, aralash epizod) umuman "tanilgan" bo'la olmaydi.
 
 3. **Klasterlash — server tomonda ham.** Agent 10 kadrdan shablon yasab
    yuboradi; lekin bir nechta ko'rinishdan qo'lda profil yig'ilganda ham
@@ -64,15 +70,33 @@ MODEL_NAME = "sface_2021dec"
 #: ishlatadi. Bu yerda 1:N qidiruv — nomzodlar soni ortgan sari tasodifiy
 #: yuqori ball chiqish ehtimoli ham ortadi, shuning uchun chegara ancha
 #: yuqori. Pastroq qo'yish begonani mehmon deb ko'rsatishga olib keladi.
-MATCH_THRESHOLD = 0.52
+MATCH_THRESHOLD = 0.60
 
 #: Eng yaxshi nomzod boshqa mehmonlarning eng yaxshisidan shuncha ustun
 #: bo'lishi shart. Bu egizaklar va o'xshash yuzlarga qarshi asosiy himoya.
-MATCH_MARGIN = 0.05
+MATCH_MARGIN = 0.10
 
 #: Shu balldan yuqori, lekin moslik shartlarini bajarmagan nomzod panelda
 #: "tasdiqlang" belgisi bilan ko'rsatiladi — butunlay tashlab yuborilmaydi.
-REVIEW_THRESHOLD = 0.42
+REVIEW_THRESHOLD = 0.50
+
+#: Alohida kadr (namuna) o'sha mehmonga tegishli deyish chegarasi. O'rtacha
+#: shablondan pastroq: bitta kadr tasodifiy soya/burchakni o'z ichiga oladi.
+SAMPLE_THRESHOLD = 0.55
+#: Namunalarning kamida shuncha ulushi o'sha mehmonni ko'rsatishi kerak.
+SAMPLE_CONSENSUS = 0.6
+
+#: Statistik ustunlik: eng yaxshi ball qolgan (boshqa mehmon) nomzodlarning
+#: o'rtachasidan kamida shuncha standart og'ish yuqori bo'lsin. Indeksda
+#: shuncha boshqa shablon bo'lmasa shart tekshirilmaydi (taqsimot yo'q).
+OUTLIER_Z = 2.5
+OUTLIER_MIN_OTHERS = 8
+
+#: Kadr sifati darvozasi. Bundan kichik yuz (112x112 kirishga kattalashtirish
+#: kamera ko'rmagan tafsilotni "ixtiro" qiladi) yoki past sifat ballidan
+#: "tanilgan" chiqmaydi — ko'pi bilan "aniq emas", xodim o'zi tasdiqlaydi.
+MIN_RECOGNITION_FACE_PIXELS = 72
+MIN_RECOGNITION_QUALITY = 0.45
 
 #: Bir mehmonga saqlanadigan shablonlar chegarasi. Ko'proq shablon = yaxshiroq
 #: qamrov, lekin indeks kattalashadi va eski (o'zgargan tashqi ko'rinish)
@@ -82,7 +106,7 @@ MAX_PROFILES_PER_GUEST = 6
 #: Shablonni avtomatik yangilash chegarasi: shu balldan yuqori moslikda yangi
 #: ko'rinish qo'shiladi (soch turmagi, ko'zoynak, yorug'lik o'zgarishi).
 #: Chegara ataylab yuqori — shubhali moslikdan o'rganish xatoni mustahkamlaydi.
-ADAPTIVE_LEARN_THRESHOLD = 0.66
+ADAPTIVE_LEARN_THRESHOLD = 0.72
 
 #: Klaster a'zoligi chegarasi: bitta epizoddagi kadrlar bir-biriga shundan
 #: yuqori o'xshash bo'lishi kerak. Bitta odamning ketma-ket kadrlari odatda
@@ -480,10 +504,31 @@ class SearchResult:
     """Eng yaxshi nomzod boshqa mehmonlarning eng yaxshisidan qancha ustun."""
     candidates: int
     """Indeksdagi shablonlar soni — natijani talqin qilishda kerak."""
+    reason: str = ""
+    """Nega "tanilgan" bo'lmadi (diagnostika, panel): ``threshold`` |
+    ``margin`` | ``consensus`` | ``outlier`` | ``quality`` | ``cohesion``."""
+    outlier_z: float = 0.0
+    """Eng yaxshi ball boshqa nomzodlar taqsimotidan necha sigma yuqori."""
 
     @property
     def is_match(self) -> bool:
         return self.status == "recognized"
+
+    def demoted(self, reason: str) -> "SearchResult":
+        """Shu natijani "aniq emas"ga tushiradi (nomzod saqlanadi — xodim
+        tasdiqlashi mumkin), sababi bilan."""
+        if self.status != "recognized":
+            return self
+        return SearchResult(
+            status="uncertain",
+            guest_id=self.guest_id,
+            profile_id=self.profile_id,
+            score=self.score,
+            margin=self.margin,
+            candidates=self.candidates,
+            reason=reason,
+            outlier_z=self.outlier_z,
+        )
 
 
 #: ``argpartition`` uchun nechta eng yaxshi nomzod ko'riladi. Margin bir
@@ -530,12 +575,28 @@ def search_index(index: _FaceIndex, vector: np.ndarray) -> SearchResult:
             break
     margin = best_score - runner_up
 
-    if best_score >= MATCH_THRESHOLD and margin >= MATCH_MARGIN:
-        status = "recognized"
-    elif best_score >= REVIEW_THRESHOLD:
-        status = "uncertain"
-    else:
+    # Statistik ustunlik: eng yaxshi ball BOSHQA mehmonlar ballari
+    # taqsimotidan necha sigma yuqori. Haqiqiy moslikda bu 4-10 sigma;
+    # kichik/xira yuzda esa hamma ball bir-biriga yaqin (0.5-0.6) va eng
+    # yaxshisi ham 1-2 sigma ichida qoladi — demak u tasodif.
+    others_mask = index.guest_ids != best_guest
+    others = scores[others_mask]
+    z = 0.0
+    if others.size >= OUTLIER_MIN_OTHERS:
+        spread = float(others.std())
+        z = (best_score - float(others.mean())) / spread if spread > 1e-6 else float("inf")
+
+    reason = ""
+    if best_score < REVIEW_THRESHOLD:
         status = "unknown"
+    elif best_score < MATCH_THRESHOLD:
+        status, reason = "uncertain", "threshold"
+    elif margin < MATCH_MARGIN:
+        status, reason = "uncertain", "margin"
+    elif others.size >= OUTLIER_MIN_OTHERS and z < OUTLIER_Z:
+        status, reason = "uncertain", "outlier"
+    else:
+        status = "recognized"
 
     return SearchResult(
         status=status,
@@ -544,17 +605,126 @@ def search_index(index: _FaceIndex, vector: np.ndarray) -> SearchResult:
         score=round(best_score, 4),
         margin=round(margin, 4),
         candidates=index.size,
+        reason=reason,
+        outlier_z=round(z, 2) if np.isfinite(z) else 99.0,
     )
 
 
+def sample_consensus(index: _FaceIndex, guest_id, samples: Sequence[np.ndarray]) -> tuple[int, int]:
+    """Alohida kadrlardan nechtasi O'SHA mehmonni ko'rsatadi.
+
+    Qaytaradi ``(mos, jami)``. Kadr mos deyiladi, agar uning eng yaqin
+    shabloni shu mehmonniki va ball ``SAMPLE_THRESHOLD`` dan yuqori bo'lsa.
+    O'rtacha shablon ikki odamning kadrlaridan yig'ilsa ham chegaradan
+    oshishi mumkin — kadrlar alohida tekshirilganda bu ochiladi.
+    """
+    if index.size == 0 or not samples:
+        return 0, 0
+    agree = 0
+    total = 0
+    for sample in samples:
+        vec = l2_normalize(sample)
+        if vec.size != EMBEDDING_DIM:
+            continue
+        total += 1
+        scores = index.matrix @ vec
+        top = int(np.argmax(scores))
+        if index.guest_ids[top] == guest_id and float(scores[top]) >= SAMPLE_THRESHOLD:
+            agree += 1
+    return agree, total
+
+
+def decide(
+    index: _FaceIndex,
+    template: Template,
+    samples: Sequence[np.ndarray] = (),
+    *,
+    quality: float | None = None,
+    face_pixels: int | None = None,
+) -> SearchResult:
+    """To'liq qaror: qidiruv + konsensus + sifat darvozasi.
+
+    Tartib muhim: avval ball/margin/ustunlik (``search_index``), keyin
+    kadrlar konsensusi, oxirida sifat. Har bosqich "tanilgan"ni faqat
+    "aniq emas"ga tushira oladi — nomzod yo'qolmaydi, xodim panelda
+    tasdiqlashi mumkin. Hech bir bosqich "aniq emas"ni "tanilgan"ga
+    ko'tarmaydi.
+    """
+    result = search_index(index, template.vector)
+    if not result.is_match:
+        return result
+
+    # Epizod ichida kadrlar bir-biriga o'xshamagan (ikki odam almashgan,
+    # yoki yuz qimirlab xira chiqqan) — o'rtacha shablon hech kimniki emas.
+    if template.sample_count >= 2 and template.cohesion < CLUSTER_MIN_SIMILARITY:
+        return result.demoted("cohesion")
+
+    if len(samples) >= 2:
+        agree, total = sample_consensus(index, result.guest_id, samples)
+        if total >= 2 and agree < max(2, int(np.ceil(total * SAMPLE_CONSENSUS))):
+            return result.demoted("consensus")
+
+    if quality is not None and quality < MIN_RECOGNITION_QUALITY:
+        return result.demoted("quality")
+    if face_pixels is not None and 0 < face_pixels < MIN_RECOGNITION_FACE_PIXELS:
+        return result.demoted("quality")
+    return result
+
+
 async def identify(session: AsyncSession, vector: np.ndarray) -> SearchResult:
-    """Bitta vektorni BUTUN tizim mehmonlari ichidan izlaydi.
+    """Bitta vektorni BUTUN tizim mehmonlari ichidan izlaydi (faqat ball).
 
     Qaysi mehmonxona kamerasi ko'rgani ahamiyatsiz: Grand'da biriktirilgan
-    yuz Anna Hostel filialida ham tanilishi kerak.
+    yuz Anna Hostel filialida ham tanilishi kerak. Kamera epizodi uchun
+    to'liq qaror — ``identify_episode`` (konsensus va sifat bilan).
     """
     index = await get_index(session)
     return search_index(index, vector)
+
+
+async def identify_episode(
+    session: AsyncSession,
+    template: Template,
+    samples: Sequence[np.ndarray] = (),
+    *,
+    quality: float | None = None,
+    face_pixels: int | None = None,
+) -> SearchResult:
+    """Kamera epizodi bo'yicha to'liq qaror (``decide``)."""
+    index = await get_index(session)
+    return decide(index, template, samples, quality=quality, face_pixels=face_pixels)
+
+
+async def conflicting_guest(
+    session: AsyncSession, vector: np.ndarray, guest_id: UUID
+) -> SearchResult | None:
+    """Shu yuz BOSHQA mehmonga allaqachon biriktirilganmi.
+
+    Biriktirishdan oldin tekshiriladi: bir yuz ikki mehmonda bo'lsa, keyin
+    ikkalasi bir-birining marginini yeb, hech biri tanilmaydi — yoki yomoni,
+    navbatma-navbat tanilib qabulxonani adashtiradi. Mos kelgan boshqa
+    mehmon bo'lsa uning natijasi qaytadi, aks holda ``None``.
+    """
+    index = await get_index(session)
+    if index.size == 0:
+        return None
+    query = l2_normalize(vector)
+    scores = index.matrix @ query
+    mask = index.guest_ids != guest_id
+    if not mask.any():
+        return None
+    scores = np.where(mask, scores, -1.0)
+    top = int(np.argmax(scores))
+    if float(scores[top]) < MATCH_THRESHOLD:
+        return None
+    return SearchResult(
+        status="recognized",
+        guest_id=index.guest_ids[top],
+        profile_id=index.profile_ids[top],
+        score=round(float(scores[top]), 4),
+        margin=0.0,
+        candidates=index.size,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -624,8 +794,12 @@ async def learn_from_match(
     template: Template,
     quality: float,
     camera_id: str | None,
-) -> bool:
-    """Ishonchli moslikdan yangi ko'rinishni o'rganadi.
+) -> GuestFaceProfile | None:
+    """Ishonchli moslikdan yangi ko'rinishni o'rganadi; yozilgan shablonni
+    qaytaradi (yozilmasa ``None``).
+
+    Yangi shablon ko'rinishga bog'lanadi (``learned_profile_id``): xodim
+    keyin "bu u emas" desa, aynan shu xato shablon o'chiriladi.
 
     Mehmon soch turmagini o'zgartirsa yoki ko'zoynak taqsa, eski shablon
     asta-sekin mos kelmay qoladi. Har ishonchli tanishda yangi ko'rinishni
@@ -636,7 +810,11 @@ async def learn_from_match(
     nechta mos kadrdan yig'ilgan) bo'lishi kerak.
     """
     if result.score < ADAPTIVE_LEARN_THRESHOLD or not template.is_reliable:
-        return False
+        return None
+    # Sifatsiz kadrdan o'rganish shablonni "o'rtacha yuz"ga yaqinlashtiradi —
+    # keyin u hammaga o'xshab qoladi.
+    if quality < MIN_RECOGNITION_QUALITY:
+        return None
 
     count = len(
         (
@@ -648,14 +826,14 @@ async def learn_from_match(
         .all()
     )
     if count >= MAX_PROFILES_PER_GUEST:
-        return False
+        return None
 
     # Mavjud shablonga juda yaqin bo'lsa yangilik qo'shmaydi, faqat indeksni
     # kattalashtiradi.
     if result.score > 0.90:
-        return False
+        return None
 
-    await enroll(
+    profile = await enroll(
         session,
         hotel_id=hotel_id,
         guest_id=guest_id,
@@ -669,7 +847,7 @@ async def learn_from_match(
         guest_id,
         result.score,
     )
-    return True
+    return profile
 
 
 async def forget_guest(session: AsyncSession, *, guest_id: UUID) -> int:
