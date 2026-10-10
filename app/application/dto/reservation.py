@@ -18,6 +18,18 @@ class ReservationPaymentItem(BaseModel):
     ]
 
 
+class ExpectedCompanionIn(BaseModel):
+    """Kechikib keladigan hamroh — ismi/telefoni ixtiyoriy.
+
+    DIQQAT: `ReservationCreateRequest` dan OLDIN turishi shart — prod'da
+    Python 3.12, u maydon turlarini sinf yaratilayotganda hisoblaydi
+    (3.14 dagi kechiktirilgan annotatsiyalar u yerda yo'q)."""
+
+    name: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
+    note: str | None = Field(default=None, max_length=200)
+
+
 class ReservationCreateRequest(BaseModel):
     guest_id: UUID
     room_id: UUID
@@ -110,14 +122,6 @@ class CompanionAddRequest(BaseModel):
     guest_id: UUID
     #: Kechikib kelishi kutilgan hamroh keldi — o'sha yozuv o'rniga
     expected_id: str | None = Field(default=None, max_length=64)
-
-
-class ExpectedCompanionIn(BaseModel):
-    """Kechikib keladigan hamroh — ismi/telefoni ixtiyoriy."""
-
-    name: str | None = Field(default=None, max_length=120)
-    phone: str | None = Field(default=None, max_length=32)
-    note: str | None = Field(default=None, max_length=200)
 
 
 class SettlePaymentRequest(BaseModel):
