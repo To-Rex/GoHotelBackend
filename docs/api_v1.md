@@ -147,6 +147,16 @@ What it means for the API:
 
 ---
 
+### Companions arriving later
+
+- `POST /reservations/` accepts `expected_companions: [{name?, phone?, note?}]` (max 20): companions who will arrive later. They take a seat (`1 + companion_guest_ids + expected ≤ adults`, else 422 `TOO_MANY_COMPANIONS`) and count as accounted for in the "register every guest" mode (`require_all_guests`). Stored in `reservations.expected_companions` (`{id, name, phone, note, created_at, created_by}`), returned on reservation and room-reservation responses.
+- `POST /reservations/{id}/expected-companions` `{name?, phone?, note?}` — mark later (CONFIRMED / CHECKED_IN, no free seat → 422 `ROOM_GUESTS_FULL`).
+- `DELETE /reservations/{id}/expected-companions/{expected_id}` — didn't come; the seat is freed.
+- `POST /reservations/{id}/companions` `{guest_id, expected_id?}` — the companion arrived: becomes a real companion (`arrived_late: true`, `expected_since`, `expected_name`). Without `expected_id`, if the room is full only because of expected companions, the oldest expectation is consumed automatically.
+- Migration `d1e2f3a4b5c7` adds `reservations.expected_companions` (JSONB, nullable).
+
+---
+
 ### Guest face recognition: one index for the whole system
 
 - Guest face templates (`guest_face_profiles`) are matched **across all hotels and branches**: a guest enrolled at one hotel is recognized by any camera of any other hotel or branch. `hotel_id`/`branch_id` on a profile only record where it was enrolled.

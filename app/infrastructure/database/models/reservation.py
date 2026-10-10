@@ -131,6 +131,10 @@ class Reservation(BranchScoped, FullMixin, SoftDeleteMixin, Base):
     # Ism ham saqlanadi: ro'yxatni ko'rsatish uchun mehmonlar jadvaliga
     # qayta borish shart bo'lmaydi
     companions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # Kechikib keladigan hamrohlar (hali mehmon emas — joy band qilingan):
+    # [{"id", "name", "phone", "note", "created_at", "created_by"}, ...].
+    # Kelganda `companions` ga o'tadi (companion_ops.attach_companion)
+    expected_companions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     hotel: Mapped["Hotel"] = relationship("Hotel", back_populates="reservations")
     branch: Mapped["Branch"] = relationship("Branch", back_populates="reservations")

@@ -198,6 +198,8 @@ class RoomReservationResponse(BaseModel):
     daily_unit: str = "12h"
     # Hamrohlar: [{"guest_id": ..., "name": ...}, ...] — xonada kim turgani
     companions: list | None = None
+    # Kechikib keladigan hamrohlar (hali kelmagan, joy band)
+    expected_companions: list | None = None
     created_at: datetime
 
     # --- Tafsilot oynasi uchun: kim, qachon, qayerda ---

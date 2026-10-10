@@ -635,6 +635,7 @@ class RoomService:
                     "notes": reservation.notes,
                     "cancelled_reason": reservation.cancelled_reason,
                     "companions": reservation.companions,
+                    "expected_companions": getattr(reservation, "expected_companions", None),
                     "created_at": reservation.created_at,
                     "updated_at": getattr(reservation, "updated_at", None),
                     "cancelled_at": reservation.cancelled_at,

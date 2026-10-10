@@ -362,6 +362,28 @@ endpointi ikki filial xodimi va filial almashtirgan administrator nomidan:
 boshqa filialning birorta ID'si chiqmasligi), `tests/test_branch_provisioning.py`.
 Uchalasi `GOHOTEL_TEST_PG_URL` (lokal test bazasi) bilan ishlaydi.
 
+### Kechikib keladigan hamrohlar
+
+"Yangi bandlov"da hamroh joyida **"Kechikib keladi"** tugmasi bor: hamroh
+hozir yo'q, keyin keladi (ismi/telefoni/izohi ixtiyoriy). Bron
+`expected_companions` bilan yaratiladi (`reservations.expected_companions`,
+migratsiya `d1e2f3a4b5c7`):
+
+- kutilayotgan hamroh **joy egallaydi** (ichkaridagilar + kutilayotganlar
+  mehmonlar sonidan oshmaydi) va "har bir mehmon ro'yxatga olinsin"
+  rejimida **hisobga olingan** sanaladi;
+- kelganda bron oynasidagi "Xonadagi mehmonlar" bo'limida **"Keldi"** —
+  mehmon tanlanadi/yaratiladi va o'sha yozuv o'rniga haqiqiy hamroh bo'ladi
+  (`arrived_late`, `expected_since`); kelmasa — **"Kelmadi"** (joy bo'shaydi);
+- keyinroq ham belgilash mumkin: "Hamroh kechikib keladi — joyini band
+  qilish" (`POST /reservations/{id}/expected-companions`);
+- umumiy "Hamroh qo'shish" bosilsa va joy faqat kutilayotganlar hisobiga
+  band bo'lsa, kelgan odam kutilgan hamroh deb olinadi.
+
+Qoidalar sof funksiyalarda (`companion_ops.py`: `add_expected`,
+`remove_expected`, `attach_companion`). Test:
+`pytest tests/test_expected_companions.py`.
+
 ### Mehmonni yuzidan tanish — butun tizim uchun bitta indeks
 
 Mehmonlar bazasi umumiy bo'lgani kabi yuz ham mehmonning o'ziniki

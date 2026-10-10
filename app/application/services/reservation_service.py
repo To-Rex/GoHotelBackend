@@ -1,8 +1,11 @@
+import logging
 from uuid import UUID
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 from app.core.exceptions import (
     NotFoundException,
     ConflictException,
@@ -1022,12 +1025,26 @@ class ReservationService:
         # --- Hamrohlar ---
         # Har bir hamroh bazadagi haqiqiy mehmon bo'lishi shart: bu yerda
         # faqat ID keladi, mehmonning o'zi frontendda oldin yaratiladi.
+        expected_raw = [
+            e if isinstance(e, dict) else (e.model_dump() if hasattr(e, "model_dump") else {})
+            for e in (data.get("expected_companions") or [])
+        ]
         companions = await self._resolve_companions(
             data.get("companion_guest_ids") or [],
             main_guest_id=data["guest_id"],
             adults=int(data.get("adults", 1) or 1),
             hotel_id=hotel_id,
+            expected_count=len(expected_raw),
         )
+        # Kechikib keladigan hamrohlar — joy band, kelganda biriktiriladi
+        stamp = datetime.now(timezone.utc)
+        expected_companions = [
+            companion_ops.new_expected_entry(
+                name=e.get("name"), phone=e.get("phone"), note=e.get("note"),
+                at=stamp, by=created_by,
+            )
+            for e in expected_raw
+        ]
 
         reservation = Reservation(
             hotel_id=hotel_id,
@@ -1051,6 +1068,7 @@ class ReservationService:
             status="CONFIRMED",
             created_by=created_by,
             companions=companions or None,
+            expected_companions=expected_companions or None,
             daily_unit=daily_unit,
         )
         reservation = await self.repo.create(reservation)
@@ -1161,8 +1179,13 @@ class ReservationService:
         main_guest_id: UUID,
         adults: int,
         hotel_id: UUID,
+        expected_count: int = 0,
     ) -> list[dict]:
         """Hamrohlar ro'yxatini tayyorlash va tekshirish.
+
+        `expected_count` — kechikib keladigan hamrohlar: ular ham joy
+        egallaydi va majburiy rejimda "hisobga olingan" sanaladi (kelganda
+        biriktiriladi).
 
         Takrorlar va asosiy mehmon tashlanadi — bir odam ikki marta
         sanalmasligi kerak. Soni mehmonlar sonidan oshsa xato: xonaga
@@ -1182,9 +1205,11 @@ class ReservationService:
             seen.add(gid)
             ids.append(gid)
 
-        if len(ids) + 1 > max(adults, 1):
+        expected_count = max(int(expected_count or 0), 0)
+        if len(ids) + 1 + expected_count > max(adults, 1):
             raise ValidationException(
-                f"Hamrohlar soni mehmonlar sonidan ko'p: {len(ids) + 1} > {adults}",
+                f"Hamrohlar soni mehmonlar sonidan ko'p: "
+                f"{len(ids) + 1 + expected_count} > {adults}",
                 "TOO_MANY_COMPANIONS",
             )
 
@@ -1205,7 +1230,9 @@ class ReservationService:
         # Majburiy rejim: xonadagi har bir kishi ro'yxatga olinishi shart
         hotel = await settings_owner(self.session, hotel_id)
         if require_all_guests(hotel.settings if hotel else None):
-            total = len(companions) + 1
+            # Kechikib keladigan hamroh ham hisobga olingan: u kelganda
+            # biriktiriladi (bron oynasida "Keldi")
+            total = len(companions) + 1 + expected_count
             if total < max(adults, 1):
                 raise ValidationException(
                     f"Xonadagi har bir mehmon ro'yxatga olinishi kerak: "
@@ -1241,21 +1268,31 @@ class ReservationService:
         return reservation
 
     async def _store_companions(
-        self, reservation: Reservation, companions: list[dict]
+        self,
+        reservation: Reservation,
+        companions: list[dict],
+        expected: list[dict] | None = None,
     ) -> Reservation:
         # JSONB ichki mutatsiyani sezmaydi — YANGI ro'yxat beriladi. Bo'sh
         # ro'yxat None bo'lib saqlanadi (yaratilgandagi bilan bir xil).
         reservation.companions = companions or None
+        if expected is not None:
+            reservation.expected_companions = expected or None
         await self.session.flush()
         # updated_at flush'dan keyin eskiradi — javob serializatsiyasi uchun
         await self.session.refresh(reservation)
         return reservation
 
     async def add_companion(
-        self, reservation_id: UUID, hotel_id: UUID, guest_id: UUID, user_id: UUID
+        self,
+        reservation_id: UUID,
+        hotel_id: UUID,
+        guest_id: UUID,
+        user_id: UUID,
+        expected_id: str | None = None,
     ) -> Reservation:
-        """Yangi hamroh — ketgan o'rniga kelgan yoki bo'sh joyga (bron kirishdan
-        oldin ham, kirgandan keyin ham)."""
+        """Yangi hamroh — ketgan o'rniga kelgan, bo'sh joyga yoki kechikib
+        kelishi kutilgan hamroh keldi (bron kirishdan oldin ham, keyin ham)."""
         reservation = await self._companion_target(
             reservation_id, hotel_id, ("CONFIRMED", "CHECKED_IN"), "Hamroh qo'shish"
         )
@@ -1271,16 +1308,73 @@ class ReservationService:
         if not guest:
             raise NotFoundException("Hamroh mehmon topilmadi", "COMPANION_NOT_FOUND")
         name = " ".join(p for p in (guest.first_name, guest.last_name) if p).strip()
-        companions = companion_ops.add_companion(
+        companions, expected, consumed = companion_ops.attach_companion(
             reservation.companions,
+            getattr(reservation, "expected_companions", None),
             guest_id=guest_id,
             name=name or None,
             main_guest_id=reservation.guest_id,
             adults=reservation.adults,
             at=datetime.now(timezone.utc),
             by=user_id,
+            expected_id=expected_id,
         )
-        return await self._store_companions(reservation, companions)
+        if consumed is not None:
+            logger.info(
+                "Kechikib kelgan hamroh biriktirildi: bron=%s mehmon=%s (kutilgan %s)",
+                reservation.id, guest_id, consumed.get("name") or consumed.get("id"),
+            )
+        return await self._store_companions(reservation, companions, expected)
+
+    async def add_expected_companion(
+        self,
+        reservation_id: UUID,
+        hotel_id: UUID,
+        user_id: UUID,
+        *,
+        name: str | None = None,
+        phone: str | None = None,
+        note: str | None = None,
+    ) -> Reservation:
+        """"Yana bir hamroh kechikib keladi" — joy band qilinadi."""
+        reservation = await self._companion_target(
+            reservation_id, hotel_id, ("CONFIRMED", "CHECKED_IN"),
+            "Kechikib keladigan hamrohni belgilash",
+        )
+        if getattr(reservation, "checkout_requested_at", None):
+            raise ValidationException(
+                "Chiqish jarayoni boshlangan — yangi hamroh kutilmaydi",
+                "CHECKOUT_IN_PROGRESS",
+            )
+        expected = companion_ops.add_expected(
+            reservation.companions,
+            getattr(reservation, "expected_companions", None),
+            adults=reservation.adults,
+            name=name, phone=phone, note=note,
+            at=datetime.now(timezone.utc), by=user_id,
+        )
+        return await self._store_companions(
+            reservation, list(reservation.companions or []), expected
+        )
+
+    async def cancel_expected_companion(
+        self, reservation_id: UUID, hotel_id: UUID, expected_id: str, user_id: UUID
+    ) -> Reservation:
+        """Kutilgan hamroh kelmadi (yoki adashib belgilangan) — joy bo'shaydi."""
+        reservation = await self._companion_target(
+            reservation_id, hotel_id, ("CONFIRMED", "CHECKED_IN"),
+            "Kutilayotgan hamrohni bekor qilish",
+        )
+        expected = companion_ops.remove_expected(
+            getattr(reservation, "expected_companions", None), expected_id
+        )
+        logger.info(
+            "Kutilgan hamroh bekor qilindi: bron=%s yozuv=%s (xodim %s)",
+            reservation.id, expected_id, user_id,
+        )
+        return await self._store_companions(
+            reservation, list(reservation.companions or []), expected
+        )
 
     async def companion_leave(
         self, reservation_id: UUID, hotel_id: UUID, guest_id: UUID, user_id: UUID

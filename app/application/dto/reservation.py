@@ -47,6 +47,8 @@ class ReservationCreateRequest(BaseModel):
     # Hamrohlar: shu xonada turadigan qolgan mehmonlarning ID'lari.
     # Asosiy mehmon bu ro'yxatga kirmaydi, ya'ni jami = 1 + len(ro'yxat)
     companion_guest_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    # Kechikib keladigan hamrohlar: joy band qilinadi, kelganda biriktiriladi
+    expected_companions: list[ExpectedCompanionIn] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def validate_hourly_booking(self):
@@ -106,6 +108,16 @@ class CompanionAddRequest(BaseModel):
     """Turish davomida hamroh qo'shish — mehmon bazada oldin yaratiladi."""
 
     guest_id: UUID
+    #: Kechikib kelishi kutilgan hamroh keldi — o'sha yozuv o'rniga
+    expected_id: str | None = Field(default=None, max_length=64)
+
+
+class ExpectedCompanionIn(BaseModel):
+    """Kechikib keladigan hamroh — ismi/telefoni ixtiyoriy."""
+
+    name: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
+    note: str | None = Field(default=None, max_length=200)
 
 
 class SettlePaymentRequest(BaseModel):
@@ -163,6 +175,8 @@ class ReservationResponse(BaseModel):
     room_moves: list | None = None
     # Hamrohlar: [{"guest_id": ..., "name": ...}, ...]
     companions: list | None = None
+    # Kechikib keladigan hamrohlar: [{"id", "name", "phone", "note", ...}]
+    expected_companions: list | None = None
     created_by: UUID
     created_at: datetime
     updated_at: datetime

@@ -28,6 +28,7 @@ from app.application.dto.reservation import (
     ReservationDetailResponse,
     MoveRoomRequest,
     CompanionAddRequest,
+    ExpectedCompanionIn,
     SettlePaymentRequest,
 )
 from app.application.dto.common import MessageResponse
@@ -475,7 +476,45 @@ async def add_companion(
     h_id = await _reservation_hotel_id(current_user, hotel_id, reservation_id, session)
     service = ReservationService(session)
     return await service.add_companion(
-        reservation_id, h_id, data.guest_id, current_user["id"]
+        reservation_id, h_id, data.guest_id, current_user["id"],
+        expected_id=data.expected_id,
+    )
+
+
+@router.post("/{reservation_id}/expected-companions", response_model=ReservationResponse)
+async def add_expected_companion(
+    reservation_id: UUID = Path(),
+    data: ExpectedCompanionIn = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """Hamroh kechikib keladi — joy band qilinadi (CONFIRMED / CHECKED_IN).
+    Kelganda `POST /companions` ga `expected_id` bilan biriktiriladi."""
+    h_id = await _reservation_hotel_id(current_user, hotel_id, reservation_id, session)
+    service = ReservationService(session)
+    return await service.add_expected_companion(
+        reservation_id, h_id, current_user["id"],
+        name=data.name, phone=data.phone, note=data.note,
+    )
+
+
+@router.delete(
+    "/{reservation_id}/expected-companions/{expected_id}",
+    response_model=ReservationResponse,
+)
+async def cancel_expected_companion(
+    reservation_id: UUID = Path(),
+    expected_id: str = Path(max_length=64),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_permission("reservation.update")),
+):
+    """Kutilgan hamroh kelmadi — joy bo'shaydi."""
+    h_id = await _reservation_hotel_id(current_user, hotel_id, reservation_id, session)
+    service = ReservationService(session)
+    return await service.cancel_expected_companion(
+        reservation_id, h_id, expected_id, current_user["id"]
     )
 
 
