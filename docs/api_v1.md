@@ -2129,7 +2129,12 @@ Yozuv shakli:
       "id": "uuid", "user_name": "Dilnoza Karimova", "branch_name": "Yunusobod",
       "status": "PENDING_HANDOVER", "started_at": "2026-10-15T03:30:00+00:00",
       "opening_cash": 100000.0, "payments_cash": 700000.0, "shop_cash": 0.0,
-      "expenses_cash": 50000.0, "expected_cash": 750000.0, "counted_cash": 720000.0
+      "expenses_cash": 50000.0, "expected_cash": 750000.0, "counted_cash": 720000.0,
+      "methods": [
+        {"method": "CASH", "payments": 700000.0, "shop": 0.0, "expenses": 50000.0, "income": 700000.0},
+        {"method": "ONLINE", "payments": 120000.0, "shop": 0.0, "expenses": 0.0, "income": 120000.0}
+      ],
+      "non_cash_income": 120000.0
     }
   ]
 }
@@ -2155,6 +2160,25 @@ Yozuv shakli:
   ]
 }
 ```
+
+---
+
+### Shifts — payment methods per session (naqdsiz turlar ham smenaga bog'langan)
+
+The cash drawer is cash-only: the expected amount, the count and the handover chain (`counted_cash` → next session's `opening_cash`) are all about physical cash. Non-cash payments (card / online / bank transfer) never enter the drawer and are never transferred between shifts — they are a **per-session indicator** instead.
+
+`methods` appears in every place a session's finances are shown:
+
+| Endpoint | Where |
+|---|---|
+| `GET /shifts/expected-cash` | session owner — handover dialog |
+| `GET /shifts/cash-overview` | each open drawer item (admin/manager) |
+| `POST /shifts/close-cash`, `POST /shifts/end` | response report for the just-closed session |
+| `GET /shifts/history` | CLOSED session items only (open ones keep the blind-count rule) |
+
+- Each row: `{"method": "CASH" | "CARD" | "ONLINE" | "BANK_TRANSFER" | legacy codes | "UNKNOWN", "payments": ..., "shop": ..., "expenses": ..., "income": payments + shop}`. Old codes are returned as stored; the client groups them (`CREDIT_CARD`/`DEBIT_CARD` → card, `MOBILE_PAYMENT` → online, `TRANSFER` → bank transfer). Unknown/blank methods are summed under `UNKNOWN`.
+- Rows are summed by the session window (`created_by` + `started_at..ended_at`), exactly like the cash breakdown — so every new session naturally starts from 0: nothing carries over. `non_cash_income` is the total income of all non-CASH rows.
+- The cash fields (`payments_cash`, `shop_cash`, `expenses_cash`, `expected_cash`) are unchanged and still contain CASH rows only.
 
 ---
 

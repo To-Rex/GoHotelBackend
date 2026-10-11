@@ -123,6 +123,10 @@ def make_service(mode="cash", sessions=()):
             "shop_cash": Decimal("20000"),
             "expenses_cash": Decimal("50000"),
             "expected_cash": opening + Decimal("270000"),
+            # To'lov usullari tarkibi (naqd bo'lmagan turlar ham sessiya
+            # ko'rsatkichi sifatida qaytadi)
+            "methods": [],
+            "non_cash_income": 0.0,
         }
 
     svc.get_settings = settings

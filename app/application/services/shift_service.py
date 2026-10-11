@@ -79,6 +79,38 @@ def _dec(v) -> Decimal:
     return v if isinstance(v, Decimal) else Decimal(str(v or 0))
 
 
+def _method_key(method: str | None) -> str:
+    """To'lov usuli kodi — bir xil shaklda.
+
+    Bazada eski/kichik harfli yozuvlar bo'lishi mumkin (CARD, CREDIT_CARD,
+    MOBILE_PAYMENT...). Hisobotlar bilan bir xil qoida: katta harfga
+    keltiriladi, bo'sh qiymat UNKNOWN bo'ladi.
+    """
+    return (method or "").upper() or "UNKNOWN"
+
+
+def _method_rows(values: dict[str, dict[str, Decimal]]) -> list[dict]:
+    """Usul bo'yicha yig'ilgan summalarni javob qatorlariga aylantiradi.
+
+    Tartib BARQAROR: CASH doim birinchi, keyin tushum bo'yicha kamayish —
+    aks holda sessiyalar orasida qatorlar joyi sakrab, ekranda "qayta
+    yozilayotgandek" ko'rinardi.
+    """
+    rows = [
+        {
+            "method": method,
+            "payments": float(v["payments"]),
+            "shop": float(v["shop"]),
+            "expenses": float(v["expenses"]),
+            # Tushum = bron to'lovlari + do'kon savdosi (xarajat alohida)
+            "income": float(v["payments"] + v["shop"]),
+        }
+        for method, v in values.items()
+    ]
+    rows.sort(key=lambda r: (r["method"] != "CASH", -r["income"], r["method"]))
+    return rows
+
+
 #: Smena yakunida kassadagi pul qayerga ketgani:
 #:   HANDOVER    — keyingi xodim qabul qildi (summa uning boshlang'ich kassasi)
 #:   PENDING     — topshirildi, qabul qilinishi kutilmoqda
@@ -324,60 +356,208 @@ class ShiftService:
         return self._serialize(s)
 
     async def cash_breakdown(self, s: ShiftSession) -> dict:
-        """Sessiya kassasi tarkibi: boshlang'ich + naqd tushumlar - naqd chiqimlar.
+        """Sessiya kassasi tarkibi + to'lov usullari bo'yicha tushum.
 
-        Faqat SESSIYA EGASI bajargan amallar hisoblanadi (created_by) — har
-        kim o'z pullariga javob beradi.
+        Naqd qism — kassa balansi: boshlang'ich + naqd tushumlar − naqd
+        chiqimlar. Faqat SESSIYA EGASI bajargan amallar hisoblanadi
+        (created_by) — har kim o'z pullariga javob beradi.
+
+        `methods` — shu sessiya oynasida qabul qilingan to'lovlar USUL
+        bo'yicha (naqd ham, naqdsiz ham). Naqdsiz pul kassaga kirmaydi va
+        smenadan smenaga o'tmaydi: u shunchaki shu sessiyaning ko'rsatkichi,
+        shuning uchun har yangi sessiyada tabiiy ravishda 0 dan boshlanadi —
+        xuddi naqd kassadagi kabi.
         """
         start = s.started_at
         end = s.ended_at or datetime.now(timezone.utc)
 
-        # Naqd to'lovlar (bron to'lovlari)
+        methods: dict[str, dict[str, Decimal]] = {}
+
+        def bucket(method: str | None) -> dict[str, Decimal]:
+            key = _method_key(method)
+            row = methods.get(key)
+            if row is None:
+                row = {
+                    "payments": Decimal("0"),
+                    "shop": Decimal("0"),
+                    "expenses": Decimal("0"),
+                }
+                methods[key] = row
+            return row
+
+        # Bron to'lovlari — usul bo'yicha guruhlangan
         pay = await self.session.execute(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            select(
+                Payment.payment_method,
+                func.coalesce(func.sum(Payment.amount), 0),
+            )
+            .where(
                 Payment.hotel_id == s.hotel_id,
                 Payment.created_by == s.user_id,
-                Payment.payment_method == "CASH",
                 Payment.created_at >= start,
                 Payment.created_at <= end,
             )
+            .group_by(Payment.payment_method)
         )
-        cash_in = _dec(pay.scalar() or 0)
+        for method, total in pay.all():
+            bucket(method)["payments"] += _dec(total)
 
-        # Do'kon naqd to'lovlari — sessiya egasi QABUL QILGAN, sessiya
-        # oynasidagi har to'lov (qisman ham). Bo'lib to'lashda kassaga faqat
-        # NAQD bo'laklar tushadi — har bo'lak alohida qator
+        # Do'kon to'lovlari — sessiya egasi QABUL QILGAN, sessiya oynasidagi
+        # har to'lov (qisman ham). Bo'lib to'lashda har bo'lak alohida qator;
+        # kassaga faqat NAQD bo'laklar tushadi
         shop = await self.session.execute(
-            select(func.coalesce(func.sum(ShopSalePayment.amount), 0)).where(
+            select(
+                ShopSalePayment.payment_method,
+                func.coalesce(func.sum(ShopSalePayment.amount), 0),
+            )
+            .where(
                 ShopSalePayment.hotel_id == s.hotel_id,
                 ShopSalePayment.created_by == s.user_id,
-                ShopSalePayment.payment_method == "CASH",
                 ShopSalePayment.paid_at >= start,
                 ShopSalePayment.paid_at <= end,
             )
+            .group_by(ShopSalePayment.payment_method)
         )
-        shop_in = _dec(shop.scalar() or 0)
+        for method, total in shop.all():
+            bucket(method)["shop"] += _dec(total)
 
-        # Naqd xarajatlar
+        # Xarajatlar — usul bo'yicha (kassadan faqat NAQD qismi chiqadi)
         exp = await self.session.execute(
-            select(func.coalesce(func.sum(Expense.amount), 0)).where(
+            select(
+                Expense.payment_method,
+                func.coalesce(func.sum(Expense.amount), 0),
+            )
+            .where(
                 Expense.hotel_id == s.hotel_id,
                 Expense.created_by == s.user_id,
-                Expense.payment_method == "CASH",
                 Expense.created_at >= start,
                 Expense.created_at <= end,
             )
+            .group_by(Expense.payment_method)
         )
-        cash_out = _dec(exp.scalar() or 0)
+        for method, total in exp.all():
+            bucket(method)["expenses"] += _dec(total)
 
+        zero = {"payments": Decimal("0"), "shop": Decimal("0"), "expenses": Decimal("0")}
+        cash = methods.get("CASH", zero)
         opening = _dec(s.opening_cash)
         return {
             "opening_cash": opening,
-            "payments_cash": cash_in,
-            "shop_cash": shop_in,
-            "expenses_cash": cash_out,
-            "expected_cash": opening + cash_in + shop_in - cash_out,
+            "payments_cash": cash["payments"],
+            "shop_cash": cash["shop"],
+            "expenses_cash": cash["expenses"],
+            "expected_cash": opening + cash["payments"] + cash["shop"] - cash["expenses"],
+            "methods": _method_rows(methods),
+            "non_cash_income": float(
+                sum(
+                    v["payments"] + v["shop"]
+                    for method, v in methods.items()
+                    if method != "CASH"
+                )
+            ),
         }
+
+    async def methods_for_sessions(
+        self, sessions: list[ShiftSession]
+    ) -> dict[UUID, list[dict]]:
+        """Bir necha sessiya uchun to'lov usullari tarkibi — 3 so'rovda.
+
+        Tarix sahifasi yuzlab sessiyani ko'rsatadi; har biri uchun alohida
+        guruhlash so'rovi yuborilsa yuzlab marta baza chaqirilardi. Qatorlar
+        bir marta olinadi va sessiya oynasiga (xodim + vaqt) Python'da
+        taqsimlanadi. Faqat shu sessiyalarga tegishli qatorlar qaytadi.
+        """
+        result: dict[UUID, list[dict]] = {}
+        if not sessions:
+            return result
+
+        now = datetime.now(timezone.utc)
+        by_user: dict[UUID, list[ShiftSession]] = {}
+        for s in sessions:
+            by_user.setdefault(s.user_id, []).append(s)
+        starts = [s.started_at for s in sessions if s.started_at]
+        if not starts:
+            return result
+        window_start = min(starts)
+        window_end = max(s.ended_at or now for s in sessions)
+        user_ids = list(by_user)
+
+        collected: dict[UUID, dict[str, dict[str, Decimal]]] = {}
+
+        def bucket(user_id: UUID, at: datetime, method: str | None) -> dict[str, Decimal] | None:
+            for s in by_user.get(user_id, ()):
+                if s.started_at and s.started_at <= at <= (s.ended_at or now):
+                    session_methods = collected.setdefault(s.id, {})
+                    key = _method_key(method)
+                    row = session_methods.get(key)
+                    if row is None:
+                        row = {
+                            "payments": Decimal("0"),
+                            "shop": Decimal("0"),
+                            "expenses": Decimal("0"),
+                        }
+                        session_methods[key] = row
+                    return row
+            return None
+
+        hotel_id = sessions[0].hotel_id
+        pay = await self.session.execute(
+            select(
+                Payment.created_by,
+                Payment.payment_method,
+                Payment.amount,
+                Payment.created_at,
+            ).where(
+                Payment.hotel_id == hotel_id,
+                Payment.created_by.in_(user_ids),
+                Payment.created_at >= window_start,
+                Payment.created_at <= window_end,
+            )
+        )
+        for user_id, method, amount, at in pay.all():
+            row = bucket(user_id, at, method)
+            if row is not None:
+                row["payments"] += _dec(amount)
+
+        shop = await self.session.execute(
+            select(
+                ShopSalePayment.created_by,
+                ShopSalePayment.payment_method,
+                ShopSalePayment.amount,
+                ShopSalePayment.paid_at,
+            ).where(
+                ShopSalePayment.hotel_id == hotel_id,
+                ShopSalePayment.created_by.in_(user_ids),
+                ShopSalePayment.paid_at >= window_start,
+                ShopSalePayment.paid_at <= window_end,
+            )
+        )
+        for user_id, method, amount, at in shop.all():
+            row = bucket(user_id, at, method)
+            if row is not None:
+                row["shop"] += _dec(amount)
+
+        exp = await self.session.execute(
+            select(
+                Expense.created_by,
+                Expense.payment_method,
+                Expense.amount,
+                Expense.created_at,
+            ).where(
+                Expense.hotel_id == hotel_id,
+                Expense.created_by.in_(user_ids),
+                Expense.created_at >= window_start,
+                Expense.created_at <= window_end,
+            )
+        )
+        for user_id, method, amount, at in exp.all():
+            row = bucket(user_id, at, method)
+            if row is not None:
+                row["expenses"] += _dec(amount)
+
+        for session_id, values in collected.items():
+            result[session_id] = _method_rows(values)
+        return result
 
     async def compute_expected_cash(self, s: ShiftSession) -> Decimal:
         return (await self.cash_breakdown(s))["expected_cash"]
@@ -427,7 +607,10 @@ class ShiftService:
         for s, u in rows:
             breakdown = await self.cash_breakdown(s)
             item = self._serialize(s, u)
-            item.update({key: float(value) for key, value in breakdown.items()})
+            item.update(
+                {key: float(value) for key, value in breakdown.items() if key != "methods"}
+            )
+            item["methods"] = breakdown["methods"]
             item["branch_name"] = branch_names.get(s.branch_id)
             # Topshirilayotgan smenada xodim sanab kiritgan summa ham
             item["counted_cash"] = (
@@ -449,7 +632,12 @@ class ShiftService:
         summa (tarkibi bilan) — topshirish dialogida ko'rsatiladi."""
         user_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         s = await self._my_active(hotel_id, user_id)
-        return {k: float(v) for k, v in (await self.cash_breakdown(s)).items()}
+        breakdown = await self.cash_breakdown(s)
+        return {
+            # `methods` — ro'yxat: float() qilinmaydi, o'z holicha qaytadi
+            **{k: float(v) for k, v in breakdown.items() if k != "methods"},
+            "methods": breakdown["methods"],
+        }
 
     async def _close_with_count(
         self, s: ShiftSession, counted_cash: float, notes: str | None, closed_by: UUID
@@ -490,7 +678,11 @@ class ShiftService:
         )
         self.session.add(new_s)
         await self.session.flush()
+        breakdown = await self.cash_breakdown(s)
         report = self._serialize(s, include_cash=True)
+        # Smenada qabul qilingan to'lov turlari — yopilgan sessiya hisoboti
+        report["methods"] = breakdown["methods"]
+        report["non_cash_income"] = breakdown["non_cash_income"]
         report["new_session"] = self._serialize(new_s)
         return report
 
@@ -504,7 +696,11 @@ class ShiftService:
         await self._close_with_count(s, counted_cash, notes, user_id)
         s.status = "PENDING_HANDOVER"
         await self.session.flush()
-        return self._serialize(s, include_cash=True)
+        breakdown = await self.cash_breakdown(s)
+        report = self._serialize(s, include_cash=True)
+        report["methods"] = breakdown["methods"]
+        report["non_cash_income"] = breakdown["non_cash_income"]
+        return report
 
     async def accept_shift(self, hotel_id: UUID, current: dict, password: str) -> dict:
         """Keyingi xodim topshirilgan smenani O'Z PAROLI bilan qabul qiladi
@@ -835,10 +1031,19 @@ class ShiftService:
             ures = await self.session.execute(select(User).where(User.id.in_(extra_ids)))
             names = {u.id: f"{u.first_name} {u.last_name}" for u in ures.scalars()}
 
+        # To'lov usullari tarkibi — faqat YOPILGAN sessiyalar uchun (ochiqlarida
+        # "ko'r sanash" qoidasi: kassa raqamlari yopilgunga qadar yashiriladi,
+        # usullar ham shu qoidaga bo'ysunadi). Barcha sessiyalar uchun bitta
+        # to'plam so'rovda olinadi — tarixda yuzlab sessiya bo'lishi mumkin.
+        closed = [s for s, _ in rows if s.status == "CLOSED"]
+        methods = await self.methods_for_sessions(closed)
+
         out = []
         for s, u in rows:
             # Tarixda kassa raqamlari ochiq — sessiya allaqachon yopilgan
             d = self._serialize(s, u, include_cash=s.status == "CLOSED")
+            if s.status == "CLOSED":
+                d["methods"] = methods.get(s.id, [])
             d["accepted_at"] = s.accepted_at.isoformat() if s.accepted_at else None
             d["accepted_by_name"] = names.get(s.accepted_by)
             d["closed_by_name"] = names.get(s.closed_by)

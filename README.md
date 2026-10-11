@@ -665,6 +665,19 @@ kunlik kesimda yoki majburiy yopishda kassadan chiqqan pul, kutilgan
 summa va farq. Ikkalasi ham faqat admin yoki `shift.force_close` ("ko'r
 sanash" saqlanadi). Test: `pytest tests/test_shift_handovers.py`.
 
+**Naqdsiz to'lovlar ham smena ko'rsatkichi bo'lib qaytadi (veb).** Ilgari
+smena hisobi faqat naqd bilan ishlardi — karta/online/o'tkazma summalari
+sessiyaga bog'lanmasdan "yo'qolib" qolardi. Endi har bir sessiya javobida
+`methods` tarkibi bor (`expected-cash`, `cash-overview`, yopilish hisoboti
+va `history` — faqat YOPILGAN sessiyalarda): to'lov usuli bo'yicha bron
+to'lovlari + do'kon savdosi (+ xarajat), `income` va `non_cash_income` bilan.
+Hisob AYNAN smena oynasi (`created_by` + vaqt) bo'yicha — naqd kabi har
+yangi smenada 0 dan boshlanadi. Naqdsiz pul kassaga kirmaydi va smenadan
+smenaga o'tmaydi (jismonan o'tadigan pul yo'q), shuning uchun topshirish
+summasiga ta'sir qilmaydi. Kod: `shift_service.cash_breakdown`
+(`_method_rows`, `methods_for_sessions`), test:
+`pytest tests/test_shift_methods.py`.
+
 **Tushum xodimlar kesimida.** Moliya sahifasida "Tushum — xodimlar
 bo'yicha" kartasi: kim qancha bron to'lovi va do'kon savdosi olgan,
 naqd/karta, qaytarim va xarajat. `GET /finance/by-staff?date_from&date_to`
