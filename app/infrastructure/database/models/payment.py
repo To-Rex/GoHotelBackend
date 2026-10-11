@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
@@ -25,6 +26,10 @@ class Payment(BranchScoped, UUIDPrimaryKeyMixin, Base):
     __table_args__ = (
         UniqueConstraint("hotel_id", "payment_number", name="uq_payments_hotel_number"),
         CheckConstraint("amount > 0", name="ck_payments_amount"),
+        # Moliyaviy hisobotlar: hotel + sana oralig'i
+        Index("ix_payments_hotel_payment_date", "hotel_id", "payment_date"),
+        # Smena kassasi / shaxsiy hisobot: xodim + vaqt oynasi
+        Index("ix_payments_created_by_created_at", "created_by", "created_at"),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

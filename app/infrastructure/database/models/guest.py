@@ -28,6 +28,40 @@ class Guest(FullMixin, SoftDeleteMixin, Base):
             "hotel_id",
             postgresql_where=text("blacklisted_at IS NOT NULL"),
         ),
+        # Mehmon qidiruvi (ism/familiya/telefon/pasport/email) ILIKE '%...%'
+        # bilan ishlaydi — oddiy indeks bunday qidiruvga yaramaydi. pg_trgm
+        # GIN indekslari katta bazada ham tez qidiradi (migratsiyada
+        # kengaytma bilan birga yaratiladi; SQLite'da oddiy indeks bo'ladi).
+        Index(
+            "ix_guests_trgm_first_name",
+            "first_name",
+            postgresql_using="gin",
+            postgresql_ops={"first_name": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_guests_trgm_last_name",
+            "last_name",
+            postgresql_using="gin",
+            postgresql_ops={"last_name": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_guests_trgm_phone",
+            "phone",
+            postgresql_using="gin",
+            postgresql_ops={"phone": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_guests_trgm_email",
+            "email",
+            postgresql_using="gin",
+            postgresql_ops={"email": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_guests_trgm_passport",
+            "passport_number",
+            postgresql_using="gin",
+            postgresql_ops={"passport_number": "gin_trgm_ops"},
+        ),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -12,7 +12,12 @@ from app.shared.mixins import UUIDPrimaryKeyMixin
 
 
 class FileAttachment(UUIDPrimaryKeyMixin, Base):
+    # Eslatma: (entity_type, entity_id) indeksi bazada mavjud
+    # (idx_file_attachments_entity) — bu yerda takrorlanmaydi.
     __tablename__ = "file_attachments"
+    __table_args__ = (
+        Index("ix_file_attachments_hotel_created", "hotel_id", "created_at"),
+    )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False

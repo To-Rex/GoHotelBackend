@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     SmallInteger,
     String,
@@ -28,6 +29,27 @@ class Reservation(BranchScoped, FullMixin, SoftDeleteMixin, Base):
         CheckConstraint("check_out_date > check_in_date", name="ck_reservations_dates"),
         CheckConstraint("adults >= 1", name="ck_reservations_adults"),
         CheckConstraint("children >= 0", name="ck_reservations_children"),
+        # Katta hajmdagi ma'lumot uchun so'rov qoliplari bo'yicha indekslar.
+        # Har so'rovga filial sharti avtomatik qo'shiladi (branch_scope), shu
+        # sababli ko'pchilik indekslar hotel+branch prefiksi bilan boshlanadi.
+        Index("ix_reservations_hotel_branch_status", "hotel_id", "branch_id", "status"),
+        Index(
+            "ix_reservations_hotel_branch_created",
+            "hotel_id",
+            "branch_id",
+            "created_at",
+        ),
+        # Mavjudlik tekshiruvi: bir xonadagi kesishuvchi bronlar
+        Index("ix_reservations_room_checkin", "room_id", "check_in_date"),
+        # "Bronlarim" / shaxsiy hisobot
+        Index("ix_reservations_created_by", "created_by", "created_at"),
+        # Hamrohlar JSONB ichida qidiriladi (guest history: @> containment)
+        Index(
+            "ix_reservations_companions_gin",
+            "companions",
+            postgresql_using="gin",
+            postgresql_ops={"companions": "jsonb_path_ops"},
+        ),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

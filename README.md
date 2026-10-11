@@ -749,6 +749,36 @@ Migratsiya versiyalari:
 | `d4e5f6a7b8c9` | RoomType global qilindi + hotel_room_types M2M |
 | `e5f6a7b8c9d0` | Xonaga individual base_price |
 
+### Katta hajmga tayyorlik (indekslar, `d2e3f4a5b6c7`)
+
+Ma'lumot o'sishi bilan sekinlashadigan so'rov yo'llari uchun indekslar
+qo'shildi (mavjud `idx_*` indekslar bilan TAQQOSLAB — dublikat yaratilmadi):
+
+- **Bronlar:** filial + holat, filial + yaratilgan vaqt (ro'yxat tartibi),
+  xona + sana (mavjudlik), `created_by` ("Bronlarim"); hamrohlar JSONB
+  qidiruvi uchun GIN (`@> containment`).
+- **To'lovlar / xarajatlar / do'kon:** hotel + sana (hisobotlar), xodim +
+  vaqt oynasi (smena kassasi).
+- **Xo'jalik vazifalari:** filial + holat, filial + vaqt, tayinlangan +
+  holat, bron bo'yicha (avto-chiqish).
+- **Bildirishnomalar / xabarlar / fayllar / cheklist / faktura qatorlari:**
+  ro'yxat qoliplari bo'yicha.
+- **Mehmon qidiruvi** (`ILIKE '%...%'`): `pg_trgm` GIN indekslari.
+  Kengaytma serverda bo'lmasa migratsiya o'tkazib yuboradi (yiqilmaydi);
+  rasmiy `postgres` Docker image'da mavjud.
+
+Natija (lokal PostgreSQL 18, 300 000 to'lov / 300 000 audit / 200 000
+bildirishnoma / 100 000 vazifa bilan): smena kassasi 0.5 ms, 30 kunlik
+moliya hisoboti 31 ms, audit sahifasi 0.16 ms, vazifalar doskasi 1.1 ms —
+hammasi indeks skani bilan. Testlar: `tests/test_query_indexes.py`
+(modeldagi va migratsiyadagi indekslar mosligini qulflaydi); PG testlari
+`GOHOTEL_TEST_PG_URL` bilan.
+
+Ma'lumot arxivlash/partitsiya hali kiritilmagan — jadval millionlab
+qatorlarga chiqqanda keyingi qadam (audit/bildirishnoma uchun oylik
+partitsiya + retention). Biometrik izlar (`face_sightings`) avtomatik
+tozalanadi (`expires_at`, scheduler).
+
 ## Kelajakdagi kengaytirishlar
 
 - Bayram/xafta oxiri uchun alohida narx (room_type_prices jadvali)

@@ -12,6 +12,8 @@ from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
 class RoomStatusHistory(BranchScoped, UUIDPrimaryKeyMixin, Base):
+    # Eslatma: (room_id, created_at DESC) indeksi bazada avvalgi
+    # migratsiyalardan mavjud (idx_room_status_history_room_id).
     __tablename__ = "room_status_history"
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

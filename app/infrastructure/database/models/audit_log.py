@@ -13,6 +13,9 @@ from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
 class AuditLog(BranchScoped, UUIDPrimaryKeyMixin, Base):
+    # Eslatma: (hotel_id, created_at DESC) va (entity_type, entity_id)
+    # indekslari bazada avvalgi migratsiyalardan mavjud (idx_audit_logs_*) —
+    # modelda takror e'lon qilinmaydi.
     __tablename__ = "audit_logs"
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.models.base import Base
@@ -20,6 +20,10 @@ class StaffMessage(BranchScoped, UUIDPrimaryKeyMixin, Base):
     """
 
     __tablename__ = "staff_messages"
+    __table_args__ = (
+        # Taxta ro'yxati: hotel + vaqt bo'yicha (oxirgi 24 soat filtri bilan)
+        Index("ix_staff_messages_hotel_created", "hotel_id", "created_at"),
+    )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False, index=True

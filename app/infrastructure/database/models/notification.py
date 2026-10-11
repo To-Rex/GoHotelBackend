@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -12,7 +12,15 @@ from app.shared.mixins import UUIDPrimaryKeyMixin, BranchScoped
 
 
 class Notification(BranchScoped, UUIDPrimaryKeyMixin, Base):
+    # Eslatma: o'qilmaganlar uchun indeks bazada mavjud
+    # (idx_notifications_user_unread) — bu yerda takrorlanmaydi.
     __tablename__ = "notifications"
+    __table_args__ = (
+        # Xodimning o'z bildirishnomalari (o'qilgan/o'qilmagani aralash)
+        Index("ix_notifications_user_created", "user_id", "created_at"),
+        # Mehmonxona bo'yicha umumiy ro'yxat (admin)
+        Index("ix_notifications_hotel_created", "hotel_id", "created_at"),
+    )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False

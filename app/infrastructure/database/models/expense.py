@@ -4,7 +4,7 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String, Text
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -21,6 +21,10 @@ class Expense(BranchScoped, FullMixin, Base):
     __tablename__ = "expenses"
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_expenses_amount"),
+        # Moliyaviy hisobotlar: hotel + kun filtri
+        Index("ix_expenses_hotel_expense_date", "hotel_id", "expense_date"),
+        # Smena kassasi: xodim + vaqt oynasi
+        Index("ix_expenses_created_by_created_at", "created_by", "created_at"),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(

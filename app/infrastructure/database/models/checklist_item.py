@@ -13,7 +13,7 @@ class ChecklistItem(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "checklist_items"
 
     task_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("housekeeping_tasks.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("housekeeping_tasks.id", ondelete="CASCADE"), nullable=False, index=True
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

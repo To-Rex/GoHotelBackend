@@ -146,6 +146,8 @@ class ShopSalePayment(BranchScoped, Base):
     __tablename__ = "shop_sale_payments"
     __table_args__ = (
         Index("ix_shop_sale_payments_hotel_paid_at", "hotel_id", "paid_at"),
+        # Smena kassasi tarkibi: xodim + vaqt oynasi
+        Index("ix_shop_sale_payments_created_by_paid_at", "created_by", "paid_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

@@ -76,6 +76,8 @@ class Invoice(BranchScoped, FullMixin, Base):
 
 
 class InvoiceLineItem(BranchScoped, UUIDPrimaryKeyMixin, Base):
+    # Eslatma: invoice_id bo'yicha indeks bazada mavjud
+    # (idx_invoice_lines_invoice_id) — modelda takrorlanmaydi.
     __tablename__ = "invoice_line_items"
 
     invoice_id: Mapped[uuid.UUID] = mapped_column(
@@ -107,7 +109,7 @@ class InvoiceItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "invoice_items"
 
     invoice_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False, index=True
     )
     description: Mapped[str] = mapped_column(String(500), nullable=False)
     quantity: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=1)

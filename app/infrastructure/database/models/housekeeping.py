@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -22,6 +23,26 @@ from app.shared.mixins import FullMixin, BranchScoped
 
 class HousekeepingTask(BranchScoped, FullMixin, Base):
     __tablename__ = "housekeeping_tasks"
+    __table_args__ = (
+        # Doska/ro'yxatlar: filial ichida holat bo'yicha (branch_scope sharti
+        # ham shu prefiksga tushadi)
+        Index(
+            "ix_housekeeping_tasks_hotel_branch_status",
+            "hotel_id",
+            "branch_id",
+            "status",
+        ),
+        Index(
+            "ix_housekeeping_tasks_hotel_branch_created",
+            "hotel_id",
+            "branch_id",
+            "created_at",
+        ),
+        # Farroshning "mening vazifalarim" (mobil/claim oqimi)
+        Index("ix_housekeeping_tasks_assigned_status", "assigned_to", "status"),
+        # Avtomatik chiqish/dedublikatsiya: bron bo'yicha qidiruv
+        Index("ix_housekeeping_tasks_reservation", "reservation_id"),
+    )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hotels.id", ondelete="RESTRICT"), nullable=False
