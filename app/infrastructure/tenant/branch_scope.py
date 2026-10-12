@@ -165,6 +165,20 @@ def _main_branch_id(session: Session, hotel_id) -> UUID | None:
     return cache[key]
 
 
+def _parent_branch_value(session: Session, model, pk) -> UUID | None:
+    """Ota yozuvning filiali — ORM obyektini yuklamasdan.
+
+    Faqat `branch_id` ustuni o'qiladi: identity map'ga begona filial
+    obyekti tushib qolmaydi (u keyin filtrdan chetlab o'tilishi mumkin
+    edi). Yo'q bo'lsa — None (umumiy/global yoki topilmadi).
+    """
+    with session.no_autoflush:
+        return session.execute(
+            select(model.branch_id).where(model.id == pk),
+            execution_options={ALL_BRANCHES: True},
+        ).scalar()
+
+
 def _parent_branch_id(session: Session, obj) -> UUID | None:
     """Filiali ma'lum ota yozuvdan (xona, bron, mehmon, savdo...)."""
     mapper = inspect(obj).mapper
@@ -179,12 +193,54 @@ def _parent_branch_id(session: Session, obj) -> UUID | None:
             value = getattr(obj, prop.key, None)
             if value is None:
                 continue
-            with session.no_autoflush:
-                parent = session.get(target, value, execution_options={ALL_BRANCHES: True})
-            branch_id = getattr(parent, "branch_id", None)
+            branch_id = _parent_branch_value(session, target, value)
             if branch_id is not None:
                 return branch_id
     return None
+
+
+def _assert_parents_in_branch(
+    session: Session, obj, scope: BranchScope, *, changed_only: bool = False
+) -> None:
+    """Yozuv boshqa filial yozuviga BOG'LANMASIN — himoya chuqurligi.
+
+    Xizmat qatlami otani (xona, bron, vazifa...) baribir filial bilan
+    yuklaydi; bu tekshiruv ORM darajasida: biror yo'l o'tkazib yuborilsa
+    ham xato (filiallararo) yozuv yaratilmaydi. `changed_only` — mavjud
+    yozuvda faqat O'ZGARGAN bog'lanishlar tekshiriladi (UPDATE oqimi).
+    """
+    mapper = inspect(obj).mapper
+    attrs = inspect(obj).attrs
+    for column in mapper.local_table.columns:
+        if column.name == "branch_id":
+            continue
+        for fk in column.foreign_keys:
+            table = fk.column.table.name
+            # Filiallar orasida ataylab ko'chiriladigan yozuvlar (kamera...)
+            if table in REASSIGNABLE:
+                continue
+            target = _SCOPED_BY_TABLE.get(table)
+            if target is None:
+                continue
+            prop = mapper.get_property_by_column(column)
+            if changed_only:
+                history = attrs[prop.key].history
+                if not history.has_changes():
+                    continue
+                value = history.added[0] if history.added else None
+            else:
+                value = getattr(obj, prop.key, None)
+            if value is None:
+                continue
+            parent_branch = _parent_branch_value(session, target, value)
+            if parent_branch is None:
+                continue  # umumiy/global yozuv (filiali yo'q) yoki topilmadi
+            if str(parent_branch) != str(scope.branch_id):
+                from app.core.exceptions import ForbiddenException
+
+                raise ForbiddenException(
+                    "Boshqa filial yozuviga bog'lanib bo'lmaydi", "BRANCH_SCOPE"
+                )
 
 
 def _before_flush(session: Session, flush_context, instances) -> None:
@@ -202,6 +258,8 @@ def _before_flush(session: Session, flush_context, instances) -> None:
                 raise ForbiddenException(
                     "Boshqa filial ma'lumotiga yozib bo'lmaydi", "BRANCH_SCOPE"
                 )
+            if same_hotel:
+                _assert_parents_in_branch(session, obj, scope)
             continue
         if isinstance(obj, BranchShared) and obj.__tablename__ in REASSIGNABLE:
             # Bo'sh filial — "umumiy" ma'nosida; avtomatik to'ldirilmaydi
@@ -210,6 +268,7 @@ def _before_flush(session: Session, flush_context, instances) -> None:
             continue  # global yozuv (masalan, global xona turi)
         if same_hotel:
             obj.branch_id = scope.branch_id
+            _assert_parents_in_branch(session, obj, scope)
             continue
         branch_id = _parent_branch_id(session, obj) or _main_branch_id(session, hotel_id)
         if branch_id is None:
@@ -232,6 +291,8 @@ def _before_flush(session: Session, flush_context, instances) -> None:
             raise ForbiddenException(
                 "Yozuvni boshqa filialga ko'chirib bo'lmaydi", "BRANCH_SCOPE"
             )
+        # Bog'lanish boshqa filial yozuviga o'zgartirilsa ham rad etiladi
+        _assert_parents_in_branch(session, obj, scope, changed_only=True)
 
 
 _SCOPED_BY_TABLE: dict = {}

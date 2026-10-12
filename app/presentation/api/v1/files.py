@@ -6,12 +6,28 @@ from sqlalchemy import select
 
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
+from app.infrastructure.database.models.document_scan import DocumentScan
+from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.file_attachment import FileAttachment
+from app.infrastructure.database.models.guest_feedback import GuestFeedback
+from app.infrastructure.database.models.housekeeping import HousekeepingTask
+from app.infrastructure.database.models.problem import Problem
 from app.infrastructure.storage.minio import upload_file, get_presigned_url, delete_file
 from app.application.dto.common import MessageResponse
 from app.presentation.middleware.auth import get_current_user, require_permission
 
 router = APIRouter()
+
+#: Fayl egalari filialga bo'lingan bo'lsa — fayl ham faqat o'sha filialda
+#: ko'rinadi. "task_report" fayllari ham vazifaga (task id) bog'lanadi.
+_SCOPED_FILE_ENTITIES = {
+    "task": HousekeepingTask,
+    "task_report": HousekeepingTask,
+    "problem": Problem,
+    "expense": Expense,
+    "document_scan": DocumentScan,
+    "feedback": GuestFeedback,
+}
 
 
 def _get_hotel_id(current_user: dict) -> UUID | None:
@@ -21,6 +37,39 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     if not hotel_id:
         raise ForbiddenException("Hotel context required")
     return hotel_id
+
+
+async def _assert_entity_visible(
+    session: AsyncSession,
+    entity_type: str,
+    entity_id: UUID,
+    hotel_id: UUID | None,
+    current_user: dict,
+    *,
+    allow_missing: bool = False,
+) -> None:
+    """Fayl bog'lanadigan obyekt so'rov filialida bormi.
+
+    Filialga bo'lingan obyekt (vazifa, muammo, xarajat, hujjat skani,
+    feedback) boshqa filialda bo'lsa — 404, borligi ham oshkor bo'lmaydi.
+    Filial filtri `session.get` orqali avtomatik qo'llanadi. Global
+    obyektlar (mehmon, xodim) va tizim ma'muri (SUPER_ADMIN) avvalgidek
+    qoladi. `allow_missing` — o'chirish uchun: egasi allaqachon o'chgan
+    bo'lsa orphan faylni tozalashga ruxsat.
+    """
+    if current_user.get("user_type") == "SUPER_ADMIN":
+        return
+    model = _SCOPED_FILE_ENTITIES.get((entity_type or "").strip().lower())
+    if model is None:
+        return
+    row = await session.get(model, entity_id)
+    if row is None:
+        if allow_missing:
+            return
+        raise NotFoundException("Entity not found", "ENTITY_NOT_FOUND")
+    row_hotel = getattr(row, "hotel_id", None)
+    if hotel_id is not None and row_hotel is not None and str(row_hotel) != str(hotel_id):
+        raise NotFoundException("Entity not found", "ENTITY_NOT_FOUND")
 
 
 @router.post("/upload")
@@ -41,6 +90,8 @@ async def upload_file_endpoint(
         h_id = _get_hotel_id(current_user)
     if not h_id:
         raise ForbiddenException("Hotel context required")
+    # Fayl boshqa filial obyektiga biriktirilmasin (topilmasa — 404)
+    await _assert_entity_visible(session, entity_type, entity_id, h_id, current_user)
     content = await file.read()
     content_type = file.content_type or "application/octet-stream"
 
@@ -97,6 +148,10 @@ async def list_entity_files(
         h_id = hotel_id or current_user.get("hotel_id")
     else:
         h_id = _get_hotel_id(current_user)
+    model = _SCOPED_FILE_ENTITIES.get((entity_type or "").strip().lower())
+    if entity_id is not None:
+        # Boshqa filial obyekti so'ralsa — bo'sh/noma'lum javob emas, 404
+        await _assert_entity_visible(session, entity_type, entity_id, h_id, current_user)
     stmt = select(FileAttachment).where(
         FileAttachment.entity_type == entity_type,
         FileAttachment.is_deleted.is_(False),
@@ -105,6 +160,10 @@ async def list_entity_files(
         stmt = stmt.where(FileAttachment.hotel_id == h_id)
     if entity_id is not None:
         stmt = stmt.where(FileAttachment.entity_id == entity_id)
+    elif model is not None and current_user["user_type"] != "SUPER_ADMIN":
+        # Egasi filialga bo'lingan tur: boshqa filial fayllari ro'yxatga
+        # tushmasligi uchun egasiga JOIN (filial filtri avtomatik qo'shiladi)
+        stmt = stmt.join(model, model.id == FileAttachment.entity_id)
     if category:
         stmt = stmt.where(FileAttachment.category == category)
     stmt = stmt.order_by(FileAttachment.created_at.desc()).limit(limit)
@@ -143,6 +202,10 @@ async def get_file(
     attachment = result.scalar_one_or_none()
     if not attachment:
         raise NotFoundException("File not found", "FILE_NOT_FOUND")
+    # Egasi boshqa filialda bo'lsa — fayl ham ko'rinmaydi
+    await _assert_entity_visible(
+        session, attachment.entity_type, attachment.entity_id, h_id, current_user
+    )
 
     return {
         "id": str(attachment.id),
@@ -178,6 +241,10 @@ async def download_file(
     attachment = result.scalar_one_or_none()
     if not attachment:
         raise NotFoundException("File not found", "FILE_NOT_FOUND")
+    # Egasi boshqa filialda bo'lsa — yuklab olish ham mumkin emas
+    await _assert_entity_visible(
+        session, attachment.entity_type, attachment.entity_id, h_id, current_user
+    )
 
     url = get_presigned_url(attachment.minio_bucket, attachment.minio_path)
     return {"download_url": url}
@@ -201,6 +268,15 @@ async def delete_file_endpoint(
     attachment = result.scalar_one_or_none()
     if not attachment:
         raise NotFoundException("File not found", "FILE_NOT_FOUND")
+    # Egasi o'chgan bo'lsa — orphan faylni tozalashga ruxsat (allow_missing)
+    await _assert_entity_visible(
+        session,
+        attachment.entity_type,
+        attachment.entity_id,
+        h_id,
+        current_user,
+        allow_missing=True,
+    )
 
     attachment.is_deleted = True
     await session.flush()

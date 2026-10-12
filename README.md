@@ -335,6 +335,18 @@ barcha filiallari bo'yicha ko'rsatiladi.
   qoldirib bo'lmaydi. Xodimlar ro'yxatlari (xodimlar sahifasi, xabar
   oluvchilar, farrosh tanlash) filial bo'yicha aniq filtrlanadi;
   administratorlar hamma filial xabarini oladi.
+- **Himoya chuqurligi (ORM darajasi).** Yozuv boshqa filial yozuviga
+  BOG'LANMASLIGI alohida tekshiriladi: yangi yozuvda (masalan, vazifa
+  boshqa filial xonasiga) va mavjud yozuvda bog'lanish boshqa filialga
+  o'zgartirilganda ham 403 `BRANCH_SCOPE`. Xizmat qatlami otani baribir
+  filial bilan yuklaydi — bu qatlam o'sha tekshiruv o'tkazib yuborilsa
+  ham xato (filiallararo) yozuv yaratilishini to'sadi. Filiallar orasida
+  ataylab ko'chiriladigan yozuvlar (kameralar) bundan mustasno.
+- **Fayllar ham filial bo'yicha.** `/files` endpointlari fayl egasini
+  (vazifa, muammo, xarajat, hujjat skani, feedback) joriy filialda
+  tekshiradi: boshqa filial obyektining fayli ro'yxatda ham, `by-entity`
+  so'rovida ham, id bo'yicha yuklab olishda ham ko'rinmaydi (404).
+  Mehmon/xodim fayllari — umumiy bo'lgani uchun avvalgidek.
 - **Sozlamalar filialda** (`branches.settings`,
   `app/application/services/branch_settings.py`): `settings_owner()`
   so'rov (yoki yozuv) filialini qaytaradi — `.settings` o'qiladi va yoziladi.
