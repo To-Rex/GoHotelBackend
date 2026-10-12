@@ -11,8 +11,12 @@ from app.application.services.cleaner_assignment import (
     ASSIGN_MODE_FIELD,
     ASSIGN_MODE_QUEUE,
     ASSIGN_MODES,
+    CLAIM_FALLBACK_FIELD,
+    CLAIM_FALLBACK_MAX_MINUTES,
+    DEFAULT_CLAIM_FALLBACK_MINUTES,
     HK_ASSIGN_SETTINGS_KEY,
     resolve_assign_mode,
+    resolve_claim_fallback_minutes,
 )
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
@@ -184,10 +188,26 @@ class AssignmentSettingsRequest(BaseModel):
 
     `queue` — navbat bo'yicha bitta farroshga biriktiriladi (standart).
     `claim` — biriktirilmaydi, ish vaqtidagi barcha farroshlarga ko'rinadi
-    va kim birinchi "Boshlash"ni bossa, o'shanga o'tadi.
+    va kim birinchi "Boshlash"ni bossa, o'shanga o'tadi. Vazifa egasiz
+    qolib ketmasligi uchun `claim_fallback_minutes` (daqiqa) o'tgach
+    rejalashtiruvchi uni navbat qoidasi bo'yicha biriktiradi; 0 —
+    fallback o'chirilgan. Yuborilmasa — saqlangan qiymat o'zgartirilmaydi.
     """
 
     mode: Literal["queue", "claim"]
+    claim_fallback_minutes: int | None = Field(
+        default=None, ge=0, le=CLAIM_FALLBACK_MAX_MINUTES
+    )
+
+
+def _assign_view(hotel_settings: dict | None) -> dict:
+    return {
+        "mode": resolve_assign_mode(hotel_settings),
+        "claim_fallback_minutes": resolve_claim_fallback_minutes(hotel_settings),
+        "claim_fallback_default": DEFAULT_CLAIM_FALLBACK_MINUTES,
+        "modes": list(ASSIGN_MODES),
+        "default": ASSIGN_MODE_QUEUE,
+    }
 
 
 @router.get("/assignment-settings")
@@ -196,14 +216,10 @@ async def get_assignment_settings(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Joriy taqsimlash rejimi."""
+    """Joriy taqsimlash rejimi (fallback muddati bilan)."""
     h_id = hotel_id if current_user["user_type"] == "SUPER_ADMIN" and hotel_id else _get_hotel_id(current_user)
     hotel = await settings_owner(session, h_id)
-    return {
-        "mode": resolve_assign_mode(hotel.settings if hotel else None),
-        "modes": list(ASSIGN_MODES),
-        "default": ASSIGN_MODE_QUEUE,
-    }
+    return _assign_view(hotel.settings if hotel else None)
 
 
 @router.put("/assignment-settings")
@@ -225,15 +241,13 @@ async def save_assignment_settings(
     new_settings = dict(hotel.settings or {})
     section = dict(new_settings.get(HK_ASSIGN_SETTINGS_KEY) or {})
     section[ASSIGN_MODE_FIELD] = data.mode
+    if data.claim_fallback_minutes is not None:
+        section[CLAIM_FALLBACK_FIELD] = data.claim_fallback_minutes
     new_settings[HK_ASSIGN_SETTINGS_KEY] = section
     hotel.settings = new_settings
     await session.flush()
 
-    return {
-        "mode": resolve_assign_mode(new_settings),
-        "modes": list(ASSIGN_MODES),
-        "default": ASSIGN_MODE_QUEUE,
-    }
+    return _assign_view(new_settings)
 
 
 class AutoCompleteSettingsRequest(BaseModel):

@@ -624,6 +624,32 @@ ko'rinadi.
 Kod: `app/application/services/reservation_penalty_service.py`, migratsiya
 `c2f3a4b5c6d7`, test: `pytest tests/test_reservation_penalties.py`.
 
+### Vazifalarni taqsimlash: navbat yoki "kim birinchi olsa" (sozlama)
+
+Sozlamalar → Xo'jalik ishlari → "Vazifalarni taqsimlash"
+(`GET/PUT /housekeeping/assignment-settings`, saqlanadi:
+`branches.settings["hk_assign"]`):
+
+- **`queue` (navbat, standart)** — vazifa bitta farroshga biriktiriladi
+  (avval bo'sh turgani → eng kam vazifalisi → navbatdagisi), xabar faqat
+  o'shanga boradi.
+- **`claim` (hammaga yuborish — kim birinchi olsa)** — vazifa
+  biriktirilmaydi: ish vaqtidagi barcha farroshlarga ko'rinadi va xabar
+  ketadi; kim birinchi "Boshlash"ni bossa, vazifa atomar tarzda o'shanga
+  o'tadi (bir vaqtda bosilsa faqat bittasi yutadi).
+  - **Vazifa egasiz qolib ketmaydi.** `claim_fallback_minutes` (standart
+    **30** daqiqa) o'tib hech kim olmasa, rejalashtiruvchi uni navbat
+    qoidasi bo'yicha biriktirib, push yuboradi. `0` — fallback o'chirilgan
+    (sof claim saqlanadi). Hozir ishda (on-duty) farrosh bo'lmasa, vazifa
+    egasiz qoladi va farrosh ishga kelishi bilan biriktiriladi — vazifa
+    yo'qolmaydi, faqat vaqti to'g'ri bo'ladi.
+
+Ikkala rejimda ham vazifa faqat ish vaqtidagi farroshlarga tegishli.
+Kod: `app/application/services/cleaner_assignment.py` (qarorlar:
+`resolve_assign_mode`, `resolve_claim_fallback_minutes`),
+`automation_service._assign_pending_tasks` (muddatli biriktirish).
+Testlar: `pytest tests/test_claim_mode.py tests/test_pending_task_assignment.py`.
+
 ### Sozlovchi (CONFIGURATOR) roli
 
 Sozlovchi — mehmonxonaga bog'lanmagan hisob (`users.user_type =

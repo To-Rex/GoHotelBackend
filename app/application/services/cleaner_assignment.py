@@ -74,6 +74,13 @@ ASSIGN_MODES = (ASSIGN_MODE_QUEUE, ASSIGN_MODE_CLAIM)
 #: branches.settings ichidagi kalit va maydon
 HK_ASSIGN_SETTINGS_KEY = "hk_assign"
 ASSIGN_MODE_FIELD = "mode"
+#: `claim` rejimida vazifa shu daqiqagacha EGASIZ tursa, rejalashtiruvchi uni
+#: navbat qoidasi bo'yicha biriktirib qo'yadi. 0 — o'chirilgan (sof claim).
+#: Standart 30: "kim birinchi olsa" oynasi bo'ladi, lekin vazifa hech qachon
+#: biriktirilmay qolmaydi.
+CLAIM_FALLBACK_FIELD = "claim_fallback_minutes"
+DEFAULT_CLAIM_FALLBACK_MINUTES = 30
+CLAIM_FALLBACK_MAX_MINUTES = 24 * 60
 
 
 def resolve_assign_mode(hotel_settings: dict | None) -> str:
@@ -85,6 +92,24 @@ def resolve_assign_mode(hotel_settings: dict | None) -> str:
     section = (hotel_settings or {}).get(HK_ASSIGN_SETTINGS_KEY) or {}
     value = str(section.get(ASSIGN_MODE_FIELD) or "").strip().lower()
     return value if value in ASSIGN_MODES else ASSIGN_MODE_QUEUE
+
+
+def resolve_claim_fallback_minutes(hotel_settings: dict | None) -> int:
+    """`claim` rejimida egasiz vazifa necha daqiqadan keyin biriktiriladi.
+
+    Standart 30 (vazifa biriktirilmay qolmasligi kafolati). 0 — o'chirilgan:
+    sof "kim birinchi olsa" rejimi saqlanadi. Buzuq qiymat standartga
+    qaytadi; yuqori chegara — 24 soat.
+    """
+    section = (hotel_settings or {}).get(HK_ASSIGN_SETTINGS_KEY) or {}
+    value = section.get(CLAIM_FALLBACK_FIELD)
+    if value is None:
+        return DEFAULT_CLAIM_FALLBACK_MINUTES
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CLAIM_FALLBACK_MINUTES
+    return max(0, min(minutes, CLAIM_FALLBACK_MAX_MINUTES))
 
 
 ROLE_MANAGER = "manager"

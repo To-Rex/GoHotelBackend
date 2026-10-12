@@ -28,6 +28,7 @@ from app.application.services.cleaner_assignment import (
     notify_cleaners,
     resolve_assign_mode,
     resolve_assignment,
+    resolve_claim_fallback_minutes,
 )
 from app.infrastructure.database.models.housekeeping import HousekeepingTask
 from app.infrastructure.database.models.reservation import Reservation
@@ -199,10 +200,14 @@ class AutomationService:
         tegilmaydi — u qo'lda taqsimlanadi, avvalgidek. Oxirgi 24 soat —
         eski qoldiqlarni bekorga uyg'otmaslik uchun.
 
-        `claim` rejimidagi mehmonxona TASHLAB KETILADI: u yerda vazifa
-        ataylab biriktirilmaydi — farroshlar ro'yxatdan o'zi oladi.
+        `claim` rejimida vazifa AVVAL biriktirilmaydi (farroshlar o'zi
+        oladi), lekin EGASIZ QOLIB KETMASLIGI kafolatlanadi: sozlamadagi
+        `claim_fallback_minutes` (standart 30 daqiqa) o'tgach navbat
+        qoidasi bo'yicha biriktiriladi va push ketadi. 0 — fallback
+        o'chirilgan (sof claim saqlanadi).
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=24)
         rows = await self.session.execute(
             select(HousekeepingTask).where(
                 HousekeepingTask.status == "OPEN",
@@ -217,15 +222,27 @@ class AutomationService:
         )
         from app.application.services.branch_settings import settings_owner
 
-        # Rejim filial sozlamasidan (har filial o'zinikini tanlaydi)
-        mode_cache: dict[tuple, str] = {}
+        # Rejim va fallback muddati filial sozlamasidan (har filial o'zinikini
+        # tanlaydi); bitta tickda bir filial uchun qayta o'qilmaydi
+        mode_cache: dict[tuple, tuple[str, int]] = {}
         for task in rows.scalars().all():
             key = (task.hotel_id, task.branch_id)
             if key not in mode_cache:
                 owner = await settings_owner(self.session, task.hotel_id, task.branch_id)
-                mode_cache[key] = resolve_assign_mode(owner.settings if owner else None)
-            if mode_cache[key] == ASSIGN_MODE_CLAIM:
-                continue  # bo'sh vazifa — farroshlar o'zi oladi
+                settings = owner.settings if owner else None
+                mode_cache[key] = (
+                    resolve_assign_mode(settings),
+                    resolve_claim_fallback_minutes(settings),
+                )
+            mode, fallback_minutes = mode_cache[key]
+            if mode == ASSIGN_MODE_CLAIM:
+                if fallback_minutes <= 0:
+                    continue  # sof claim — farroshlar o'zi oladi
+                created = task.created_at
+                if created is None or now - created < timedelta(minutes=fallback_minutes):
+                    continue  # hali "kim birinchi olsa" oynasi ochiq
+                # Muddat o'tdi, hech kim olmadi — navbat qoidasi bo'yicha
+                # biriktiriladi (quyidagi umumiy yo'l)
             cleaner_id = await self._find_cleaner(task.hotel_id, task.branch_id)
             if cleaner_id is None:
                 continue  # hali hech kim ishda emas — keyingi tikda

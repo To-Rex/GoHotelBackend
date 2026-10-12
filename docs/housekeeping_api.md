@@ -65,10 +65,18 @@ Ikkala rejimda ham nomzodlar doirasi bir xil: faqat **farrosh** rolidagi
 ### `GET/PUT /housekeeping/assignment-settings`
 
 ```json
-{ "mode": "queue", "modes": ["queue", "claim"], "default": "queue" }
+{ "mode": "queue", "claim_fallback_minutes": 30, "claim_fallback_default": 30,
+  "modes": ["queue", "claim"], "default": "queue" }
 ```
 
-PUT faqat ADMIN/SUPER_ADMIN uchun; tanasi — `{"mode": "claim"}`.
+PUT faqat ADMIN/SUPER_ADMIN uchun; tanasi —
+`{"mode": "claim", "claim_fallback_minutes": 30}`.
+
+`claim_fallback_minutes` — `claim` rejimida vazifa shu daqiqagacha egasiz
+(hech kim "Boshlash"ni bosmasa) tursa, rejalashtiruvchi uni navbat qoidasi
+bo'yicha biriktirib, push yuboradi. Standart **30**; `0` — fallback
+o'chirilgan (sof "kim birinchi olsa" rejimi saqlanadi). Yuborilmasa —
+saqlangan qiymat o'zgartirilmaydi.
 
 ### `claim` rejimida mobil ilova
 
@@ -81,8 +89,10 @@ Ilovada o'zgarish shart emas — hammasi server tomonida hal qilinadi:
   `TASK_ALREADY_CLAIMED` xatosini oladi; boshqa farroshga biriktirilgan
   vazifani boshlashga urinish — `TASK_ASSIGNED_TO_OTHER` (ADMIN cheklanmaydi).
 
-`claim` rejimida rejalashtiruvchining "kechiktirilgan biriktirish" bosqichi
-ishlamaydi — vazifa ataylab bo'sh turadi.
+`claim` rejimida rejalashtiruvchi vazifani AVVAL biriktirmaydi, lekin
+egasiz qolib ketmasligi kafolatlanadi: `claim_fallback_minutes` o'tgach
+navbat qoidasi bo'yicha biriktiriladi. Ishda (on-duty) farrosh bo'lmasa,
+vazifa egasiz qoladi va farrosh ishga kelishi bilan biriktiriladi.
 
 ---
 
