@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException, NotFoundException
+from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.branch import Branch
 from app.application.services.reservation_service import (
@@ -372,22 +372,49 @@ async def settle_payment(
     current_user: dict = Depends(require_permission("finance.payment.create")),
     _shift: None = Depends(require_open_shift),
 ):
-    """Bron balansi bo'yicha hisob-kitob: qo'shimcha to'lov (PAY, qisman ham
-    mumkin) yoki ortiqcha to'langanni qaytarish (REFUND) — asosan xona
-    almashtirishdan keyingi narx farqini yopish uchun."""
+    """Bron balansi bo'yicha hisob-kitob: qo'shimcha to'lov (PAY, qisman va
+    BO'LIB to'lash ham mumkin) yoki ortiqcha to'langanni qaytarish (REFUND)
+    — asosan xona almashtirishdan keyingi narx farqini yopish uchun."""
     h_id = _get_hotel_id(current_user)
+    direction = data.direction
+
+    # Bo'lib to'lash: bo'laklar jami — to'lov summasi; har bo'lak alohida
+    # to'lov bo'lib yoziladi (masalan yarmi naqd, yarmi online)
+    parts: list[dict] | None = None
+    if data.payments:
+        if direction != "PAY":
+            raise ValidationException(
+                "Bo'lib to'lash faqat to'lovda mumkin", "PARTS_NOT_ALLOWED"
+            )
+        parts = [part.model_dump() for part in data.payments]
+        parts_total = round(sum(float(part["amount"]) for part in parts), 2)
+        if data.amount is not None and abs(parts_total - float(data.amount)) > 0.01:
+            raise ValidationException(
+                "Bo'laklar jami summaga teng emas", "PARTS_SUM_MISMATCH"
+            )
+        amount = parts_total
+        method = parts[0]["payment_method"]
+    else:
+        if data.amount is None or data.payment_method is None:
+            raise ValidationException(
+                "Summa va to'lov usuli kerak", "SETTLE_AMOUNT_REQUIRED"
+            )
+        amount = float(data.amount)
+        method = data.payment_method
+
     service = ReservationService(session)
     updated = await service.settle_payment(
         h_id,
         reservation_id,
-        data.amount,
-        data.payment_method,
-        data.direction,
+        amount,
+        method,
+        direction,
         UUID(str(current_user["id"])),
+        parts,
     )
     # Qo'shimcha to'lovda mijozga kvitansiya SMS'i (qaytarimda emas)
-    if data.direction == "PAY":
-        await sms_service.notify_payment(session, updated, float(data.amount))
+    if direction == "PAY":
+        await sms_service.notify_payment(session, updated, amount)
     return updated
 
 

@@ -124,16 +124,32 @@ class CompanionAddRequest(BaseModel):
     expected_id: str | None = Field(default=None, max_length=64)
 
 
-class SettlePaymentRequest(BaseModel):
-    """Bron balansi bo'yicha hisob-kitob (xona almashtirishdan keyin):
-    PAY — qo'shimcha to'lov (qisman ham mumkin), REFUND — ortiqcha
-    to'langan summani qaytarish."""
+class SettlePaymentPartRequest(BaseModel):
+    """Bo'lib to'lashning bitta bo'lagi: summa va to'lov usuli."""
 
     amount: float = Field(gt=0)
     payment_method: Literal[
         "CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"
     ]
+
+
+class SettlePaymentRequest(BaseModel):
+    """Bron balansi bo'yicha hisob-kitob (xona almashtirishdan keyin):
+    PAY - qo'shimcha to'lov (qisman ham mumkin), REFUND - ortiqcha
+    to'langan summani qaytarish.
+
+    Bo'lib to'lash: `payments` — bir necha bo'lak (masalan yarmi naqd,
+    yarmi online); berilsa har bo'lak alohida to'lov bo'lib yoziladi,
+    jami `amount` bilan (berilgan bo'lsa) mos kelishi shart. `amount`/
+    `payment_method` yuborilmasa — faqat `payments` ishlatiladi."""
+
+    amount: float | None = Field(default=None, gt=0)
+    payment_method: Literal[
+        "CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"
+    ] | None = None
     direction: Literal["PAY", "REFUND"]
+    #: Ko'pi bilan 10 bo'lak — amalda 2-3 ta yetadi
+    payments: list[SettlePaymentPartRequest] | None = Field(default=None, max_length=10)
 
 
 class ReservationServiceAddRequest(BaseModel):

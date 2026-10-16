@@ -633,11 +633,15 @@ class ReservationService:
         payment_method: str,
         direction: str,
         user_id: UUID,
+        parts: list[dict] | None = None,
     ) -> Reservation:
         """Bron balansi bo'yicha hisob-kitob (asosan xona almashtirishdan keyin).
 
         PAY — qo'shimcha to'lov: qisman yoki to'liq, qarzdan oshmasligi kerak.
         Xohlasa umuman to'lamaydi — bron PARTIALLY_PAID/UNPAID (qarz) qoladi.
+        `parts` berilsa — BO'LIB to'lash: har bo'lak ([{amount,
+        payment_method}, ...], jami = `amount`) alohida Payment bo'lib
+        yoziladi (masalan yarmi naqd, yarmi online).
         REFUND — arzonroq xonaga o'tishda ortiqcha to'langanni qaytarish:
         MANFIY Payment yoziladi, shu tufayli kunlik tushum, kassa-smena va
         moliya hisobotlarida qaytarim minus bilan o'z-o'zidan aks etadi.
@@ -722,14 +726,32 @@ class ReservationService:
                 )
                 await self.session.flush()
                 await ensure_penalty_lines(self.session, invoice, reservation)
-            await self._create_payment(
-                hotel_id=hotel_id,
-                invoice=invoice,
-                amount=amount,
-                payment_method=payment_method,
-                created_by=user_id,
-                notes="Qo'shimcha to'lov (bron balansi bo'yicha)",
-            )
+            if parts:
+                # Bo'lib to'lash: har bo'lak alohida to'lov (jami = amount,
+                # endpoint tekshiradi) — kassa/hisobotlarda usullar shu
+                # bo'laklardan hisoblanadi
+                count = len(parts)
+                for index, part in enumerate(parts, start=1):
+                    await self._create_payment(
+                        hotel_id=hotel_id,
+                        invoice=invoice,
+                        amount=float(part["amount"]),
+                        payment_method=part["payment_method"],
+                        created_by=user_id,
+                        notes=(
+                            "Qo'shimcha to'lov (bron balansi bo'yicha) — "
+                            f"bo'lib to'lash {index}/{count}"
+                        ),
+                    )
+            else:
+                await self._create_payment(
+                    hotel_id=hotel_id,
+                    invoice=invoice,
+                    amount=amount,
+                    payment_method=payment_method,
+                    created_by=user_id,
+                    notes="Qo'shimcha to'lov (bron balansi bo'yicha)",
+                )
             new_paid = paid + amount
         elif direction == "REFUND":
             overpaid = paid - total

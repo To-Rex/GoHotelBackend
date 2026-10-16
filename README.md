@@ -539,6 +539,14 @@ ko'rinadi va unutilmaydi (`app/application/services/debt_service.py`):
   Farrosh tugmasi va avtomatik chiqish to'xtatilmaydi — xabar ketadi.
 - **Oldindan undirish.** Kirgan mehmon to'lov qilganda jami chiqishdagi
   hisobga ko'tariladi — uzaytirish puli ketishdan oldin olinadi.
+- **Bo'lib to'lash.** Qo'shimcha to'lov (qarz, jarima) `settle-payment`da
+  bo'laklarga ham bo'linadi: `payments: [{amount, payment_method}, ...]` —
+  masalan yarmi naqd, yarmi online; har bo'lak alohida Payment bo'lib
+  yoziladi (jami `amount` bilan mos bo'lishi shart — 422
+  `PARTS_SUM_MISMATCH`; qaytarimda taqiqlangan — `PARTS_NOT_ALLOWED`).
+  Vebda bron oynasidagi "Qo'shimcha to'lov (qarz)" panelida "Bo'lib
+  to'lash" belgisi orqali; qarz toast eslatmasi endi jarima yozilishi
+  bilanoq emas, oyna to'lovsiz yopilganda ko'rsatiladi.
 - **Eslatmalar** (`debt_reminder_service.py`, avtomatlashtirish tik'idan, har
   5 daqiqada): "qarz bilan chiqib ketdi" va "bugun chiqadi, qarzi bor" —
   har bron uchun bir marta; qarzdorlar ro'yxati — sozlamadagi oraliqda
