@@ -33,6 +33,9 @@ class ShiftSettingsRequest(BaseModel):
     day_close: str = Field(..., pattern=r"^\d{2}:\d{2}$")
     # Kesim vaqtida kassa topshirish majburiymi (False — faqat eslatma)
     day_close_required: bool = True
+    # Kassani topshirishda admin/menejer tasdig'i talab qilinsinmi.
+    # Yuborilmasa (None) — saqlangan qiymat o'zgartirilmaydi.
+    handover_approval: bool | None = None
 
 
 class OpenShiftRequest(BaseModel):
@@ -63,6 +66,12 @@ class CorrectShiftRequest(BaseModel):
     note: str = Field(..., min_length=3, max_length=1000)
 
 
+class ApproveHandoverRequest(BaseModel):
+    """Tasdiqlash izohi (ixtiyoriy) — sessiya izohiga qo'shiladi."""
+
+    notes: str | None = Field(default=None, max_length=500)
+
+
 @router.get("/settings")
 async def get_settings(
     session: AsyncSession = Depends(get_db),
@@ -79,7 +88,11 @@ async def save_settings(
 ):
     assert_can_manage_settings(current_user)
     return await ShiftService(session).save_settings(
-        _hotel_id(current_user), data.mode, data.day_close, data.day_close_required
+        _hotel_id(current_user),
+        data.mode,
+        data.day_close,
+        data.day_close_required,
+        data.handover_approval,
     )
 
 
@@ -196,6 +209,28 @@ async def correct_shift(
         session_id,
         data.counted_cash,
         data.note,
+    )
+
+
+@router.post("/{session_id}/approve")
+async def approve_handover(
+    session_id: UUID,
+    data: ApproveHandoverRequest | None = None,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Topshirilgan kassani TASDIQLASH (admin/menejer) — tasdiq rejimida.
+
+    "Kassani topshirishda admin tasdig'i" sozlamasi yoqilganda xodim
+    topshirgach sessiya `pending_approval` bilan tasdiq kutadi; shu
+    endpoint uni yakunlaydi (pul kassadan chiqadi) va kassir ishda davom
+    etgan bo'lsa yangi kassa 0 so'mdan ochiladi.
+    """
+    return await ShiftService(session).approve_handover(
+        _hotel_id(current_user),
+        current_user,
+        session_id,
+        data.notes if data else None,
     )
 
 

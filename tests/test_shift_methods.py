@@ -86,6 +86,7 @@ def session_obj(user=DILNOZA, *, start=T0, end=None, opening=0):
         status="CLOSED" if end else "ACTIVE", started_at=start, ended_at=end,
         opening_cash=Decimal(str(opening)), expected_cash=None, counted_cash=None,
         cash_diff=None, accepted_by=None, accepted_at=None, force_closed=False,
+        pending_approval=None,
         corrections=None, notes=None, closed_by=None, continue_after_end=False,
     )
 

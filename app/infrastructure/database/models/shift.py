@@ -70,6 +70,12 @@ class ShiftSession(BranchScoped, FullMixin, Base):
     continue_after_end: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    #: "Kassani topshirishda admin tasdig'i" sozlamasi yoqilganda: sessiya
+    #: PENDING_HANDOVER holatida TASDIQ kutmoqda. Qiymat — qaysi oqimdan
+    #: kelgani: "close_cash" (kassa topshirildi, 0 dan yangi sessiya
+    #: tasdiqdan keyin ochiladi) | "end_shift" (smena tugallandi).
+    #: NULL — oddiy oqim (keyingi xodim parol bilan qabul qiladi).
+    pending_approval: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     # Admin/menejer tomonidan majburiy yopilgan
     force_closed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"

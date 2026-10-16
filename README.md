@@ -750,6 +750,22 @@ kunlik kesimda yoki majburiy yopishda kassadan chiqqan pul, kutilgan
 summa va farq. Ikkalasi ham faqat admin yoki `shift.force_close` ("ko'r
 sanash" saqlanadi). Test: `pytest tests/test_shift_handovers.py`.
 
+**Kassani topshirishda admin tasdig'i (sozlama).** Sozlamalar → Kassa va
+smena → "Kassani topshirishda admin tasdig'i talab qilinsin" (`PUT
+/shifts/settings`, saqlanadi: `branches.settings["shift"]["handover_approval"]`).
+Yoqilganda xodim kassani topshirgach (yoki smenani tugatgach) sessiya
+`PENDING_HANDOVER` + `pending_approval` ("close_cash"/"end_shift") bilan
+**tasdiq kutadi**: keyingi xodim parol bilan qabul qila olmaydi (409
+`APPROVAL_REQUIRED`); faqat admin yoki `shift.force_close` egasi
+`POST /shifts/{session_id}/approve` bilan tasdiqlaydi — **shundan keyingina**
+sessiya yopiladi va (kassir ishda davom etsa) yangi kassa 0 so'mdan
+ochiladi. Tasdiq kutilayotganda admin/menejerlarga push boradi; kassirga
+tasdiqlangach xabar ketadi. **Standart — O'CHIQ**: hozirgi oqim (keyingi
+xodim parol bilan qabul qiladi) 100% o'zgarmaydi. Web: kassa panelidagi
+banner va Smenalar sahifasida "Kassani tasdiqlash" tugmasi; mobil: Jamoa →
+Smenalar. Migratsiya `f0e1d2c3b4a5`, test:
+`pytest tests/test_shift_approval.py`.
+
 **Naqdsiz to'lovlar ham smena ko'rsatkichi bo'lib qaytadi (veb).** Ilgari
 smena hisobi faqat naqd bilan ishlardi — karta/online/o'tkazma summalari
 sessiyaga bog'lanmasdan "yo'qolib" qolardi. Endi har bir sessiya javobida

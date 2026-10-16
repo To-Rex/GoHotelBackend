@@ -2152,8 +2152,7 @@ Yozuv shakli:
 
 **GET /shifts/handovers**
 
-- Auth: ADMIN / SUPER_ADMIN or `shift.force_close` (others: 403 `FORBIDDEN`)
-- Query: `?date_from=2026-10-01&date_to=2026-10-06&limit=200` (all optional; local day of `ended_at`; 422 `INVALID_RANGE`; `limit` ≤ 500)
+- Auth: ADMIN / SUPER_ADMIN or `shift.force_close` (others: 403 `FORBIDDEN`)- Query: `?date_from=2026-10-01&date_to=2026-10-06&limit=200` (all optional; local day of `ended_at`; 422 `INVALID_RANGE`; `limit` ≤ 500)
 - Description: Cash passed from shift to shift. One item per CLOSED or PENDING_HANDOVER session — where the counted cash went (`kind`): `HANDOVER` (the next employee accepted it; it became their opening cash), `PENDING` (handed over, waiting for acceptance), `CASH_OUT` (day close — the cash left the drawer, the employee's next session starts from 0), `FORCE_TAKEN` (force-closed and the manager took the cash). For `HANDOVER` the receiver's new session (started within ±2 minutes of `accepted_at`) is matched and its `received_opening_cash` returned, so a broken chain (e.g. the counted amount corrected later) is visible.
 - Response 200:
 
@@ -2170,6 +2169,17 @@ Yozuv shakli:
   ]
 }
 ```
+
+---
+
+### Shifts — handover approval (kassa topshirishida admin tasdig'i)
+
+When the branch setting `shift.handover_approval` is on (`PUT /shifts/settings`, body includes `{"handover_approval": true}`; default **off**):
+
+- `POST /shifts/close-cash` and `POST /shifts/end` no longer finish the handover: the session stays `PENDING_HANDOVER` with `pending_approval` set (`"close_cash" | "end_shift"`), the counted amount is recorded, and admins/managers receive a push.
+- `POST /shifts/accept` is rejected with 409 `APPROVAL_REQUIRED` while approval is pending — the next employee cannot take the drawer.
+- `POST /shifts/{session_id}/approve` (ADMIN / SUPER_ADMIN or `shift.force_close`; body `{"notes": "optional"}`) completes it: the session is closed, the approver lands in `accepted_by`, and for a `close_cash` handover a fresh ACTIVE session for the same employee opens with `opening_cash = 0`. The cashier gets a notification. 409 `SHIFT_NOT_PENDING` if nothing is awaiting approval, 404 `SHIFT_NOT_FOUND`.
+- With the setting off everything behaves exactly as before (the next employee accepts with their password).
 
 ---
 

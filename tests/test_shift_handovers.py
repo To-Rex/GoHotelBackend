@@ -35,6 +35,7 @@ def session(user, status, *, ended, counted, expected, accepted_by=None, accepte
         cash_diff=None if counted is None or expected is None else Decimal(str(counted - expected)),
         accepted_by=accepted_by, accepted_at=accepted_at, force_closed=force,
         corrections=corrections, notes=None, closed_by=closed_by or user,
+        pending_approval=None,
     )
 
 

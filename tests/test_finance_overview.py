@@ -143,6 +143,7 @@ def shift(status, opening, branch, counted=None):
         id=uuid.uuid4(), user_id=uuid.uuid4(), status=status, branch_id=branch,
         started_at=datetime(2026, 10, 2, 8, tzinfo=timezone.utc), ended_at=None,
         opening_cash=opening, continue_after_end=False, force_closed=False, notes=None,
+        pending_approval=None,
         counted_cash=counted, expected_cash=None, cash_diff=None, corrections=None,
     )
     u = SimpleNamespace(first_name="Dilnoza", last_name="R")
