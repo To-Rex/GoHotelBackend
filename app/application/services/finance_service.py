@@ -1,24 +1,38 @@
+import logging
 from uuid import UUID
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, or_, select
 
-from app.core.exceptions import NotFoundException, ValidationException, BadRequestException
+from app.core.exceptions import (
+    BadRequestException,
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
 from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem
 from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.ledger import Ledger
 from app.infrastructure.database.models.journal_entry import JournalEntry, JournalEntryLine
+from app.infrastructure.database.models.user import User
 from app.infrastructure.database.repositories.finance_repo import (
     LedgerRepository,
     JournalEntryRepository,
     InvoiceRepository,
     PaymentRepository,
 )
+from app.application.services.audit_service import AuditService
 from app.application.services.move_discount_policy import (
     clamp_move_discount,
     discount_baseline,
 )
 from app.shared.utils import generate_code
+
+logger = logging.getLogger(__name__)
+
+#: Menejer to'lov TURINI faqat oxirgi shu soat ichidagi yozuvlarda
+#: tahrirlay oladi (admin/super admin uchun cheklov yo'q).
+PAYMENT_EDIT_WINDOW_HOURS = 48
 
 
 #: Saralash mumkin bo'lgan ustunlar. Ro'yxat ataylab YOPIQ: mijozdan
@@ -366,6 +380,94 @@ class FinanceService:
                 reservation.payment_status = "PARTIALLY_PAID"
 
         await self.session.flush()
+        return payment
+
+    async def update_payment_method(
+        self,
+        hotel_id: UUID | None,
+        payment_id: UUID,
+        method: str,
+        current_user: dict,
+        note: str | None = None,
+    ) -> Payment:
+        """To'lov TURINI tahrirlash — summa va boshqa maydonlar tegilmaydi.
+
+        Huquq: administrator/super admin (cheklovsiz) yoki menejer
+        (`shift.force_close`) — menejerga faqat oxirgi 2 kunlik to'lovlar
+        (`PAYMENT_EDIT_WINDOW_HOURS`). Har tahrir `method_changes` ga
+        (kim, qachon, nimadan nimaga, izoh) yoziladi va audit jurnaliga
+        tushadi — hech narsa o'chirilmaydi.
+        """
+        payment = await self.session.get(Payment, payment_id)
+        if not payment:
+            raise NotFoundException("Payment not found", "PAYMENT_NOT_FOUND")
+        if hotel_id is not None and str(payment.hotel_id) != str(hotel_id):
+            raise NotFoundException("Payment not found", "PAYMENT_NOT_FOUND")
+
+        is_admin = current_user.get("user_type") in ("ADMIN", "SUPER_ADMIN")
+        is_manager = "shift.force_close" in (current_user.get("permissions") or [])
+        if not (is_admin or is_manager):
+            raise ForbiddenException(
+                "To'lov turini faqat administrator yoki menejer tahrirlaydi",
+                "FORBIDDEN",
+            )
+
+        new_method = (method or "").strip().upper()
+        old_method = payment.payment_method
+        if new_method == (old_method or "").strip().upper():
+            raise ValidationException(
+                "To'lov turi o'zgarmadi", "PAYMENT_METHOD_UNCHANGED"
+            )
+
+        if not is_admin:
+            created = payment.created_at
+            if created is not None:
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                age = datetime.now(timezone.utc) - created
+                if age > timedelta(hours=PAYMENT_EDIT_WINDOW_HOURS):
+                    raise ForbiddenException(
+                        "Menejer faqat oxirgi 2 kunlik to'lovlarni tahrirlay oladi",
+                        "PAYMENT_EDIT_WINDOW",
+                    )
+
+        actor_id = current_user.get("id")
+        by_name: str | None = None
+        if actor_id:
+            actor = await self.session.get(User, UUID(str(actor_id)))
+            if actor is not None:
+                by_name = f"{actor.first_name} {actor.last_name}".strip() or None
+
+        entry = {
+            "old": old_method,
+            "new": new_method,
+            "by": str(actor_id) if actor_id else None,
+            "by_name": by_name,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "note": note,
+        }
+        # JSONB — YANGI ro'yxat bilan almashtiriladi (SQLAlchemy o'zgarishni
+        # sezishi uchun; smena `corrections` bilan bir xil naqsh)
+        payment.method_changes = [*(payment.method_changes or []), entry]
+        payment.payment_method = new_method
+        await self.session.flush()
+
+        # Audit jurnali — xatosi tahrirni hech qachon buzmaydi
+        try:
+            await AuditService(self.session).log_action(
+                hotel_id=payment.hotel_id,
+                user_id=UUID(str(actor_id)) if actor_id else None,
+                action="UPDATE",
+                entity_type="payment",
+                entity_id=payment.id,
+                old_values={"payment_method": old_method},
+                new_values={"payment_method": new_method, "note": note},
+            )
+        except Exception:
+            logger.exception(
+                "To'lov turi audit yozuvi saqlanmadi (payment=%s)", payment.id
+            )
+
         return payment
 
     def _payment_conditions(

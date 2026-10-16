@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -45,6 +46,10 @@ class Payment(BranchScoped, UUIDPrimaryKeyMixin, Base):
     payment_number: Mapped[str] = mapped_column(String(50), nullable=False)
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     payment_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    # To'lov TURINI tahrirlash tarixi (audit): [{old, new, by, by_name, at,
+    # note}, ...]. Summa va boshqa maydonlar o'zgarmaydi; faqat admin/super
+    # admin (cheklovsiz) va menejer (oxirgi 2 kun) tahrirlay oladi.
+    method_changes: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     payment_date: Mapped[date] = mapped_column(Date, nullable=False)
     reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

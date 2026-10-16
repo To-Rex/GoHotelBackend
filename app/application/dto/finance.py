@@ -52,6 +52,8 @@ class PaymentResponse(BaseModel):
     reference: str | None
     notes: str | None
     created_at: datetime
+    #: To'lov turi tahriri tarixi: [{old, new, by, by_name, at, note}, ...]
+    method_changes: list | None = None
 
     model_config = {"from_attributes": True}
 

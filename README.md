@@ -596,6 +596,29 @@ ekan savdo `PENDING` (qarz), to'liq to'langanda `PAID`.
 Kod: `app/application/services/shop_payments.py`, test:
 `pytest tests/test_shop_partial_payments.py`.
 
+### To'lov turini tahrirlash (audit bilan)
+
+Xato usul tanlangan bo'lsa (masalan, naqd o'rniga karta bosilgan) to'lov
+TURI tahrirlanadi — summa, sana va boshqa maydonlar **tegilmaydi**:
+
+- `PATCH /finance/payments/{id}/method` — `{"payment_method":
+  "CASH|CARD|ONLINE|BANK_TRANSFER", "note": "ixtiyoriy"}`.
+- **Kim tahrirlaydi:** administrator va super admin (cheklovsiz) yoki
+  menejer (`shift.force_close`) — menejerga faqat **oxirgi 2 kunlik**
+  to'lovlar (403 `PAYMENT_EDIT_WINDOW`). Boshqa xodimga 403.
+- O'sha usul qayta yuborilsa 422 `PAYMENT_METHOD_UNCHANGED`; topilmasa
+  404 `PAYMENT_NOT_FOUND`.
+- **Tarix o'chirilmaydi:** har tahrir `payments.method_changes` da
+  (nimadan nimaga, kim, qachon, izoh) va `audit_logs` da qoladi; javobda
+  `method_changes` qaytadi. Migratsiya `e9c0d1e2f3a4`.
+- Usul o'zgarishi moliyaviy ko'rsatkichlarga ta'sir qiladi (to'lov usullari
+  kesimi, smena kassasidagi kutilgan naqd, xodimlar hisoboti) — vebda
+  tegishli kesh kalitlari yangilanadi. Vebda: Moliya → To'lovlar
+  jadvalida qalamcha tugmasi (menejerga eski to'lovlarda o'chiq).
+
+Kod: `finance_service.update_payment_method`, test:
+`pytest tests/test_payment_method_edit.py`.
+
 ### Jarimalar (kech chiqish, shikast)
 
 Mehmon kech chiqsa yoki biror narsani sindirsa bronga jarima yoziladi.

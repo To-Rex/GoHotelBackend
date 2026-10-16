@@ -1,12 +1,15 @@
 from uuid import UUID
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.invoice import Invoice
+from app.infrastructure.database.models.payment import Payment
 from app.application.services import sms_service
 from app.application.services.finance_service import FinanceService
 from app.application.dto.finance import (
@@ -388,6 +391,49 @@ async def list_payments(
         h_id, invoice_id=invoice_id, date_from=date_from, date_to=date_to,
         skip=skip, limit=limit, search=search,
         sort_by=sort_by, sort_dir=sort_dir,
+    )
+
+
+class PaymentMethodUpdateRequest(BaseModel):
+    """To'lov TURINI tahrirlash (summa va boshqa maydonlar tegilmaydi).
+
+    Hozircha faqat usulni o'zgartirish mumkin; har tahrir `method_changes`
+    tarixida va audit jurnalida qoladi.
+    """
+
+    payment_method: Literal["CASH", "CARD", "ONLINE", "BANK_TRANSFER"]
+    note: str | None = Field(default=None, max_length=500)
+
+
+@router.patch("/payments/{payment_id}/method", response_model=PaymentResponse)
+async def update_payment_method(
+    payment_id: UUID = Path(),
+    data: PaymentMethodUpdateRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """To'lov turini tahrirlash — administrator/super admin yoki menejer.
+
+    Menejer (`shift.force_close`) faqat oxirgi 2 kunlik to'lovlarni
+    tahrirlay oladi (403 `PAYMENT_EDIT_WINDOW`); administrator va tizim
+    ma'murida cheklov yo'q. Tahrir tarixi javobdagi `method_changes` da
+    qaytadi.
+    """
+    if current_user["user_type"] == "SUPER_ADMIN":
+        if not hotel_id:
+            payment = await session.get(Payment, payment_id)
+            if not payment:
+                raise NotFoundException("Payment not found", "PAYMENT_NOT_FOUND")
+            h_id = payment.hotel_id
+        else:
+            h_id = hotel_id
+    else:
+        h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return await FinanceService(session).update_payment_method(
+        h_id, payment_id, data.payment_method, current_user, data.note
     )
 
 

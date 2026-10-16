@@ -2069,6 +2069,16 @@ Yozuv shakli:
 
 ---
 
+**PATCH /finance/payments/{payment_id}/method**
+
+- Auth: ADMIN / SUPER_ADMIN (no limit) or a manager (`shift.force_close`) — the manager may edit only payments created within the last 2 days (403 `PAYMENT_EDIT_WINDOW`); other employees 403 `FORBIDDEN`
+- Body: `{"payment_method": "CASH" | "CARD" | "ONLINE" | "BANK_TRANSFER", "note": "optional"}`
+- Description: edits only the payment METHOD (amount, date and other fields are untouched). Every edit is appended to `payments.method_changes` (`{old, new, by, by_name, at, note}`) and written to the audit log — nothing is overwritten.
+- Response 200: the payment with `method_changes`
+- Errors: 422 `PAYMENT_METHOD_UNCHANGED` (same method), 404 `PAYMENT_NOT_FOUND`
+
+---
+
 **GET /finance/journal-entries**
 
 - Auth: required
