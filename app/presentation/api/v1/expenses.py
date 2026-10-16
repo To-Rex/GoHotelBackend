@@ -38,7 +38,9 @@ class ExpenseCreateRequest(BaseModel):
     amount: float = Field(..., gt=0)
     category: str | None = Field(default=None, max_length=50)
     payment_method: Literal[
-        "CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"
+        # Kanonik to'rtlik + eski kodlar (eski klientlar uchun)
+        "CASH", "CARD", "ONLINE", "BANK_TRANSFER",
+        "CREDIT_CARD", "DEBIT_CARD", "MOBILE_PAYMENT", "TRANSFER",
     ] = "CASH"
     expense_date: date | None = None
     notes: str | None = None

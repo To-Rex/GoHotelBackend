@@ -129,7 +129,10 @@ class SettlePaymentPartRequest(BaseModel):
 
     amount: float = Field(gt=0)
     payment_method: Literal[
-        "CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"
+        # Kanonik to'rtlik — ilovalar shularni yuboradi
+        "CASH", "CARD", "ONLINE", "BANK_TRANSFER",
+        # Eski kodlar: eski klientlar/ma'lumotlar uchun qabul qilinadi
+        "CREDIT_CARD", "DEBIT_CARD", "MOBILE_PAYMENT", "TRANSFER",
     ]
 
 
@@ -145,7 +148,10 @@ class SettlePaymentRequest(BaseModel):
 
     amount: float | None = Field(default=None, gt=0)
     payment_method: Literal[
-        "CASH", "CREDIT_CARD", "DEBIT_CARD", "BANK_TRANSFER", "MOBILE_PAYMENT", "ONLINE"
+        # Kanonik to'rtlik — ilovalar shularni yuboradi
+        "CASH", "CARD", "ONLINE", "BANK_TRANSFER",
+        # Eski kodlar: eski klientlar/ma'lumotlar uchun qabul qilinadi
+        "CREDIT_CARD", "DEBIT_CARD", "MOBILE_PAYMENT", "TRANSFER",
     ] | None = None
     direction: Literal["PAY", "REFUND"]
     #: Ko'pi bilan 10 bo'lak — amalda 2-3 ta yetadi

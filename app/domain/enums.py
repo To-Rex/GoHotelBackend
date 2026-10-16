@@ -140,11 +140,16 @@ class InvoiceLineType(str, Enum):
 
 class PaymentMethod(str, Enum):
     CASH = "CASH"
+    #: Kanonik karta kodi (ilova shuni yuboradi); CREDIT_CARD/DEBIT_CARD —
+    #: eski yozuvlar uchun saqlanadi
+    CARD = "CARD"
     CREDIT_CARD = "CREDIT_CARD"
     DEBIT_CARD = "DEBIT_CARD"
     BANK_TRANSFER = "BANK_TRANSFER"
     MOBILE_PAYMENT = "MOBILE_PAYMENT"
     ONLINE = "ONLINE"
+    #: Eski klientlardagi bank o'tkazmasi kodi
+    TRANSFER = "TRANSFER"
 
 
 class TokenType(str, Enum):

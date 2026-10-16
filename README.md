@@ -178,7 +178,12 @@ Bron yaratishda yangi imkoniyatlar:
 - **payment_amount + payment_method**: Bron bilan birga to'lov qabul qilish (invoice + payment bir tranzaksiyada)
 - **payments**: Qisman (bo'lib) to'lov — `[{amount, payment_method}, ...]` ro'yxati; har bir bo'lak alohida payment bo'lib yoziladi (masalan bir qismi `CASH`, qolgani `CREDIT_CARD`). Berilsa `payment_amount`/`payment_method` o'rniga shu ishlatiladi
 - **payment_status**: `UNPAID`, `PARTIALLY_PAID`, `PAID`
-- **payment_method**: `CASH`, `CREDIT_CARD`, `DEBIT_CARD`, `BANK_TRANSFER`, `MOBILE_PAYMENT`, `ONLINE`
+- **payment_method**: kanonik to'rtlik — `CASH`, `CARD`, `ONLINE`,
+  `BANK_TRANSFER` (ilova shularni yuboradi) + eski kodlar `CREDIT_CARD`,
+  `DEBIT_CARD`, `MOBILE_PAYMENT`, `TRANSFER` (eski yozuvlar/klientlar uchun
+  qabul qilinadi). Shu to'plam barcha to'lov joylarida bir xil — settle,
+  jarima/qarz to'lovi (bo'lib to'lash bo'laklari ham), xarajat, faktura va
+  do'kon; `tests/test_payment_method_codes.py` moslikni qulflaydi
 - Javobda `total_amount`, `paid_amount`, `payment_status`, `booking_type` qaytadi
 
 ### Rooms

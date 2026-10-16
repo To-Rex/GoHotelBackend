@@ -61,8 +61,14 @@ class PaymentResponse(BaseModel):
 class PaymentCreateRequest(BaseModel):
     invoice_id: UUID
     amount: float = Field(..., gt=0)
+    # Kanonik to'rtlik (CASH/CARD/ONLINE/BANK_TRANSFER) + eski kodlar —
+    # eski klientlar va bazadagi tarix uchun qabul qilinadi
     payment_method: str = Field(
-        ..., pattern=r"^(CASH|CREDIT_CARD|DEBIT_CARD|BANK_TRANSFER|MOBILE_PAYMENT|ONLINE)$"
+        ...,
+        pattern=(
+            r"^(CASH|CARD|ONLINE|BANK_TRANSFER"
+            r"|CREDIT_CARD|DEBIT_CARD|MOBILE_PAYMENT|TRANSFER)$"
+        ),
     )
     payment_date: date | None = None
     reference: str | None = None
