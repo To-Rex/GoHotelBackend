@@ -389,14 +389,21 @@ class FinanceService:
         method: str,
         current_user: dict,
         note: str | None = None,
+        amount: float | None = None,
     ) -> Payment:
-        """To'lov TURINI tahrirlash — summa va boshqa maydonlar tegilmaydi.
+        """To'lov TURINI tahrirlash — butun summa yoki QISMAN.
+
+        `amount` berilmasa — butun to'lov usuli almashadi. `amount`
+        berilsa — summaning shu qismi YANGI to'lov qatori bo'lib ajraladi
+        (yangi usulda, o'sha hisob-fakturaga), qolgani avvalgi turda
+        qoladi. Masalan: 100 000 naqd → 50 000 naqd + 50 000 online.
+        Summa, sana va hisobga bog'lanish o'zgarmaydi (yig'indi teng).
 
         Huquq: administrator/super admin (cheklovsiz) yoki menejer
         (`shift.force_close`) — menejerga faqat oxirgi 2 kunlik to'lovlar
         (`PAYMENT_EDIT_WINDOW_HOURS`). Har tahrir `method_changes` ga
-        (kim, qachon, nimadan nimaga, izoh) yoziladi va audit jurnaliga
-        tushadi — hech narsa o'chirilmaydi.
+        (kim, qachon, nimadan nimaga, qancha, izoh) yoziladi va audit
+        jurnaliga tushadi — hech narsa o'chirilmaydi.
         """
         payment = await self.session.get(Payment, payment_id)
         if not payment:
@@ -418,6 +425,24 @@ class FinanceService:
             raise ValidationException(
                 "To'lov turi o'zgarmadi", "PAYMENT_METHOD_UNCHANGED"
             )
+
+        # Qisman o'tkazish shartlari: faqat musbat to'lov, summa kichik
+        # bo'lishi shart; butun summaga teng bo'lsa — oddiy tahrirga aylanadi
+        total = float(payment.amount)
+        partial_amount: float | None = None
+        if amount is not None:
+            if total <= 0:
+                raise ValidationException(
+                    "Qisman o'tkazish faqat musbat to'lovda mumkin",
+                    "PARTIAL_INVALID_PAYMENT",
+                )
+            if amount <= 0 or amount > total:
+                raise ValidationException(
+                    "Qisman summa to'lov summasidan kichik bo'lishi kerak",
+                    "PARTIAL_AMOUNT_RANGE",
+                )
+            if amount < total:
+                partial_amount = float(amount)
 
         if not is_admin:
             created = payment.created_at
@@ -446,10 +471,43 @@ class FinanceService:
             "at": datetime.now(timezone.utc).isoformat(),
             "note": note,
         }
+
+        if partial_amount is None:
+            entry.update({"kind": "full", "amount": None, "new_payment_number": None})
+            payment.payment_method = new_method
+        else:
+            # Qism yangi to'lov qatori bo'ladi. Pulni QABUL QILGAN xodim
+            # saqlanadi (kassa/hisobot atributsiyasi o'zgarmasin), sana ham
+            # asl to'lovniki — kunlik hisobotlar o'sha kunda qoladi.
+            hotel_code = await self._get_hotel_code(payment.hotel_id)
+            split = Payment(
+                hotel_id=payment.hotel_id,
+                invoice_id=payment.invoice_id,
+                payment_number=generate_code("PAY", hotel_code),
+                amount=partial_amount,
+                payment_method=new_method,
+                payment_date=payment.payment_date,
+                reference=payment.reference,
+                notes=(
+                    f"Qisman o'tkazildi: {payment.payment_number} dan "
+                    f"{partial_amount:.0f} So'm ({old_method} → {new_method})"
+                ),
+                created_by=payment.created_by,
+                created_at=datetime.now(timezone.utc),
+            )
+            self.session.add(split)
+            payment.amount = total - partial_amount
+            entry.update(
+                {
+                    "kind": "partial",
+                    "amount": partial_amount,
+                    "new_payment_number": split.payment_number,
+                }
+            )
+
         # JSONB — YANGI ro'yxat bilan almashtiriladi (SQLAlchemy o'zgarishni
         # sezishi uchun; smena `corrections` bilan bir xil naqsh)
         payment.method_changes = [*(payment.method_changes or []), entry]
-        payment.payment_method = new_method
         await self.session.flush()
 
         # Audit jurnali — xatosi tahrirni hech qachon buzmaydi
@@ -461,7 +519,12 @@ class FinanceService:
                 entity_type="payment",
                 entity_id=payment.id,
                 old_values={"payment_method": old_method},
-                new_values={"payment_method": new_method, "note": note},
+                new_values={
+                    "payment_method": new_method,
+                    "kind": entry["kind"],
+                    "amount": partial_amount,
+                    "note": note,
+                },
             )
         except Exception:
             logger.exception(

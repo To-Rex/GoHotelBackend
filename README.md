@@ -596,25 +596,36 @@ ekan savdo `PENDING` (qarz), to'liq to'langanda `PAID`.
 Kod: `app/application/services/shop_payments.py`, test:
 `pytest tests/test_shop_partial_payments.py`.
 
-### To'lov turini tahrirlash (audit bilan)
+### To'lov turini tahrirlash (butun yoki qisman, audit bilan)
 
 Xato usul tanlangan bo'lsa (masalan, naqd o'rniga karta bosilgan) to'lov
-TURI tahrirlanadi — summa, sana va boshqa maydonlar **tegilmaydi**:
+TURI tahrirlanadi — **butun summa yoki qisman**:
 
 - `PATCH /finance/payments/{id}/method` — `{"payment_method":
-  "CASH|CARD|ONLINE|BANK_TRANSFER", "note": "ixtiyoriy"}`.
+  "CASH|CARD|ONLINE|BANK_TRANSFER", "note": "ixtiyoriy",
+  "amount": 50000}`. `amount` berilmasa butun to'lov usuli almashadi;
+  berilsa summaning shu qismi **yangi to'lov qatori** bo'lib yangi turga
+  o'tadi (masalan 100 000 naqd → 50 000 naqd + 50 000 online), qolgani
+  avvalgi turda qoladi. Yig'indi, hisob-faktura va bron to'lovi
+  o'zgarmaydi; yangi qator pulni QABUL QILGAN xodim va asl sanani saqlaydi
+  (kassa/hisobot atributsiyasi o'zgarmasin). `amount` summaga teng bo'lsa —
+  oddiy (to'liq) tahrir; summadan katta bo'lsa 422 `PARTIAL_AMOUNT_RANGE`,
+  qaytarim (manfiy) to'lovda qisman taqiqlanadi (`PARTIAL_INVALID_PAYMENT`).
 - **Kim tahrirlaydi:** administrator va super admin (cheklovsiz) yoki
   menejer (`shift.force_close`) — menejerga faqat **oxirgi 2 kunlik**
   to'lovlar (403 `PAYMENT_EDIT_WINDOW`). Boshqa xodimga 403.
 - O'sha usul qayta yuborilsa 422 `PAYMENT_METHOD_UNCHANGED`; topilmasa
   404 `PAYMENT_NOT_FOUND`.
 - **Tarix o'chirilmaydi:** har tahrir `payments.method_changes` da
-  (nimadan nimaga, kim, qachon, izoh) va `audit_logs` da qoladi; javobda
-  `method_changes` qaytadi. Migratsiya `e9c0d1e2f3a4`.
+  (nimadan nimaga, **qancha** — `kind: full|partial`, `amount`,
+  `new_payment_number`, kim, qachon, izoh) va `audit_logs` da qoladi;
+  javobda `method_changes` qaytadi. Migratsiya `e9c0d1e2f3a4`.
 - Usul o'zgarishi moliyaviy ko'rsatkichlarga ta'sir qiladi (to'lov usullari
   kesimi, smena kassasidagi kutilgan naqd, xodimlar hisoboti) — vebda
   tegishli kesh kalitlari yangilanadi. Vebda: Moliya → To'lovlar
-  jadvalida qalamcha tugmasi (menejerga eski to'lovlarda o'chiq).
+  jadvalida qalamcha tugmasi (menejerga eski to'lovlarda o'chiq);
+  "Qisman o'tkazish" belgilansa — summa kiritiladi va qoladigan qism
+  ko'rsatiladi.
 
 Kod: `finance_service.update_payment_method`, test:
 `pytest tests/test_payment_method_edit.py`.
