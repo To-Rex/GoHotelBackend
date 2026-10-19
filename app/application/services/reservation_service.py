@@ -30,6 +30,7 @@ from app.application.services.branch_settings import settings_owner
 from app.application.services.discount_policy import check_discount
 from app.application.services.daily_unit import (
     DEFAULT_DAILY_UNIT,
+    hourly_units,
     reservation_daily_unit,
     resolve_daily_unit,
     unit_price,
@@ -221,15 +222,16 @@ class ReservationService:
         check_out_date: date,
         check_in_datetime: datetime | None = None,
         check_out_datetime: datetime | None = None,
+        daily_unit: str = DEFAULT_DAILY_UNIT,
     ) -> tuple[float, float]:
         if booking_type == "HOURLY" and check_in_datetime and check_out_datetime:
             delta = check_out_datetime - check_in_datetime
             hours = delta.total_seconds() / 3600
             if hours < 1:
                 hours = 1
-            # Soatlik bron narxi davomiylikka BOG'LIQ EMAS — kunlik narx
-            # to'liq olinadi (1 soat ham, 24 soat ham bir xil narx)
-            room_charge = float(round(base_price))
+            # 24 soatlik rejimda 12 soatdan oshgan soatlik bron — to'liq kun
+            # (ikki 12 soatlik birlik, narx × 2); aks holda avvalgidek × 1
+            room_charge = float(round(base_price * hourly_units(hours, daily_unit)))
             return room_charge, hours
 
         nights = (check_out_date - check_in_date).days
@@ -343,6 +345,7 @@ class ReservationService:
             reservation.check_out_date,
             reservation.check_in_datetime,
             reservation.check_out_datetime,
+            daily_unit=reservation_daily_unit(reservation),
         )
         return clamp_move_discount(
             stored,
@@ -484,9 +487,22 @@ class ReservationService:
             await self._get_room_base_price(new_room_id, hotel_id), booking_type, unit
         )
 
+        # 24 soatlik rejimda 12 soatdan oshgan soatlik bron — ikki birlik
+        hourly_hours = 0.0
+        if (
+            booking_type == "HOURLY"
+            and reservation.check_in_datetime
+            and reservation.check_out_datetime
+        ):
+            hourly_hours = (
+                reservation.check_out_datetime - reservation.check_in_datetime
+            ).total_seconds() / 3600
+        units = hourly_units(hourly_hours, unit)
+
         if booking_type == "HOURLY":
-            # Soatlik narx davomiylikka bog'liq emas — yangi xonaning yaxlit narxi
-            new_charge = float(round(new_base))
+            # Soatlik narx davomiylikka bog'liq emas — 12 soatlik birlik narxi
+            # × birliklar soni (24 soatlik rejimda >12 soat — × 2)
+            new_charge = float(round(new_base * units))
         else:
             nights = max((reservation.check_out_date - reservation.check_in_date).days, 1)
             if reservation.status == "CHECKED_IN":
@@ -499,7 +515,7 @@ class ReservationService:
         # Shu ko'chirishning narx farqi: qolgan davr eski xonada qolsa
         # qancha bo'lardi (yashab bo'lingan kunlar ikkala hisobda bir xil)
         if booking_type == "HOURLY":
-            old_charge = float(round(old_base))
+            old_charge = float(round(old_base * units))
         else:
             old_charge = float(old_base) * nights
         # Mehmon AMALDA qancha ko'p to'laydi: bron chegirmasi foizda bo'lsa,
@@ -530,7 +546,7 @@ class ReservationService:
         move_discount = carried + given_discount
         if baseline_price is not None:
             if booking_type == "HOURLY":
-                baseline_charge = float(round(baseline_price))
+                baseline_charge = float(round(baseline_price * units))
             else:
                 baseline_charge = baseline_price * nights
             move_discount = clamp_move_discount(
@@ -567,7 +583,9 @@ class ReservationService:
                         f"({duration} {duration_label} @ {new_base})"
                     )
                     li.quantity = duration
-                    li.unit_price = new_base
+                    # Soatlik qatorda quantity=1, shuning uchun birlik narxi —
+                    # to'liq haq (24 soatlik rejimda >12 soat — ×2)
+                    li.unit_price = new_charge if booking_type == "HOURLY" else new_base
                     li.total_price = new_charge
                 elif li.line_type == "SERVICE_CHARGE":
                     service_total += float(li.total_price or 0)
@@ -979,20 +997,18 @@ class ReservationService:
         # Kunlik hisob rejimi (12/24 soat) — mehmonxona sozlamasidan. Bronga
         # yoziladi: keyingi qayta hisoblar (ko'chirish, chiqish, hisob-faktura)
         # shu qiymat bilan, sozlama keyin o'zgarsa ham narx o'zgarmaydi.
-        # 24 soatlik kunda bir kun = xona narxi × 2 (daily_unit.py)
+        # 24 soatlik kunda bir kun = xona narxi × 2 (daily_unit.py); soatlik
+        # bronda 12 soatdan oshsa — ikki 12 soatlik birlik (narx × 2)
         policy_hotel = await settings_owner(self.session, hotel_id, getattr(room, "branch_id", None))
-        daily_unit = (
-            DEFAULT_DAILY_UNIT
-            if booking_type == "HOURLY"
-            else resolve_daily_unit(policy_hotel.settings if policy_hotel else None)
-        )
+        daily_unit = resolve_daily_unit(policy_hotel.settings if policy_hotel else None)
         base_price = unit_price(
             await self._get_room_base_price(data["room_id"], hotel_id),
             booking_type,
             daily_unit,
         )
         room_charge, duration = await self._calculate_price(
-            base_price, booking_type, check_in, check_out, check_in_dt, check_out_dt
+            base_price, booking_type, check_in, check_out, check_in_dt, check_out_dt,
+            daily_unit=daily_unit,
         )
 
         # Chegirma qoidasi — mehmonxona sozlamasidan. Tekshiruv shu yerda,
@@ -1818,6 +1834,7 @@ class ReservationService:
             base_price, booking_type,
             reservation.check_in_date, reservation.check_out_date,
             reservation.check_in_datetime, reservation.check_out_datetime,
+            daily_unit=reservation_daily_unit(reservation),
         )
 
         discount_amount, _ = await self._compute_discount(

@@ -40,8 +40,13 @@ def test_unit_rules():
     assert du.daily_multiplier("DAILY", "24h") == 2
     assert du.daily_multiplier(None, "24h") == 2
     assert du.daily_multiplier("DAILY", "12h") == 1
-    # Soatlik bronga tegishli emas
+    # Soatlik: 12 soatlik rejimda — doim 1; 24 soatlik rejimda >12 soat — 2
     assert du.daily_multiplier("HOURLY", "24h") == 1
+    assert du.hourly_units(24, "12h") == 1
+    assert du.hourly_units(24, None) == 1
+    assert du.hourly_units(12, "24h") == 1
+    assert du.hourly_units(12.5, "24h") == 2
+    assert du.hourly_units(24, "24h") == 2
     assert du.unit_price(250_000, "DAILY", "24h") == 500_000
     assert du.unit_price(250_000, "DAILY", None) == 250_000
     # Ustuni yo'q eski yozuv — 12 soatlik
@@ -181,7 +186,7 @@ def test_half_day_mode_is_unchanged(monkeypatch):
     assert float(res.total_amount) == 250_000
 
 
-def test_hourly_booking_is_not_doubled(monkeypatch):
+def test_hourly_booking_up_to_half_day_is_not_doubled(monkeypatch):
     from datetime import datetime
 
     start = local_today() + timedelta(days=1)
@@ -193,6 +198,58 @@ def test_hourly_booking_is_not_doubled(monkeypatch):
         check_out_date=start + timedelta(days=1),
         check_in_datetime=datetime(start.year, start.month, start.day, 14),
         check_out_datetime=datetime(start.year, start.month, start.day, 16),
+    )
+    # 2 soat — bitta 12 soatlik birlik; rejim esa bronga yoziladi
+    assert float(res.total_amount) == 250_000
+    assert res.daily_unit == "24h"
+
+
+def test_hourly_booking_over_half_day_charges_a_full_day(monkeypatch):
+    from datetime import datetime
+
+    start = local_today() + timedelta(days=1)
+    res, _ = create(
+        FULL_DAY,
+        monkeypatch,
+        booking_type="HOURLY",
+        check_in_date=start,
+        check_out_date=start + timedelta(days=1),
+        check_in_datetime=datetime(start.year, start.month, start.day, 14),
+        check_out_datetime=datetime(start.year, start.month, start.day, 14) + timedelta(hours=14),
+    )
+    # 14 soat — to'liq kun: ikki 12 soatlik birlik (250 000 × 2)
+    assert float(res.total_amount) == 500_000
+    assert res.daily_unit == "24h"
+
+
+def test_hourly_booking_exactly_half_day_is_not_doubled(monkeypatch):
+    from datetime import datetime
+
+    start = local_today() + timedelta(days=1)
+    res, _ = create(
+        FULL_DAY,
+        monkeypatch,
+        booking_type="HOURLY",
+        check_in_date=start,
+        check_out_date=start + timedelta(days=1),
+        check_in_datetime=datetime(start.year, start.month, start.day, 14),
+        check_out_datetime=datetime(start.year, start.month, start.day, 14) + timedelta(hours=12),
+    )
+    assert float(res.total_amount) == 250_000
+
+
+def test_hourly_booking_is_not_doubled_in_half_day_mode(monkeypatch):
+    from datetime import datetime
+
+    start = local_today() + timedelta(days=1)
+    res, _ = create(
+        {},
+        monkeypatch,
+        booking_type="HOURLY",
+        check_in_date=start,
+        check_out_date=start + timedelta(days=1),
+        check_in_datetime=datetime(start.year, start.month, start.day, 14),
+        check_out_datetime=datetime(start.year, start.month, start.day, 14) + timedelta(hours=14),
     )
     assert float(res.total_amount) == 250_000
     assert res.daily_unit == "12h"
@@ -212,6 +269,25 @@ def test_move_room_keeps_the_reservation_unit():
     assert res.total_amount == PRICES[NEW_ROOM] * 2 * 2
     entry = res.room_moves[-1]
     assert entry["price_increase"] == (PRICES[NEW_ROOM] - PRICES[OLD_ROOM]) * 2 * 2
+
+
+def test_move_hourly_over_half_day_uses_the_full_day():
+    from datetime import datetime
+
+    start = local_today() + timedelta(days=1)
+    res = make_reservation(
+        booking_type="HOURLY",
+        daily_unit="24h",
+        check_in_datetime=datetime(start.year, start.month, start.day, 14),
+        check_out_datetime=datetime(start.year, start.month, start.day, 14) + timedelta(hours=14),
+        total_amount=PRICES[OLD_ROOM] * 2,
+    )
+    svc = make_service(res, hotel_settings=FULL_DAY)
+    move(svc, res, NEW_ROOM, actor=ADMIN)
+    # Yangi xonada ham to'liq kun: 150k × 2; farq 100k
+    assert res.total_amount == PRICES[NEW_ROOM] * 2
+    entry = res.room_moves[-1]
+    assert entry["price_increase"] == (PRICES[NEW_ROOM] - PRICES[OLD_ROOM]) * 2
 
 
 def test_setting_change_does_not_reprice_existing_bookings():
@@ -239,6 +315,26 @@ def test_checkout_keeps_the_full_day_price():
     result = run_checkout(res, invoice, [SimpleNamespace(line_type="ROOM_CHARGE", total_price=600_000)])
     assert result["total_amount"] == 600_000
     assert res.total_amount == 600_000
+
+
+def test_checkout_hourly_over_half_day_keeps_the_full_day():
+    from datetime import datetime
+
+    start = local_today()
+    res = make_reservation(
+        room_id=NEW_ROOM, status="CHECKED_IN", booking_type="HOURLY", daily_unit="24h",
+        check_in_date=start, check_out_date=start + timedelta(days=1),
+        check_in_datetime=datetime(start.year, start.month, start.day, 14),
+        check_out_datetime=datetime(start.year, start.month, start.day, 14) + timedelta(hours=14),
+        total_amount=300_000, paid_amount=0, reservation_number="R-9",
+    )
+    invoice = SimpleNamespace(
+        id=uuid.uuid4(), subtotal=300_000, discount_amount=0, tax_amount=0,
+        total_amount=300_000, paid_amount=0, status="ISSUED", invoice_number="INV-9",
+    )
+    result = run_checkout(res, invoice, [SimpleNamespace(line_type="ROOM_CHARGE", total_price=300_000)])
+    assert result["total_amount"] == 300_000
+    assert res.total_amount == 300_000
 
 
 def test_checkout_of_half_day_booking_is_unchanged():
@@ -274,3 +370,17 @@ def test_response_field_defaults():
     from app.application.dto.reservation import ReservationResponse
 
     assert ReservationResponse.model_fields["daily_unit"].default == "12h"
+
+
+def test_hourly_full_day_rule_is_wired_through_recalculations():
+    from app.application.services.debt_service import DebtService
+    from app.application.services.finance_service import FinanceService
+
+    assert "hourly_units" in inspect.getsource(ReservationService.move_room)
+    assert "hourly_units" in inspect.getsource(FinanceService.create_invoice)
+    assert "daily_unit=reservation_daily_unit(res)" in inspect.getsource(
+        DebtService._projected_room
+    )
+    assert "daily_unit=reservation_daily_unit(reservation)" in inspect.getsource(
+        ReservationService.check_out
+    )

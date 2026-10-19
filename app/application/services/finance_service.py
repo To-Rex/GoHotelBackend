@@ -116,13 +116,16 @@ class FinanceService:
             base_price = float(room_type.base_price) if room_type else 0
 
         booking_type = getattr(reservation, 'booking_type', None) or "DAILY"
-        # Bronning o'z kunlik hisob rejimi bilan (24 soatlik kunda × 2)
+        # Bronning o'z kunlik hisob rejimi bilan (24 soatlik kunda × 2; soatlik
+        # bronda 12 soatdan oshsa — ikki 12 soatlik birlik)
         from app.application.services.daily_unit import (
+            hourly_units,
             reservation_daily_unit,
             unit_price,
         )
 
-        base_price = unit_price(base_price, booking_type, reservation_daily_unit(reservation))
+        unit = reservation_daily_unit(reservation)
+        base_price = unit_price(base_price, booking_type, unit)
         nights = (reservation.check_out_date - reservation.check_in_date).days
         if nights < 1:
             nights = 1
@@ -135,9 +138,9 @@ class FinanceService:
             hours = delta.total_seconds() / 3600
             if hours < 1:
                 hours = 1
-            # Soatlik bron narxi davomiylikka bog'liq emas — kunlik narx
-            # to'liq olinadi (reservation_service bilan bir xil)
-            room_charge = float(round(base_price))
+            # Soatlik bron narxi davomiylikka bog'liq emas — 12 soatlik birlik
+            # narxi × birliklar soni (reservation_service bilan bir xil)
+            room_charge = float(round(base_price * hourly_units(hours, unit)))
             nights = hours
             duration_label = "hour(s)"
 
@@ -154,7 +157,7 @@ class FinanceService:
         baseline = discount_baseline(getattr(reservation, "room_moves", None))
         if move_discount > 0 and baseline is not None:
             if duration_label == "hour(s)":
-                baseline_charge = float(round(baseline))
+                baseline_charge = float(round(baseline * hourly_units(hours, unit)))
             else:
                 baseline_charge = baseline * max(
                     (reservation.check_out_date - reservation.check_in_date).days, 1

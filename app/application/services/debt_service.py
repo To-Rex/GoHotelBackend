@@ -267,6 +267,7 @@ class DebtService:
         room_charge, duration = await calc._calculate_price(
             price, booking_type, res.check_in_date, res.check_out_date,
             res.check_in_datetime, res.check_out_datetime,
+            daily_unit=reservation_daily_unit(res),
         )
         discount, _ = await calc._compute_discount(
             room_charge, res.discount_amount or 0, res.discount_percent or 0

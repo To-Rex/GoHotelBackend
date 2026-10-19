@@ -13,7 +13,9 @@ keyingi barcha qayta hisoblar (ko'chirish, chiqish, hisob-faktura) shu
 qiymatdan foydalanadi. Ya'ni sozlama keyin o'zgartirilsa ham mavjud bronlar
 narxi o'zgarmaydi; sozlamadan oldin yaratilgan bronlar — ``12h``.
 
-Soatlik bronlarga tegishli emas (koeffitsient doim 1).
+Soatlik bronlar: 12 soatlik rejimda koeffitsient doim 1. 24 soatlik rejimda
+12 soatdan KO'P davom etgan soatlik bron to'liq kun — ikki 12 soatlik birlik
+(narx × 2) hisoblanadi; 12 soat va undan kam — avvalgidek × 1.
 """
 from __future__ import annotations
 
@@ -23,6 +25,9 @@ BOOKING_SETTINGS_KEY = "booking"
 
 #: 24 soatlik kun narxi — 12 soatlik narxning necha barobari
 FULL_DAY_MULTIPLIER = 2
+
+#: 24 soatlik rejimda soatlik bron shu soatdan OSHSA — to'liq kun
+HOURLY_FULL_DAY_HOURS = 12
 
 
 def normalize_daily_unit(value) -> str:
@@ -48,6 +53,21 @@ def daily_multiplier(booking_type: str | None, daily_unit: str | None) -> int:
 def unit_price(base_price: float, booking_type: str | None, daily_unit: str | None) -> float:
     """Bir kecha/kun (yoki soatlik bron) uchun olinadigan narx."""
     return float(base_price or 0) * daily_multiplier(booking_type, daily_unit)
+
+
+def hourly_units(hours: float | None, daily_unit: str | None) -> int:
+    """Soatlik bron uchun 12 soatlik birliklar soni.
+
+    24 soatlik rejimda 12 soatdan ko'p davom etgan bron — to'liq kun, ya'ni
+    ikki 12 soatlik birlik (narx × 2). Qolgan hollarda — 1 (avvalgidek).
+    """
+    if normalize_daily_unit(daily_unit) != "24h":
+        return 1
+    try:
+        value = float(hours or 0)
+    except (TypeError, ValueError):
+        return 1
+    return FULL_DAY_MULTIPLIER if value > HOURLY_FULL_DAY_HOURS else 1
 
 
 def reservation_daily_unit(reservation) -> str:

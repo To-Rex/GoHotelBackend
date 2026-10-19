@@ -303,7 +303,8 @@ Sozlamalar → "Bron va mehmonlar" → "Kunlik bron hisobi"
   1 kecha = xona turi narxi.
 - `24h` — har tanlangan kun to'liq 24 soat va xona narxi 12 soatlik deb
   olinadi: **1 kun = narx × 2** (250 000 so'mlik xona — kuniga 500 000).
-  Soatlik bronlarga tegishli emas.
+  Soatlik bron ham shu rejimda: **12 soatdan ko'p** davom etsa — to'liq kun,
+  ya'ni ikki 12 soatlik birlik (narx × 2); 12 soat va undan kam — × 1.
 - Rejim bron YARATILGANDA unga yoziladi (`reservations.daily_unit`) va
   keyingi barcha qayta hisoblar (xona almashtirish, chiqish, hisob-kitob,
   hisob-faktura) shu qiymat bilan — sozlama o'zgarsa ham mavjud bronlar
