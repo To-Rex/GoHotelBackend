@@ -62,6 +62,12 @@ class Guest(FullMixin, SoftDeleteMixin, Base):
             postgresql_using="gin",
             postgresql_ops={"passport_number": "gin_trgm_ops"},
         ),
+        Index(
+            "ix_guests_trgm_id_document_number",
+            "id_document_number",
+            postgresql_using="gin",
+            postgresql_ops={"id_document_number": "gin_trgm_ops"},
+        ),
     )
 
     hotel_id: Mapped[uuid.UUID] = mapped_column(
