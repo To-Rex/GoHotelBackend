@@ -41,16 +41,22 @@ class GuestRepository(TenantBaseRepository[Guest]):
     async def search(
         self, hotel_id: UUID | None, query: str, skip: int = 0, limit: int = 100
     ) -> list[Guest]:
-        stmt = select(Guest).where(
-            Guest.is_deleted.is_(False),
-            or_(
-                Guest.first_name.ilike(f"%{query}%"),
-                Guest.last_name.ilike(f"%{query}%"),
-                Guest.phone.ilike(f"%{query}%"),
-                Guest.email.ilike(f"%{query}%"),
-                Guest.passport_number.ilike(f"%{query}%"),
-            ),
-        )
+        conditions = [
+            Guest.first_name.ilike(f"%{query}%"),
+            Guest.last_name.ilike(f"%{query}%"),
+            Guest.phone.ilike(f"%{query}%"),
+            Guest.email.ilike(f"%{query}%"),
+            Guest.passport_number.ilike(f"%{query}%"),
+            Guest.id_document_number.ilike(f"%{query}%"),
+        ]
+        digits = re.sub(r"\D", "", query)
+        if len(digits) >= 7:
+            stored = func.regexp_replace(func.coalesce(Guest.phone, ""), r"\D", "", "g")
+            if len(digits) >= 9:
+                conditions.append(func.right(stored, 9) == digits[-9:])
+            else:
+                conditions.append(stored == digits)
+        stmt = select(Guest).where(Guest.is_deleted.is_(False), or_(*conditions))
         if hotel_id is not None:
             stmt = stmt.where(Guest.hotel_id == hotel_id)
         stmt = stmt.order_by(Guest.created_at.desc()).offset(skip).limit(limit)
