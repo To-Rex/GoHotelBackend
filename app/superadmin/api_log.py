@@ -1,7 +1,7 @@
 """So'rovlar jurnali — xotiradagi halqa bufer (oxirgi 500 ta so'rov).
 
 Panel egasi backendga qanday so'rovlar kelayotganini (url, tana, javob,
-holat, davomiylik) jonli ko'rishi uchun. Qoidalar:
+holat, davomiylik, mehmonxona/foydalanuvchi) jonli ko'rishi uchun. Qoidalar:
 
 * **Performansega ta'sir deyarli nol.** Yozish — `deque(maxlen=500)` ga
   O(1) qo'shish. So'rov tanasi faqat KICHIK JSON bo'lgandagina o'qiladi:
@@ -12,6 +12,8 @@ holat, davomiylik) jonli ko'rishi uchun. Qoidalar:
   o'z-o'zidan chiqib ketadi.
 * **Sirlar niqoblanadi.** Parol, token, API kalit kabi maydonlarning
   qiymatlari jurnalga `***` bo'lib tushadi.
+* **Kontekst.** Autentifikatsiya qilingan so'rovda mehmonxona, filial,
+  foydalanuvchi va uning turi ham yoziladi — panel ular bo'yicha filtrlaydi.
 * Jurnalni ko'rish endpointlarining o'zi yozilmaydi — panel ochiq turganda
   jurnal o'z so'rovlari bilan to'lib qolmasin.
 """
@@ -156,6 +158,11 @@ def _record(
     ip: str | None,
     request_body: str | None,
     response_body: str | None,
+    hotel_id: str | None = None,
+    branch_id: str | None = None,
+    user_id: str | None = None,
+    user_type: str | None = None,
+    user_agent: str | None = None,
 ) -> None:
     global _captured_total
     _captured_total += 1
@@ -170,8 +177,24 @@ def _record(
             "ip": ip,
             "request_body": request_body,
             "response_body": response_body,
+            "hotel_id": hotel_id,
+            "branch_id": branch_id,
+            "user_id": user_id,
+            "user_type": user_type,
+            "user_agent": (user_agent or "")[:300] or None,
         }
     )
+
+
+def _context(request: Request) -> dict:
+    """Auth dependency qo'ygan kontekst (mehmonxona/filial/foydalanuvchi)."""
+    ctx = getattr(request.state, "api_log_context", None) or {}
+    return {
+        "hotel_id": ctx.get("hotel_id"),
+        "branch_id": ctx.get("branch_id"),
+        "user_id": ctx.get("user_id"),
+        "user_type": ctx.get("user_type"),
+    }
 
 
 async def middleware(request: Request, call_next):
@@ -183,6 +206,7 @@ async def middleware(request: Request, call_next):
         f"?{request.url.query}" if request.url.query else ""
     )
     ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
 
     try:
         request_body = await _capture_request_body(request)
@@ -202,6 +226,8 @@ async def middleware(request: Request, call_next):
             ip=ip,
             request_body=request_body,
             response_body="<ishlov berilmagan xato>",
+            user_agent=user_agent,
+            **_context(request),
         )
         raise
 
@@ -220,6 +246,8 @@ async def middleware(request: Request, call_next):
         ip=ip,
         request_body=request_body,
         response_body=response_body,
+        user_agent=user_agent,
+        **_context(request),
     )
     return response
 
@@ -229,10 +257,14 @@ def snapshot(
     method: str | None = None,
     status: str | None = None,
     q: str | None = None,
+    hotel_id: str | None = None,
+    sort: str = "ts",
+    order: str = "desc",
 ) -> dict:
-    """Jurnal nusxasi — eng yangi birinchi, ixtiyoriy filtrlar bilan.
+    """Jurnal nusxasi — filtrlar, saralash va eng yangi birinchi.
 
     `status`: "2xx".."5xx" (sinf) yoki aniq kod ("404").
+    `sort`: ts | duration_ms | status | method | path; `order`: asc | desc.
     Avval nusxa olinadi: middleware yozayotgan paytda iteratsiya
     yiqilmasligi uchun.
     """
@@ -252,6 +284,21 @@ def snapshot(
     if q:
         needle = q.lower()
         rows = [r for r in rows if needle in r["path"].lower()]
+    if hotel_id:
+        rows = [r for r in rows if r.get("hotel_id") == hotel_id]
+
+    sort_key = {
+        "ts": "ts",
+        "duration": "duration_ms",
+        "duration_ms": "duration_ms",
+        "status": "status",
+        "method": "method",
+        "path": "path",
+    }.get(sort, "ts")
+    reverse = (order or "desc").lower() != "asc"
+    rows.sort(
+        key=lambda r: (r.get(sort_key) is None, r.get(sort_key)), reverse=reverse
+    )
 
     return {
         "items": rows[:limit],

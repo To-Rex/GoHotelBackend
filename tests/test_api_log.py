@@ -44,10 +44,15 @@ for i in range(600):
         method="GET" if i % 2 == 0 else "POST",
         path=f"/api/v1/test/{i}",
         status=200 if i % 3 else 404,
-        duration_ms=1.0,
+        duration_ms=float(i % 10 + 1),
         ip="127.0.0.1",
         request_body=None,
         response_body=None,
+        hotel_id="h1" if i % 2 == 0 else "h2",
+        branch_id="b1",
+        user_id="u1",
+        user_type="EMPLOYEE",
+        user_agent="test-agent",
     )
 snap = api_log.snapshot()
 check("600 tadan 500 tasi qoldi", len(snap["items"]), 500)
@@ -74,6 +79,19 @@ check(
     True,
 )
 check("limit", len(api_log.snapshot(limit=7)["items"]), 7)
+check(
+    "kompaniya filtri",
+    all(r["hotel_id"] == "h1" for r in api_log.snapshot(hotel_id="h1")["items"]),
+    True,
+)
+durations = [
+    r["duration_ms"] for r in api_log.snapshot(sort="duration_ms", order="asc")["items"]
+]
+check("davomiylik bo'yicha asc", durations == sorted(durations), True)
+statuses = [
+    r["status"] for r in api_log.snapshot(sort="status", order="desc")["items"]
+]
+check("holat bo'yicha desc", statuses == sorted(statuses, reverse=True), True)
 
 print("Yozib olinmaydiganlar:")
 check("OPTIONS", api_log._should_capture("OPTIONS", "/api/v1/rooms"), False)
@@ -112,6 +130,17 @@ async def stream():
     return StreamingResponse(gen(), media_type="application/octet-stream")
 
 
+@test_app.get("/ctx")
+async def ctx(request: Request):
+    request.state.api_log_context = {
+        "hotel_id": "hotel-1",
+        "branch_id": "branch-1",
+        "user_id": "user-1",
+        "user_type": "EMPLOYEE",
+    }
+    return {"ok": True}
+
+
 api_log.clear()
 with TestClient(test_app) as client:
     r = client.post("/echo", json={"value": 42, "password": "Sir!"})
@@ -146,6 +175,21 @@ with TestClient(test_app) as client:
     check(
         "oqim tanasi o'qilmadi",
         (entry["response_body"] or "").startswith("<application/octet-stream"),
+        True,
+    )
+
+    client.get("/ctx")
+    entry = api_log.snapshot(q="/ctx")["items"][0]
+    check("kontekst: hotel", entry["hotel_id"], "hotel-1")
+    check("kontekst: filial", entry["branch_id"], "branch-1")
+    check("kontekst: user", entry["user_id"], "user-1")
+    check("kontekst: tur", entry["user_type"], "EMPLOYEE")
+    check(
+        "kontekst: hotel filtri",
+        all(
+            r["hotel_id"] == "hotel-1"
+            for r in api_log.snapshot(hotel_id="hotel-1")["items"]
+        ),
         True,
     )
 

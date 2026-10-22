@@ -109,6 +109,16 @@ async def get_current_user(
         "device_id": device_id,
     }
 
+    # So'rovlar jurnaliga kontekst: panel mehmonxona/foydalanuvchi bo'yicha
+    # filtrlay olsin. Bu yerga faqat token tekshiruvidan o'tgan so'rov yetadi.
+    request.state.api_log_context = {
+        "hotel_id": str(hotel_id) if hotel_id else None,
+        "branch_id": str(branch_id) if branch_id else None,
+        "user_id": str(current_user["id"]) if current_user.get("id") else None,
+        "user_type": current_user.get("actual_user_type")
+        or current_user.get("user_type"),
+    }
+
     # --- Ish vaqtidan tashqarida xodim ishlamaydi (sozlama yoqilgan bo'lsa) ---
     #
     # Shu yerda, chunki faqat bu nuqta BARCHA autentifikatsiyali so'rovlarni

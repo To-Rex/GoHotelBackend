@@ -821,14 +821,21 @@ async def list_api_logs(
     method: str | None = Query(default=None),
     status: str | None = Query(default=None, description="2xx..5xx yoki aniq kod"),
     q: str | None = Query(default=None, description="URL bo'yicha qidiruv"),
+    hotel_id: str | None = Query(default=None, description="Mehmonxona (kompaniya) ID"),
+    sort: str = Query(default="ts", description="ts | duration_ms | status | method | path"),
+    order: str = Query(default="desc", description="asc | desc"),
     _: PanelUser = Depends(current_panel_user),
 ):
-    """Backendga kelgan so'rovlar — url, tana, javob, holat, davomiylik.
+    """Backendga kelgan so'rovlar — url, tana, javob, holat, davomiylik,
+    mehmonxona/foydalanuvchi konteksti bilan.
 
     Jurnal faqat xotirada: server qayta ko'tarilsa bo'shaydi, 500 tadan
     eskisi o'z-o'zidan chiqib ketadi. Sir maydonlar niqoblangan.
     """
-    return api_log.snapshot(limit=limit, method=method, status=status, q=q)
+    return api_log.snapshot(
+        limit=limit, method=method, status=status, q=q,
+        hotel_id=hotel_id, sort=sort, order=order,
+    )
 
 
 @router.delete("/api-logs")
