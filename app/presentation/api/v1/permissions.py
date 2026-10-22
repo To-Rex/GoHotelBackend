@@ -26,15 +26,25 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
 
 
 # Menejer (EMPLOYEE turi, permission.assign ruxsatiga ega xodim) faqat
-# "Farrosh" va "Texnik xizmat" rollari doirasidagi ruxsatlarni bera/olib
-# tashlay oladi. ADMIN va SUPER_ADMIN uchun cheklov yo'q. Frontenddagi
-# Farrosh + Texnik xizmat shablonlari bilan bir xil to'plam.
+# "Farrosh", "Texnik xizmat" va "Qabulxona xodimi" rollari doirasidagi
+# ruxsatlarni bera/olib tashlay oladi. ADMIN va SUPER_ADMIN uchun cheklov yo'q.
+# Frontenddagi shu uch shablon bilan bir xil to'plam.
 MANAGER_ASSIGNABLE_PATTERNS = (
     "room.view",
     "room.status.update",
     "housekeeping.task.create",
     "housekeeping.task.update",
     "housekeeping.cleaning.*",
+    # Qabulxona xodimi shabloni. `reservation.cancel` ATAYLAB yo'q -
+    # resepshn bronni bekor qila olmaydi, bu huquq menejer/admin bilan qoladi.
+    "reservation.create",
+    "reservation.update",
+    "reservation.view",
+    "guest.*",
+    "service.view",
+    "finance.invoice.create",
+    "finance.payment.create",
+    "feedback.*",
 )
 
 
@@ -52,8 +62,8 @@ def _is_manager_assignable(code: str) -> bool:
 async def _ensure_manager_scope(
     session: AsyncSession, current_user: dict, changed_ids: set[UUID]
 ) -> None:
-    """EMPLOYEE (menejer) o'zgartirayotgan ruxsatlar farrosh to'plamidan
-    tashqariga chiqmasligini tekshiradi. ADMIN/SUPER_ADMIN cheklanmaydi."""
+    """EMPLOYEE (menejer) o'zgartirayotgan ruxsatlar farrosh/texnik/qabulxona
+    to'plamidan tashqariga chiqmasligini tekshiradi. ADMIN/SUPER_ADMIN cheklanmaydi."""
     if current_user["user_type"] in ("SUPER_ADMIN", "ADMIN"):
         return
     if not changed_ids:
@@ -64,8 +74,8 @@ async def _ensure_manager_scope(
     for perm in result.scalars().all():
         if not _is_manager_assignable(perm.code):
             raise ForbiddenException(
-                "Menejer faqat Farrosh va Texnik xizmat rollari doirasidagi "
-                "ruxsatlarni o'zgartira oladi",
+                "Menejer faqat Farrosh, Texnik xizmat va Qabulxona xodimi "
+                "rollari doirasidagi ruxsatlarni o'zgartira oladi",
                 "MANAGER_SCOPE_LIMITED",
             )
 
