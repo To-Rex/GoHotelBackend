@@ -12,7 +12,11 @@ from app.application.services.work_hours_access import assert_within_work_hours
 from app.core.database import get_db
 from app.infrastructure.auth.jwt import decode_token
 from app.infrastructure.database.repositories.user_repo import UserRepository, SessionRepository
-from app.infrastructure.tenant.branch_scope import set_branch_scope
+from app.infrastructure.tenant.branch_scope import (
+    MUTATING_METHODS,
+    acquire_branch_write_lock,
+    set_branch_scope,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 security = HTTPBearer(auto_error=False)
@@ -95,6 +99,17 @@ async def get_current_user(
         None if user_type == "EMPLOYEE" else _safe_uuid(payload.get("branch_id")),
     )
     set_branch_scope(session, hotel_id, branch_id)
+
+    # --- Filial yozuv qulfi: bir xil filialdagi yozuvlar to'qnashmaydi ---
+    #
+    # Bitta filial ichidagi YOZUVCHI so'rovlar bitta tranzaksiya navbatiga
+    # turadi (PostgreSQL advisory lock): ikkita bron/to'lov yozuvi qator
+    # qulflarini teskari tartibda olib, bir-birini kutishi (deadlock)
+    # bo'lmaydi. O'QISH so'rovlari qulflanmaydi — faqat yozuvlar
+    # seriallashadi, navbat esa qisqa tranzaksiyalar uchun sezilmaydi.
+    # Batafsil: app/infrastructure/tenant/branch_scope.py
+    if hotel_id and branch_id and request.method in MUTATING_METHODS:
+        await acquire_branch_write_lock(session, hotel_id, branch_id)
 
     current_user = {
         "id": _safe_uuid(user_id),

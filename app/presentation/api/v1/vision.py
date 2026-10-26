@@ -73,7 +73,11 @@ from app.infrastructure.database.models.guest_face_profile import GuestFaceProfi
 Candidate = aliased(Guest, name="candidate_guest")
 from app.infrastructure.database.models.vision_camera import VisionCamera
 from app.infrastructure.database.models.reservation import Reservation
-from app.infrastructure.tenant.branch_scope import scoped_branch_id, set_branch_scope
+from app.infrastructure.tenant.branch_scope import (
+    acquire_branch_write_lock,
+    scoped_branch_id,
+    set_branch_scope,
+)
 from app.presentation.middleware.auth import get_current_user, require_permission
 
 logger = logging.getLogger(__name__)
@@ -261,6 +265,12 @@ async def _handle_event(
         main = await main_branch(session, device.hotel_id)
         branch_id = main.id if main is not None else None
     set_branch_scope(session, device.hotel_id, branch_id)
+
+    # Kamera yozuvlari shu filial xodimlari yozuvlari bilan bir navbatga
+    # turadi — ko'rinish yozish mehmon profilini yangilash bilan to'qnashib
+    # (deadlock) qolmasin (staff yo'li get_current_user'da qulflanadi).
+    if branch_id is not None:
+        await acquire_branch_write_lock(session, device.hotel_id, branch_id)
 
     if camera is not None and not camera.is_active:
         # O'chirilgan kamera: tokenni bekor qilmasdan bitta kamerani

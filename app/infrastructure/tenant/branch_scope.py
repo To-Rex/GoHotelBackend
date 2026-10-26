@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from typing import Iterator
 from uuid import UUID
 
-from sqlalchemy import event, inspect, or_, select
+from sqlalchemy import event, inspect, or_, select, text
 from sqlalchemy.orm import Session, with_loader_criteria
 
 from app.shared.mixins import BranchScoped, BranchShared
@@ -95,6 +95,57 @@ def scoped_branch_id(session, hotel_id: UUID | None = None) -> UUID | None:
     if hotel_id is not None and str(scope.hotel_id) != str(hotel_id):
         return None
     return scope.branch_id
+
+
+#: Yozuvchi so'rovlar usullari — filial yozuv qulfi shularga olinadi
+MUTATING_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def branch_lock_key(hotel_id: UUID | None, branch_id: UUID | None) -> int | None:
+    """Filial yozuv qulfining deterministik 64 bitli kaliti.
+
+    Bitta filialning barcha yozuvchi so'rovlari bitta kalitga, boshqa
+    filialniki boshqasiga tushadi. Kalit UUID'lardan hosil qilinadi —
+    har doim bir xil, jarayon/qayta ishga tushishga bog'liq emas.
+    """
+    if hotel_id is None:
+        return None
+    base = hotel_id.int
+    if branch_id is not None:
+        base ^= (branch_id.int >> 64) ^ (branch_id.int & ((1 << 64) - 1))
+    # Advisory lock bigint musbat bo'lishi kerak — eng yuqori bitni tashlaymiz
+    return base & 0x7FFFFFFFFFFFFFFF
+
+
+async def acquire_branch_write_lock(session, hotel_id: UUID | None, branch_id: UUID | None) -> bool:
+    """Filialdagi YOZUVCHI so'rovlarni bitta tranzaksiya navbatiga qo'yadi.
+
+    Nega kerak: ikkita yozuvchi so'rov qatorlarni TURLI tartibda qulflasa
+    (masalan, biri xona → kassa hisobi, ikkinchisi kassa hisobi → xona),
+    PostgreSQL bittasini deadlock sifatida yiqitadi. Shu qulf bitta filial
+    ichidagi barcha yozuvlarni seriallashtiradi — ziddiyat uchun "ikki
+    so'rov bir vaqtda" holati o'zi qolmaydi. Qulf tranzaksiya tugashi bilan
+    (commit/rollback) avtomatik bo'shaydi; O'QISH so'rovlari qulflanmaydi
+    va yozuvlar soniyaning kichik ulushida navbatdan o'tadi.
+
+    Fail-safe: PostgreSQL bo'lmasa (masalan, sinov SQLite'i) yoki qulf
+    olinmasa — False qaytadi va so'rov avvalgidek qulfsiz davom etadi
+    (funksionallik saqlanadi, faqat ziddiyatdan himoya qisqaradi).
+    """
+    key = branch_lock_key(hotel_id, branch_id)
+    if key is None:
+        return False
+    dialect = getattr(getattr(session, "bind", None), "dialect", None)
+    if dialect is None or getattr(dialect, "name", "") != "postgresql":
+        return False
+    try:
+        await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+        return True
+    except Exception:  # noqa: BLE001 — qulf hech qachon so'rovni yiqitmasin
+        logger.warning(
+            "Filial yozuv qulfi olinmadi — so'rov qulfsiz davom etadi", exc_info=True
+        )
+        return False
 
 
 @contextmanager

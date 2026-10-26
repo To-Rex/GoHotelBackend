@@ -11,7 +11,13 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.database import _get_engine, check_database, dispose_engine
-from app.core.db_errors import db_unavailable_payload, is_connection_lost, short_error
+from app.core.db_errors import (
+    db_conflict_payload,
+    db_unavailable_payload,
+    is_connection_lost,
+    is_db_conflict,
+    short_error,
+)
 from app.core.exceptions import AppException
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.presentation.api.v1.router import api_router
@@ -106,6 +112,18 @@ async def generic_exception_handler(request: Request, exc: Exception):
             short_error(exc),
         )
         return JSONResponse(status_code=503, content=db_unavailable_payload())
+    # Vaqtinchalik baza ziddiyati (deadlock, ketma-ketlik, blokirovka,
+    # statement timeout) — dastur xatosi emas: ma'lumot o'zgarmadi, qayta
+    # urinish odatda o'tadi. 500 "Internal server error" o'rniga tushunarli
+    # 409 qaytaramiz (masalan, bron yaratish paytida ikki so'rov to'qnashsa).
+    if is_db_conflict(exc):
+        logger.warning(
+            "Baza ziddiyati (%s %s): %s",
+            request.method,
+            request.url.path,
+            short_error(exc),
+        )
+        return JSONResponse(status_code=409, content=db_conflict_payload())
     logger.error(
         "Unhandled exception on %s %s: %s\n%s",
         request.method,

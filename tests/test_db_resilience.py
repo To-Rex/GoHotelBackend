@@ -5,6 +5,7 @@ ulanishni server yopganda so'rovlar 500 INTERNAL_ERROR emas, 503
 DB_UNAVAILABLE bo'lishi kerak; dastur xatolari esa avvalgidek 500 qoladi.
 """
 import asyncio
+import uuid
 from contextlib import asynccontextmanager
 
 import asyncpg.exceptions as pg
@@ -14,10 +15,13 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core import database
 from app.core.db_errors import (
+    DB_CONFLICT_CODE,
     DB_UNAVAILABLE_CODE,
     DatabaseUnavailableError,
+    db_conflict_payload,
     db_unavailable_payload,
     is_connection_lost,
+    is_db_conflict,
     short_error,
 )
 
@@ -91,6 +95,33 @@ class TestIsConnectionLost:
         a.__cause__ = b
         b.__cause__ = a
         assert is_connection_lost(a) is False
+
+
+class TestIsDbConflict:
+    def test_deadlock_serialization_and_lock_are_conflicts(self):
+        assert is_db_conflict(pg.DeadlockDetectedError("deadlock detected")) is True
+        assert is_db_conflict(pg.SerializationError("could not serialize access")) is True
+        assert is_db_conflict(pg.LockNotAvailableError("could not obtain lock")) is True
+
+    def test_statement_timeout_is_a_retryable_conflict(self):
+        """Sekin so'rov yuklama ostida — 500 emas, qayta urinishga chorlov."""
+        assert is_db_conflict(pg.QueryCanceledError("canceling statement due to statement timeout")) is True
+
+    def test_program_and_disconnect_errors_are_not_conflicts(self):
+        assert is_db_conflict(pg.UniqueViolationError("duplicate key")) is False
+        assert is_db_conflict(pg.InterfaceError("connection is closed")) is False
+        assert is_db_conflict(ValueError("x")) is False
+
+    def test_wrapped_sqlalchemy_deadlock_is_found_via_orig(self):
+        """SQLAlchemy asl xatoni `orig`da saqlaydi, `__cause__`da emas."""
+        inner = pg.DeadlockDetectedError("deadlock detected")
+        outer = DBAPIError("INSERT INTO reservations", {}, inner, connection_invalidated=False)
+        assert is_db_conflict(outer) is True
+
+    def test_conflict_payload(self):
+        payload = db_conflict_payload()
+        assert payload["error_code"] == DB_CONFLICT_CODE
+        assert "qaytadan urinib" in payload["detail"]
 
 
 class TestPayload:
@@ -212,3 +243,68 @@ class TestGetDb:
         with pytest.raises(StopAsyncIteration):
             self._run(session, None, monkeypatch)
         assert session.rolled_back == 0
+
+
+# ------------------------------------------------- filial yozuv qulfi -------
+
+
+class TestBranchWriteLock:
+    """Filial yozuv qulfi: bitta filialning yozuvchi so'rovlari bitta
+    tranzaksiya navbatiga turadi — qator qulflarining teskari tartibi
+    (deadlock) holati o'zi qolmaydi."""
+
+    def _session(self, dialect: str, error: BaseException | None = None):
+        from app.infrastructure.tenant.branch_scope import acquire_branch_write_lock
+
+        class _Dialect:
+            name = dialect
+
+        class _Bind:
+            dialect = _Dialect()
+
+        class _Session:
+            bind = _Bind()
+
+            def __init__(self):
+                self.calls = []
+
+            async def execute(self, stmt, params=None):
+                if error is not None:
+                    raise error
+                self.calls.append((str(stmt), params))
+
+        return acquire_branch_write_lock, _Session()
+
+    def test_lock_key_is_deterministic_and_per_branch(self):
+        from app.infrastructure.tenant.branch_scope import branch_lock_key
+
+        hotel, a, b = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        assert branch_lock_key(hotel, a) == branch_lock_key(hotel, a)
+        assert branch_lock_key(hotel, a) != branch_lock_key(hotel, b)
+        assert branch_lock_key(hotel, a) != branch_lock_key(hotel, None)
+        assert branch_lock_key(hotel, None) is not None
+        assert branch_lock_key(None, a) is None
+        assert branch_lock_key(hotel, a) > 0  # bigint musbat bo'lishi kerak
+
+    def test_postgres_takes_the_xact_lock(self):
+        fn, session = self._session("postgresql")
+        assert asyncio.run(fn(session, uuid.uuid4(), uuid.uuid4())) is True
+        assert len(session.calls) == 1
+        assert "pg_advisory_xact_lock" in session.calls[0][0]
+        assert "key" in session.calls[0][1]
+
+    def test_sqlite_skips_the_lock(self):
+        """SQLite (sinov/ishlab chiqish) — qulf chaqirilmaydi, False qaytadi."""
+        fn, session = self._session("sqlite")
+        assert asyncio.run(fn(session, uuid.uuid4(), uuid.uuid4())) is False
+        assert session.calls == []
+
+    def test_no_hotel_no_lock(self):
+        fn, session = self._session("postgresql")
+        assert asyncio.run(fn(session, None, uuid.uuid4())) is False
+        assert session.calls == []
+
+    def test_lock_failure_is_tolerated(self):
+        """Qulf olinmasa so'rov qulfsiz davom etadi — funksionallik buzilmaydi."""
+        fn, session = self._session("postgresql", error=RuntimeError("lock unavailable"))
+        assert asyncio.run(fn(session, uuid.uuid4(), uuid.uuid4())) is False

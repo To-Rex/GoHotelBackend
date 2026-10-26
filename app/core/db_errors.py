@@ -71,13 +71,23 @@ class DatabaseUnavailableError(AppException):
 
 
 def _chain(exc: BaseException) -> Iterator[BaseException]:
-    """Istisno va uning sabablari (`__cause__` / `__context__`), halqasiz."""
+    """Istisno va uning sabablari (`__cause__` / `__context__` / SQLAlchemy
+    `orig`), halqasiz. SQLAlchemy `StatementError` asl DBAPI xatoni `orig`
+    atributida saqlaydi, sabab zanjiriga qo'shmaydi — shuning uchun u ham
+    alohida ko'riladi."""
     seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
+    stack: list[BaseException | None] = [exc]
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
         seen.add(id(current))
         yield current
-        current = current.__cause__ or current.__context__
+        nxt = current.__cause__ or current.__context__
+        orig = getattr(current, "orig", None)
+        for item in (nxt, orig):
+            if isinstance(item, BaseException) and item is not current:
+                stack.append(item)
 
 
 def _raised_in_db_layer(exc: BaseException) -> bool:
@@ -91,9 +101,11 @@ def _raised_in_db_layer(exc: BaseException) -> bool:
 def is_connection_lost(exc: BaseException) -> bool:
     """Istisno bazaga ulanish yo'qolganini bildiradimi.
 
-    Dastur xatolari (IntegrityError, ProgrammingError, statement timeout,
-    SMS/MinIO tarmoq xatolari) uchun False — ular avvalgidek 500 bo'lib
-    qoladi va logda to'liq traceback bilan ko'rinadi.
+    Dastur xatolari (IntegrityError, ProgrammingError, SMS/MinIO tarmoq
+    xatolari) uchun False — ular avvalgidek 500 bo'lib qoladi va logda
+    to'liq traceback bilan ko'rinadi. Vaqtinchalik ziddiyatlar (deadlock,
+    statement timeout va h.k.) uchun ham False: ular ulanish emas,
+    `is_db_conflict` alohida ko'radi.
     """
     for e in _chain(exc):
         if isinstance(e, DBAPIError) and e.connection_invalidated:
@@ -109,6 +121,39 @@ def is_connection_lost(exc: BaseException) -> bool:
         if isinstance(e, (OSError, asyncio.TimeoutError, TimeoutError)) and _raised_in_db_layer(e):
             return True
     return False
+
+
+#: Vaqtinchalik ziddiyatlar — so'rovning o'zi yaroqli, lekin boshqa so'rov
+#: bilan to'qnashdi yoki baza o'sha lahzada o'ta band edi. Ma'lumot O'ZGARMADI
+#: va qayta urinish odatda muvaffaqiyatli o'tadi: 40P01 (deadlock), 40001
+#: (serialization failure), 55P03 (lock not available), 57014 (statement
+#: timeout — sekin so'rov, ko'pincha yuklama ostidagi vaqtinchalik holat).
+_CONFLICT_SQLSTATES = ("40P01", "40001", "55P03", "57014")
+
+DB_CONFLICT_CODE = "DB_CONFLICT"
+DB_CONFLICT_DETAIL = (
+    "Bir vaqtda bajarilgan so'rovlar to'qnashdi — o'zgarishlar saqlanmadi. "
+    "Iltimos, qaytadan urinib ko'ring."
+)
+
+
+def is_db_conflict(exc: BaseException) -> bool:
+    """Istisno vaqtinchalik baza ziddiyatimi (deadlock/ketma-ketlik/blokirovka).
+
+    Dastur xatosi EMAS: ma'lumot o'zgarmadi va qayta urinish odatda o'tadi.
+    Bunday xatolar 500 "Internal server error" o'rniga 409 `DB_CONFLICT`
+    bo'lib qaytadi — foydalanuvchi tushunarli "qaytadan urinib ko'ring"
+    xabarini oladi, logda esa qisqa ogohlantirish qoladi.
+    """
+    for e in _chain(exc):
+        sqlstate = getattr(e, "sqlstate", None) or getattr(e, "pgcode", None)
+        if isinstance(sqlstate, str) and sqlstate in _CONFLICT_SQLSTATES:
+            return True
+    return False
+
+
+def db_conflict_payload() -> dict:
+    return {"detail": DB_CONFLICT_DETAIL, "error_code": DB_CONFLICT_CODE}
 
 
 #: SQLAlchemy o'rami qo'shadigan prefikslar: "(sqlalchemy...Error) " va
