@@ -754,18 +754,23 @@ sanash" saqlanadi). Test: `pytest tests/test_shift_handovers.py`.
 **Kassani topshirishda admin tasdig'i (sozlama).** Sozlamalar → Kassa va
 smena → "Kassani topshirishda admin tasdig'i talab qilinsin" (`PUT
 /shifts/settings`, saqlanadi: `branches.settings["shift"]["handover_approval"]`).
-Yoqilganda xodim kassani topshirgach (yoki smenani tugatgach) sessiya
-`PENDING_HANDOVER` + `pending_approval` ("close_cash"/"end_shift") bilan
-**tasdiq kutadi**: keyingi xodim parol bilan qabul qila olmaydi (409
+Yoqilganda xodim KASSANI TOPSHIRGACH (`POST /shifts/close-cash` — pul
+adminga o'tadi) sessiya `PENDING_HANDOVER` + `pending_approval="close_cash"`
+bilan **tasdiq kutadi**: keyingi xodim parol bilan qabul qila olmaydi (409
 `APPROVAL_REQUIRED`); faqat admin yoki `shift.force_close` egasi
 `POST /shifts/{session_id}/approve` bilan tasdiqlaydi — **shundan keyingina**
 sessiya yopiladi va (kassir ishda davom etsa) yangi kassa 0 so'mdan
 ochiladi. Tasdiq kutilayotganda admin/menejerlarga push boradi; kassirga
-tasdiqlangach xabar ketadi. **Standart — O'CHIQ**: hozirgi oqim (keyingi
-xodim parol bilan qabul qiladi) 100% o'zgarmaydi. Web: kassa panelidagi
-banner va Smenalar sahifasida "Kassani tasdiqlash" tugmasi; mobil: Jamoa →
-Smenalar. Migratsiya `f0e1d2c3b4a5`, test:
-`pytest tests/test_shift_approval.py`.
+tasdiqlangach xabar ketadi. **Smena tugallash (`POST /shifts/end`) tasdiq
+so'ramaydi** — sozlama yoqilgan bo'lsa ham: pul keyingi kassirga o'tadi va
+u paroli bilan qabul qiladi (ilgari bu yerda ham tasdiq so'ralar va tasdiq
+sessiyani butunlay yopib, keyingi xodimni 0 dan boshlatardi — sanalgan pul
+hisobdan chiqib ketardi; eski "end_shift" belgilari `e2a7c4d9b1f6`
+migratsiyasida tozalanadi, tasdiqlansa ham sessiya yopilmaydi).
+**Standart — O'CHIQ**: oddiy oqim (keyingi xodim parol bilan qabul qiladi)
+100% o'zgarmaydi. Web: kassa panelidagi banner va Smenalar sahifasida
+"Kassani tasdiqlash" tugmasi; mobil: Jamoa → Smenalar. Migratsiya
+`f0e1d2c3b4a5`, test: `pytest tests/test_shift_approval.py`.
 
 **Naqdsiz to'lovlar ham smena ko'rsatkichi bo'lib qaytadi (veb).** Ilgari
 smena hisobi faqat naqd bilan ishlardi — karta/online/o'tkazma summalari

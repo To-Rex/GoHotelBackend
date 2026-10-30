@@ -222,7 +222,8 @@ class ShiftService:
             "opening_cash": float(s.opening_cash or 0),
             "continue_after_end": s.continue_after_end,
             "force_closed": s.force_closed,
-            # Tasdiq rejimida topshirilgan sessiya: "close_cash" | "end_shift"
+            # Tasdiq rejimida kassa topshirilgan sessiya: "close_cash"
+            # (smena tugallash tasdiqsiz — None)
             "pending_approval": s.pending_approval,
             "notes": s.notes,
         }
@@ -810,11 +811,13 @@ class ShiftService:
     ) -> dict:
         """Admin/menejer topshirilgan kassani TASDIQLAYDI (tasdiq rejimi).
 
-        Faqat `pending_approval` belgili (topshirilgan) sessiya tasdiqlanadi:
-        sessiya yopiladi (pul kassadan chiqadi), `close_cash` oqimida kassir
-        ishda davom etgan bo'lsa — yangi sessiya 0 so'mdan ochiladi.
-        Tasdiqlovchi `accepted_by` da qoladi (kim tasdiqlagani ko'rinadi),
-        kassirga xabar (push) ketadi.
+        Faqat `close_cash` bilan topshirilgan sessiya tasdiqlanadi: sessiya
+        yopiladi (pul kassadan chiqadi), kassir ishda davom etgani uchun yangi
+        sessiya 0 so'mdan ochiladi. Tasdiqlovchi `accepted_by` da qoladi
+        (kim tasdiqlagani ko'rinadi), kassirga xabar (push) ketadi.
+
+        Smena tugallash (`end_shift`) tasdiq talab qilmaydi — pul keyingi
+        kassirga o'tadi va u paroli bilan qabul qiladi.
         """
         is_admin = current["user_type"] in ("ADMIN", "SUPER_ADMIN")
         has_perm = "shift.force_close" in (current.get("permissions") or [])
@@ -827,7 +830,19 @@ class ShiftService:
         if s.status != "PENDING_HANDOVER" or not s.pending_approval:
             raise ConflictException("Sessiya tasdiq kutmayapti", "SHIFT_NOT_PENDING")
 
-        kind = s.pending_approval
+        if s.pending_approval != "close_cash":
+            # Eski yozuv: ilgari smena tugallanganda ham tasdiq so'ralardi
+            # ("end_shift") va tasdiq sessiyani butunlay yopib, sanalgan pulni
+            # hisobdan chiqarib yuborardi. Endi bunday sessiya YOPILMAYDI —
+            # belgi olib tashlanadi va u oddiy topshirilgan smenaga aylanadi:
+            # keyingi kassir paroli bilan qabul qiladi, pul zanjiri uzilmaydi.
+            s.pending_approval = None
+            await self.session.flush()
+            report = self._serialize(s, include_cash=True)
+            report["accepted_at"] = None
+            report["new_session"] = None
+            return report
+
         approver_id = (
             UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         )
@@ -841,20 +856,18 @@ class ShiftService:
         s.notes = f"{s.notes}\n{note}" if s.notes else note
         await self.session.flush()
 
-        new_s = None
-        if kind == "close_cash":
-            # Kassir ishda davom etgan edi — yangi sessiya 0 dan ochiladi
-            new_s = ShiftSession(
-                hotel_id=s.hotel_id,
-                branch_id=s.branch_id,
-                user_id=s.user_id,
-                status="ACTIVE",
-                started_at=datetime.now(timezone.utc),
-                opening_cash=Decimal("0"),
-                continue_after_end=s.continue_after_end,
-            )
-            self.session.add(new_s)
-            await self.session.flush()
+        # Kassir ishda davom etgan edi — yangi sessiya 0 dan ochiladi
+        new_s = ShiftSession(
+            hotel_id=s.hotel_id,
+            branch_id=s.branch_id,
+            user_id=s.user_id,
+            status="ACTIVE",
+            started_at=datetime.now(timezone.utc),
+            opening_cash=Decimal("0"),
+            continue_after_end=s.continue_after_end,
+        )
+        self.session.add(new_s)
+        await self.session.flush()
 
         # Kassirga xabar (push) — xatosi tasdiqni buzmaydi
         try:
@@ -883,23 +896,19 @@ class ShiftService:
         """Smenani tugallash: kassa yopiladi, sessiya keyingi xodim qabul
         qilishini kutadi (PENDING_HANDOVER).
 
-        Tasdiq rejimi yoqilgan bo'lsa — keyingi xodim emas, admin/menejer
-        tasdiqlaydi (`pending_approval="end_shift"`).
+        Admin tasdig'i BU YERDA SO'RALMAYDI — "Kassani topshirishda admin
+        tasdig'i" sozlamasi yoqilgan bo'lsa ham. Tasdiq faqat pul kassadan
+        chiqib adminga topshirilganda kerak (`close_cash`); smena
+        tugallanganda esa pul keyingi kassirga o'tadi va u o'z paroli bilan
+        qabul qiladi (to'rt ko'z tamoyili). Ilgari bu yerda ham tasdiq
+        so'ralar edi va tasdiqlangach sessiya butunlay yopilib, keyingi
+        xodim kassani 0 dan boshlardi — sanalgan pul hisobdan chiqib ketardi.
         """
         user_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         s = await self._my_active(hotel_id, user_id)
-        settings = await self.get_settings(hotel_id)
         await self._close_with_count(s, counted_cash, notes, user_id)
         s.status = "PENDING_HANDOVER"
-        if settings.get("handover_approval"):
-            s.pending_approval = "end_shift"
         await self.session.flush()
-        if s.pending_approval:
-            await self._notify_approvers(
-                s,
-                "Smena tugallandi — tasdiq kutilmoqda",
-                await self._approval_body(s, user_id, counted_cash),
-            )
         breakdown = await self.cash_breakdown(s)
         report = self._serialize(s, include_cash=True)
         report["methods"] = breakdown["methods"]
@@ -941,8 +950,11 @@ class ShiftService:
         )
         if not pending:
             raise NotFoundException("Qabul qilinadigan smena topilmadi", "NO_PENDING_SHIFT")
-        if pending.pending_approval:
-            # Tasdiq rejimi: keyingi xodim emas, admin/menejer tasdiqlaydi
+        if pending.pending_approval == "close_cash":
+            # Tasdiq rejimi: pul adminga topshirilgan — keyingi xodim emas,
+            # admin/menejer tasdiqlaydi. Boshqa belgi (eski "end_shift")
+            # to'smaydi: smena tugallash endi tasdiqsiz, pul shu yerda
+            # qabul qilinadi.
             raise ConflictException(
                 "Kassa admin/menejer tasdig'ini kutmoqda — tasdiqlangach qabul qilinadi",
                 "APPROVAL_REQUIRED",
@@ -1193,7 +1205,7 @@ class ShiftService:
                 "cash_diff": diff,
                 "force_closed": bool(s.force_closed),
                 "corrected": bool(s.corrections),
-                # Tasdiq rejimida: "close_cash" | "end_shift" (aks holda None)
+                # Tasdiq rejimida kassa topshirilgan: "close_cash" (aks holda None)
                 "pending_approval": s.pending_approval,
                 "notes": s.notes,
                 "received_session_id": str(receiver.id) if receiver else None,

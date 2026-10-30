@@ -1,9 +1,15 @@
 """Kassa topshirilishida admin/menejer tasdig'i (sozlama bilan).
 
-Yoqilganda: xodim topshiradi -> sessiya PENDING_HANDOVER + `pending_approval`
-bilan TASDIQ kutadi; keyingi xodim parol bilan qabul qila olmaydi; admin/
-menejer tasdiqlagach sessiya yopiladi va (kassir ishda davom etsa) yangi
-kassa 0 so'mdan ochiladi. Sozlama O'CHIQ bo'lsa — hozirgi oqim 100% o'zgarmaydi.
+Yoqilganda: xodim KASSANI TOPSHIRADI (`close_cash`) -> sessiya
+PENDING_HANDOVER + `pending_approval` bilan TASDIQ kutadi; keyingi xodim
+parol bilan qabul qila olmaydi; admin/menejer tasdiqlagach sessiya yopiladi
+va (kassir ishda davom etsa) yangi kassa 0 so'mdan ochiladi.
+
+SMENA TUGALLASH (`end_shift`) esa sozlama yoqilgan bo'lsa ham tasdiq
+so'ramaydi: pul keyingi kassirga o'tadi va u paroli bilan qabul qiladi.
+Ilgari bu yerda ham tasdiq so'ralar va tasdiq sessiyani butunlay yopib,
+keyingi xodimni 0 dan boshlatardi — sanalgan pul hisobdan chiqib ketardi.
+Sozlama O'CHIQ bo'lsa — oddiy oqim 100% o'zgarmaydi.
 
 Bazasiz: sessiya o'rinbosarlari bilan.
 """
@@ -210,7 +216,9 @@ def test_close_cash_without_approval_keeps_current_flow(monkeypatch):
     assert approvals == []
 
 
-def test_end_shift_with_approval_marks_pending(monkeypatch):
+def test_end_shift_never_asks_for_approval_even_when_enabled(monkeypatch):
+    """Smena tugallash — sozlama yoqilgan bo'lsa ham oddiy topshirish:
+    keyingi kassir paroli bilan qabul qiladi, admin/menejerga so'rov ketmaydi."""
     s = make_session(user=DILNOZA)
     svc, approvals = make_service(
         monkeypatch, settings={"handover_approval": True}, s=s
@@ -219,9 +227,10 @@ def test_end_shift_with_approval_marks_pending(monkeypatch):
     report = asyncio.run(svc.end_shift(HOTEL, {"id": str(DILNOZA)}, 150000.0))
 
     assert s.status == "PENDING_HANDOVER"
-    assert s.pending_approval == "end_shift"
-    assert report["pending_approval"] == "end_shift"
-    assert approvals and "tasdiq" in approvals[0][0]
+    assert s.pending_approval is None
+    assert report["pending_approval"] is None
+    assert float(s.counted_cash) == 150000.0
+    assert approvals == []
 
 
 def test_end_shift_without_approval_unchanged(monkeypatch):
@@ -250,7 +259,7 @@ def _accept_service(monkeypatch, pending, user_obj):
 
 
 def test_accept_blocked_while_approval_pending(monkeypatch):
-    pending = make_session(user=DILNOZA, status="PENDING_HANDOVER", pending_approval="end_shift")
+    pending = make_session(user=DILNOZA, status="PENDING_HANDOVER", pending_approval="close_cash")
     pending.counted_cash = Decimal("150000")
     user_obj = SimpleNamespace(id=AZIZ, password_hash="x", first_name="Aziz", last_name="K")
     svc = _accept_service(monkeypatch, pending, user_obj)
@@ -260,6 +269,22 @@ def test_accept_blocked_while_approval_pending(monkeypatch):
 
     assert exc.value.error_code == "APPROVAL_REQUIRED"
     assert pending.status == "PENDING_HANDOVER"
+
+
+def test_accept_works_for_legacy_end_shift_flag(monkeypatch):
+    """Yangilanishdan oldin tugallangan smena (`end_shift` belgisi bilan)
+    tasdiqni kutib qolmaydi — keyingi kassir uni oddiy qabul qiladi va
+    sanalgan pul uning boshlang'ich kassasi bo'ladi."""
+    pending = make_session(user=DILNOZA, status="PENDING_HANDOVER", pending_approval="end_shift")
+    pending.counted_cash = Decimal("150000")
+    user_obj = SimpleNamespace(id=AZIZ, password_hash="x", first_name="Aziz", last_name="K")
+    svc = _accept_service(monkeypatch, pending, user_obj)
+
+    asyncio.run(svc.accept_shift(HOTEL, {"id": str(AZIZ)}, "parol"))
+
+    assert pending.status == "CLOSED"
+    assert pending.accepted_by == AZIZ
+    assert float(svc.session.added[0].opening_cash) == 150000.0
 
 
 def test_accept_still_works_when_approval_not_required(monkeypatch):
@@ -330,7 +355,10 @@ def test_approve_close_cash_opens_new_zero_session(monkeypatch):
     assert "tasdiqlandi" in notified[0]["title"].lower()
 
 
-def test_approve_end_shift_does_not_open_new_session(monkeypatch):
+def test_approve_legacy_end_shift_keeps_handover_open(monkeypatch):
+    """Eski `end_shift` belgisi tasdiqlansa sessiya YOPILMAYDI (pul hisobdan
+    chiqib ketmasin): belgi olinadi, smena keyingi kassir qabul qilishini
+    kutaveradi; yangi sessiya ham ochilmaydi, kassirga xabar ham ketmaydi."""
     s = make_session(status="PENDING_HANDOVER", pending_approval="end_shift")
     s.counted_cash = Decimal("150000")
     s.expected_cash = Decimal("150000")
@@ -340,8 +368,11 @@ def test_approve_end_shift_does_not_open_new_session(monkeypatch):
 
     report = asyncio.run(svc.approve_handover(HOTEL, MANAGER, s.id))
 
-    assert s.status == "CLOSED"
-    assert s.accepted_by is not None
+    assert s.status == "PENDING_HANDOVER"
+    assert s.pending_approval is None
+    assert s.accepted_by is None and s.accepted_at is None
     assert svc.session.added == []
+    assert report["pending_approval"] is None
     assert report["new_session"] is None
-    assert notified and notified[0]["user_id"] == s.user_id
+    assert float(report["counted_cash"]) == 150000.0
+    assert notified == []
