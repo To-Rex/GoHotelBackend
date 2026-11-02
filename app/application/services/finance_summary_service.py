@@ -21,7 +21,7 @@ o'zgarmasligi kerak, faqat qayerda hisoblangani o'zgardi.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, timedelta
 from uuid import UUID
 
 from sqlalchemy import case, func, select
@@ -32,6 +32,7 @@ from app.infrastructure.database.models.invoice import Invoice
 from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.shop import ShopSale, ShopSalePayment
 from app.infrastructure.database.models.user import User
+from app.shared.utils import local_date_of, local_day_bounds
 
 #: Bekor qilingan va qaytarilgan hujjatlar qarzdorlikka kirmaydi —
 #: ular bo'yicha olinadigan pul qolmagan.
@@ -194,10 +195,12 @@ class FinanceSummaryService:
         )
         if hotel_id is not None:
             shop = shop.where(ShopSalePayment.hotel_id == hotel_id)
-        if date_from:
-            shop = shop.where(ShopSalePayment.paid_at >= datetime.combine(date_from, time.min))
-        if date_to:
-            shop = shop.where(ShopSalePayment.paid_at <= datetime.combine(date_to, time.max))
+        # Kun chegarasi MAHALLIY (UTC yarim tun emas) — build va daily bilan bir xil
+        shop_from, shop_to = local_day_bounds(date_from, date_to)
+        if shop_from:
+            shop = shop.where(ShopSalePayment.paid_at >= shop_from)
+        if shop_to:
+            shop = shop.where(ShopSalePayment.paid_at < shop_to)
         sales_by_user: dict = {}
         for user_id, sale_id, amount, pay_method in (await self.session.execute(shop)).all():
             r = row(user_id)
@@ -334,20 +337,20 @@ class FinanceSummaryService:
             if row is not None:
                 row["expense"] += _num(total)
 
-        # Do'kon — har TO'LOV o'z kuniga (qisman to'lovlar ham)
-        paid_day = func.date(ShopSalePayment.paid_at)
-        shop = select(paid_day, func.coalesce(func.sum(ShopSalePayment.amount), 0)).where(
-            ShopSalePayment.paid_at >= datetime.combine(date_from, time.min),
-            ShopSalePayment.paid_at <= datetime.combine(date_to, time.max),
+        # Do'kon — har TO'LOV o'z MAHALLIY kuniga (qisman to'lovlar ham).
+        # Kun bazada emas, shu yerda aniqlanadi: `func.date(paid_at)` UTC
+        # kunini berardi va tungi 00:00–05:00 dagi savdo kechaga tushardi.
+        shop_from, shop_to = local_day_bounds(date_from, date_to)
+        shop = select(ShopSalePayment.paid_at, ShopSalePayment.amount).where(
+            ShopSalePayment.paid_at >= shop_from,
+            ShopSalePayment.paid_at < shop_to,
         )
         if hotel_id is not None:
             shop = shop.where(ShopSalePayment.hotel_id == hotel_id)
-        for day, total in (await self.session.execute(shop.group_by(paid_day))).all():
-            if isinstance(day, datetime):
-                day = day.date()
-            row = days.get(day)
+        for paid_at, amount in (await self.session.execute(shop)).all():
+            row = days.get(local_date_of(paid_at))
             if row is not None:
-                row["shop"] += _num(total)
+                row["shop"] += _num(amount)
 
         return list(days.values())
 
@@ -521,10 +524,14 @@ class FinanceSummaryService:
         )
         if hotel_id is not None:
             paid = paid.where(ShopSalePayment.hotel_id == hotel_id)
-        if date_from:
-            paid = paid.where(ShopSalePayment.paid_at >= datetime.combine(date_from, time.min))
-        if date_to:
-            paid = paid.where(ShopSalePayment.paid_at <= datetime.combine(date_to, time.max))
+        # Kun chegarasi MAHALLIY: to'lovlar `payment_date` (sana) bilan
+        # filtrlanadi, do'kon esa vaqt belgisi bilan — ikkalasi bir kunni
+        # anglatishi uchun UTC yarim tun emas, mahalliy yarim tun olinadi
+        shop_from, shop_to = local_day_bounds(date_from, date_to)
+        if shop_from:
+            paid = paid.where(ShopSalePayment.paid_at >= shop_from)
+        if shop_to:
+            paid = paid.where(ShopSalePayment.paid_at < shop_to)
 
         revenue = 0.0
         sale_ids: set = set()

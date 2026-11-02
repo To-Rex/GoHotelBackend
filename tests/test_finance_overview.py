@@ -55,8 +55,14 @@ def test_daily_series_is_zero_filled_and_grouped():
     session = DailySession(
         payments=[(d1, Decimal("500000"), 3, Decimal("0")), (d3, Decimal("-50000"), 1, Decimal("50000"))],
         expenses=[(d2, Decimal("120000"))],
-        # func.date() natijasi date yoki datetime bo'lishi mumkin
-        shop=[(datetime(2026, 10, 1, tzinfo=timezone.utc), Decimal("30000")), (d3, Decimal("10000"))],
+        # Do'kon: har to'lovning `paid_at` vaqti (UTC) keladi, kuni MAHALLIY
+        # aniqlanadi. 2-oktabr 20:30 UTC = 3-oktabr 01:30 Toshkent — tungi
+        # savdo 3-oktabrga tushadi (ilgari func.date() UTC bo'yicha "kecha"ga
+        # yozardi). Zonasiz vaqt (SQLite) UTC deb olinadi.
+        shop=[
+            (datetime(2026, 10, 1, 10, 0, tzinfo=timezone.utc), Decimal("30000")),
+            (datetime(2026, 10, 2, 20, 30), Decimal("10000")),
+        ],
     )
     days = asyncio.run(FinanceSummaryService(session).daily(HOTEL, d1, d3))
     assert [d["date"] for d in days] == ["2026-10-01", "2026-10-02", "2026-10-03"]

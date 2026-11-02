@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.shared.utils import hotel_today
 
 logger = logging.getLogger(__name__)
 from app.core.exceptions import (
@@ -267,8 +268,8 @@ class ReservationService:
             reservation_id=reservation_id,
             guest_id=guest_id,
             invoice_number=invoice_number,
-            invoice_date=date.today(),
-            due_date=date.today() + timedelta(days=7),
+            invoice_date=hotel_today(),
+            due_date=hotel_today() + timedelta(days=7),
             subtotal=room_charge,
             tax_amount=0,
             discount_amount=discount_amount,
@@ -311,7 +312,8 @@ class ReservationService:
             payment_number=payment_number,
             amount=amount,
             payment_method=payment_method,
-            payment_date=date.today(),
+            # MAHALLIY bugun: server UTC da, tungi to'lov kechaga tushmasin
+            payment_date=hotel_today(),
             notes=notes,
             created_by=created_by,
             created_at=datetime.now(timezone.utc),
@@ -432,9 +434,7 @@ class ReservationService:
             raise NotFoundException("Room not found", "ROOM_NOT_FOUND")
         booking_type = reservation.booking_type or "DAILY"
         now_utc = datetime.now(timezone.utc)
-        local_today = (
-            now_utc + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
-        ).date()
+        local_today = hotel_today(now_utc)
 
         # Yangi xona holati bu bronni qabul qila oladimi. Ko'chirishda
         # mehmon odatda darhol kiradi, shuning uchun tozalanayotgan xona ham
@@ -795,7 +795,7 @@ class ReservationService:
                 # qaytarim sifatida avtomatik aks etadi
                 amount=-amount,
                 payment_method=payment_method,
-                payment_date=date.today(),
+                payment_date=hotel_today(),
                 notes="Qaytarim (xona almashtirish balansi)",
                 created_by=user_id,
                 created_at=datetime.now(timezone.utc),
@@ -834,10 +834,7 @@ class ReservationService:
         xonani hozirdan band qilmasligi kerak (mavjud qoida).
         Og'irroq ish ustun: ta'mir > tekshiruv > tozalash.
         """
-        local_today = (
-            datetime.now(timezone.utc)
-            + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
-        ).date()
+        local_today = hotel_today()
         rows = (
             await self.session.execute(
                 select(HousekeepingTask.task_type, HousekeepingTask.scheduled_date)
@@ -960,9 +957,7 @@ class ReservationService:
         # O'tgan sanaga bron qilib bo'lmaydi (bugun mumkin). Sana mahalliy
         # vaqt bo'yicha aniqlanadi — server UTC da ishlaydi, tungi soatlarda
         # date.today() mahalliy kundan bir kun orqada bo'lib qolmasligi uchun.
-        local_today = (
-            datetime.now(timezone.utc) + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
-        ).date()
+        local_today = hotel_today()
         if check_in < local_today:
             raise ValidationException(
                 "Cannot create a reservation for a past date",
@@ -1697,9 +1692,7 @@ class ReservationService:
         # Mahalliy sana bo'yicha tekshiramiz — server UTC da ishlaydi va tungi
         # 00:00-05:00 (mahalliy) oralig'ida date.today() hali "kecha"da bo'lib,
         # bugungi mehmonni check-in qilishga to'sqinlik qilardi.
-        today = (
-            datetime.now(timezone.utc) + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
-        ).date()
+        today = hotel_today()
         if reservation.check_in_date > today:
             raise ValidationException(
                 f"Check-in date is {reservation.check_in_date}, not yet arrived",
@@ -1770,7 +1763,7 @@ class ReservationService:
             priority="HIGH",
             assigned_to=assigned_to,
             notes=f"Auto-created cleaning for reservation {reservation.reservation_number}",
-            scheduled_date=date.today(),
+            scheduled_date=hotel_today(),
             created_by=created_by,
         )
         self.session.add(task)
@@ -1887,8 +1880,8 @@ class ReservationService:
                 reservation_id=reservation_id,
                 guest_id=reservation.guest_id,
                 invoice_number=invoice_number,
-                invoice_date=date.today(),
-                due_date=date.today() + timedelta(days=7),
+                invoice_date=hotel_today(),
+                due_date=hotel_today() + timedelta(days=7),
                 subtotal=room_charge,
                 tax_amount=0,
                 discount_amount=discount_amount,
@@ -2106,7 +2099,7 @@ class ReservationService:
                     # qaytarim sifatida avtomatik aks etadi
                     amount=-refund,
                     payment_method=refund_method or "CASH",
-                    payment_date=date.today(),
+                    payment_date=hotel_today(),
                     notes=refund_note,
                     created_by=user_id,
                     created_at=datetime.now(timezone.utc),
@@ -2420,7 +2413,7 @@ class ReservationService:
             raise NotFoundException("Hotel service not found", "HOTEL_SERVICE_NOT_FOUND")
 
         quantity = data.get("quantity", 1)
-        service_date_val = data.get("service_date") or date.today()
+        service_date_val = data.get("service_date") or hotel_today()
         unit_price = float(hotel_service.price)
         notes = data.get("notes")
 

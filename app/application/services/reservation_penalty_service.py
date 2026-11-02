@@ -28,6 +28,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.shared.utils import hotel_today
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem
@@ -316,7 +317,8 @@ class ReservationPenaltyService:
             kind=kind,
             amount=value,
             note=clean_note,
-            penalty_date=date.today(),
+            # MAHALLIY bugun: server UTC da, tungi jarima kechaga tushmasin
+            penalty_date=hotel_today(),
             created_by=user_id,
             created_at=datetime.now(timezone.utc),
         )

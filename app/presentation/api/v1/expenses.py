@@ -20,6 +20,7 @@ from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.user import User
 from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel, require_open_shift
+from app.shared.utils import hotel_today
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -121,7 +122,9 @@ async def create_expense(
         category=(data.category or "").strip() or None,
         amount=data.amount,
         payment_method=data.payment_method,
-        expense_date=data.expense_date or date.today(),
+        # Sana berilmasa MAHALLIY bugun (server UTC da — tunda date.today()
+        # kechagi sanani berardi)
+        expense_date=data.expense_date or hotel_today(),
         notes=data.notes,
         created_by=current_user["id"],
     )

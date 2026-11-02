@@ -26,7 +26,7 @@ from app.application.services.move_discount_policy import (
     clamp_move_discount,
     discount_baseline,
 )
-from app.shared.utils import generate_code
+from app.shared.utils import generate_code, hotel_today
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +175,8 @@ class FinanceService:
             reservation_id=reservation_id,
             guest_id=guest_id,
             invoice_number=invoice_number,
-            invoice_date=date.today(),
-            due_date=date.today() + timedelta(days=7),
+            invoice_date=hotel_today(),
+            due_date=hotel_today() + timedelta(days=7),
             subtotal=room_charge,
             tax_amount=0,
             discount_amount=discount,
@@ -352,7 +352,9 @@ class FinanceService:
             payment_number=payment_number,
             amount=amount,
             payment_method=data["payment_method"],
-            payment_date=data.get("payment_date") or date.today(),
+            # Sana berilmasa MAHALLIY bugun (server UTC da — tunda date.today()
+            # kechagi sanani berardi va to'lov kechagi hisobotga tushardi)
+            payment_date=data.get("payment_date") or hotel_today(),
             reference=data.get("reference"),
             notes=data.get("notes"),
             created_by=created_by,
@@ -630,7 +632,7 @@ class FinanceService:
         entry = JournalEntry(
             hotel_id=hotel_id,
             entry_number=entry_number,
-            entry_date=data.get("entry_date", date.today()),
+            entry_date=data.get("entry_date", hotel_today()),
             reference_type=data.get("reference_type"),
             reference_id=data.get("reference_id"),
             description=data.get("description"),

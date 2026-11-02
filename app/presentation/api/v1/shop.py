@@ -10,7 +10,7 @@ Qoidalar:
 - Sotuv bronga biriktirilsa PENDING (to'lov keyin, odatda chiqishda) bo'ladi;
   oddiy sotuv darhol PAID.
 """
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.configurator_access import assert_can_manage_settings
 from app.core.database import get_db
+from app.shared.utils import local_day_bounds
 from app.core.exceptions import (
     ConflictException,
     ForbiddenException,
@@ -527,10 +528,13 @@ async def list_sales(
 
     date_col = ShopSale.paid_at if date_by == "paid" else ShopSale.created_at
     conditions = [ShopSale.hotel_id == h_id]
-    if date_from:
-        conditions.append(date_col >= datetime.combine(date_from, time.min))
-    if date_to:
-        conditions.append(date_col <= datetime.combine(date_to, time.max))
+    # Kun chegarasi MAHALLIY (APP_TZ_OFFSET_MINUTES): UTC yarim tun olinsa
+    # tungi 00:00–05:00 dagi savdo "kecha"ga tushib qolardi
+    day_start, day_end = local_day_bounds(date_from, date_to)
+    if day_start:
+        conditions.append(date_col >= day_start)
+    if day_end:
+        conditions.append(date_col < day_end)
     if status:
         conditions.append(ShopSale.status == status)
     text = (search or "").strip()
