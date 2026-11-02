@@ -24,7 +24,7 @@ import math
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -32,6 +32,7 @@ from app.shared.utils import hotel_today
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.invoice import Invoice, InvoiceLineItem
+from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.reservation_penalty import ReservationPenalty
 from app.infrastructure.database.models.room import Room
@@ -466,7 +467,8 @@ class ReservationPenaltyService:
 
 
 async def penalty_totals(session: AsyncSession, hotel_id: UUID | None, date_from, date_to) -> dict:
-    """Moliya yig'masi uchun: davrdagi faol jarimalar summasi va soni."""
+    """Moliya yig'masi uchun: davrda YOZILGAN faol jarimalar summasi va soni,
+    hamda davrda jarima uchun OLINGAN pul (`penalty_paid`, pastga qarang)."""
     stmt = select(
         func.coalesce(func.sum(ReservationPenalty.amount), 0),
         func.count(ReservationPenalty.id),
@@ -478,4 +480,78 @@ async def penalty_totals(session: AsyncSession, hotel_id: UUID | None, date_from
     if date_to:
         stmt = stmt.where(ReservationPenalty.penalty_date <= date_to)
     total, count = (await session.execute(stmt)).one()
-    return {"penalty_total": float(total or 0), "penalty_count": int(count or 0)}
+    paid = await penalty_paid(session, hotel_id, date_from, date_to)
+    return {
+        "penalty_total": float(total or 0),
+        "penalty_count": int(count or 0),
+        "penalty_paid": paid,
+    }
+
+
+async def penalty_paid(session: AsyncSession, hotel_id: UUID | None, date_from, date_to) -> float:
+    """Davrda jarima uchun OLINGAN pul.
+
+    To'lov hisob-fakturaga yoziladi, uning qatorlariga emas — shuning uchun
+    jarima uchun qancha olingani qoida bilan ajratiladi: to'lovlar avval
+    asosiy summani (xona, xizmatlar) yopadi, jarima OXIRIDA. Bu hayotga mos:
+    jarima odatda yashash tugagach yoziladi va alohida to'lanadi. Har
+    PENALTY qatori bor hisob-faktura bo'yicha:
+
+        yopilgan(t) = clamp(t gacha to'langan − (jami − jarima), 0, jarima)
+        davrda olingan = yopilgan(davr oxiri) − yopilgan(davr boshigacha)
+
+    Qaytarim (manfiy to'lov) yig'indini kamaytiradi — o'zi hisobga kiradi.
+    Bekor qilingan jarimaning qatori o'chiriladi, demak faqat faollari sanaladi.
+
+    MUHIM: bu pul moliya yig'masidagi `income` ichida ALLAQACHON bor (oddiy
+    bron to'lovi). Sahifa uni "shu jumladan jarimalar" deb ajratib
+    ko'rsatadi, sof natijaga QO'SHMAYDI — aks holda ikki marta sanalardi.
+    """
+    lines = (
+        select(
+            Invoice.id,
+            Invoice.total_amount,
+            func.coalesce(func.sum(InvoiceLineItem.total_price), 0),
+        )
+        .join(InvoiceLineItem, InvoiceLineItem.invoice_id == Invoice.id)
+        .where(InvoiceLineItem.line_type == PENALTY_LINE_TYPE)
+        .group_by(Invoice.id, Invoice.total_amount)
+    )
+    if hotel_id is not None:
+        lines = lines.where(Invoice.hotel_id == hotel_id)
+    invoices = {
+        row[0]: (float(row[1] or 0), float(row[2] or 0))
+        for row in (await session.execute(lines)).all()
+    }
+    if not invoices:
+        return 0.0
+
+    # Davr boshigacha va davr oxirigacha yig'ilgan to'lov — bitta so'rovda
+    before = (
+        func.coalesce(func.sum(case((Payment.payment_date < date_from, Payment.amount), else_=0)), 0)
+        if date_from
+        else literal(0)
+    )
+    through = (
+        func.coalesce(func.sum(case((Payment.payment_date <= date_to, Payment.amount), else_=0)), 0)
+        if date_to
+        else func.coalesce(func.sum(Payment.amount), 0)
+    )
+    pay = (
+        select(Payment.invoice_id, before, through)
+        .where(Payment.invoice_id.in_(list(invoices)))
+        .group_by(Payment.invoice_id)
+    )
+
+    received = 0.0
+    for invoice_id, cum_before, cum_through in (await session.execute(pay)).all():
+        total, penalty = invoices.get(invoice_id, (0.0, 0.0))
+        if penalty <= 0:
+            continue
+        base = max(total - penalty, 0.0)
+
+        def covered(cumulative) -> float:
+            return min(max(float(cumulative or 0) - base, 0.0), penalty)
+
+        received += covered(cum_through) - covered(cum_before)
+    return round(max(received, 0.0), 2)

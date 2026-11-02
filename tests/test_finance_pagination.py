@@ -229,6 +229,9 @@ labels = [
     "do'kon qarzi",
     # Davrdagi faol jarimalar (kech chiqish, shikast) — yangi so'rov
     "jarimalar yig'indisi",
+    # Jarima uchun OLINGAN pul: PENALTY qatorli hisob-fakturalar (bo'sh
+    # qaytsa to'lovlar so'ralmaydi — bu yerda shunday)
+    "jarima qatorli hisob-fakturalar",
 ]
 check("so'rovlar soni", len(session.statements), len(labels))
 sql = " | ".join(
@@ -265,7 +268,7 @@ for key in (
     "invoice_total", "invoice_discount", "invoice_paid", "invoice_count", "debt",
     "expense_total", "expense_count", "expense_categories",
     "shop_revenue", "shop_paid_count", "shop_debt", "shop_debt_count",
-    "methods", "penalty_total", "penalty_count",
+    "methods", "penalty_total", "penalty_count", "penalty_paid",
 ):
     check(f"maydon bor: {key}", key in result, True)
 
