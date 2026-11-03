@@ -4,7 +4,9 @@ from datetime import date, datetime, time, timedelta, timezone
 
 
 def generate_code(prefix: str, hotel_code: str) -> str:
-    today = date.today().strftime("%Y%m%d")
+    # Raqamdagi sana ham mahalliy kun: tungi to'lov raqami (PAY-...-YYYYMMDD-)
+    # hujjat sanasi bilan bir xil kunni ko'rsatsin
+    today = hotel_today().strftime("%Y%m%d")
     suffix = "".join(
         secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4)
     )

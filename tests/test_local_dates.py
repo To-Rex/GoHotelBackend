@@ -81,3 +81,39 @@ def test_no_business_date_is_stamped_with_server_today():
         ):
             offenders.append(f"{path.relative_to(root)}: {match.group(0).strip()}")
     assert offenders == [], "\n".join(offenders)
+
+
+def test_server_today_is_not_used_outside_allowlist():
+    """`date.today()` (server UTC kuni) ilovada umuman qolmasin — hujjat
+    raqami, sana, muddat: hammasi `hotel_today()` orqali. Istisno — hujjat
+    amal qilish muddatini tekshiruvchi OCR (bir necha soat farqi ahamiyatsiz)
+    va `hotel_today` ning o'zi haqidagi izohlar."""
+    root = Path(__file__).resolve().parents[1] / "app"
+    allowed = {
+        "application/services/document_ocr/verify.py",
+        "application/services/document_ocr/mrz.py",
+        "shared/utils.py",  # faqat izoh/hujjatlashda tilga olinadi
+    }
+    offenders = []
+    for path in root.rglob("*.py"):
+        rel = path.relative_to(root).as_posix()
+        if rel in allowed:
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            # Izoh va backtick ichidagi eslatma (`date.today()` haqidagi izoh) kod emas
+            code = re.sub(r"`[^`]*`", "", line.split("#", 1)[0])
+            if re.search(r"\bdate\.today\(\)|\butcnow\(\)\.date\(\)|\bdatetime\.now\([^)]*\)\.date\(\)", code):
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    assert offenders == [], "\n".join(offenders)
+
+
+def test_utils_only_mentions_server_today_in_prose():
+    """`shared/utils.py` da `date.today()` kod sifatida emas, faqat izohda."""
+    path = Path(__file__).resolve().parents[1] / "app" / "shared" / "utils.py"
+    code_lines = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "date.today()" in line.split("#", 1)[0] and not line.strip().startswith(("#", "*", '"""'))
+    ]
+    # docstring ichidagi qatorlar: `hotel_today` izohi ("`date.today()` emas")
+    assert all("`date.today()`" in line for line in code_lines), code_lines

@@ -8,7 +8,7 @@ Ruxsat: bron ko'rish huquqi bo'lgan xodim (`reservation.read`) yoki
 administrator. Farrosh bu bo'limni ko'rmaydi.
 """
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from typing import Literal
 from uuid import UUID
 
@@ -16,9 +16,9 @@ from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
+from app.shared.utils import hotel_today
 from app.application.services.incoming_call_service import (
     DEFAULT_WINDOW_MINUTES,
     IncomingCallService,
@@ -70,15 +70,12 @@ def _require_reception(current_user: dict) -> UUID:
 
 
 def _local_today() -> date:
-    """Mehmonxonaning mahalliy kuni.
+    """Mehmonxonaning mahalliy kuni — yagona manba `hotel_today()`.
 
     Server UTC da ishlaydi — tungi soatlarda `date.today()` mahalliy
     kundan bir kun orqada qolib ketardi.
     """
-    return (
-        datetime.now(timezone.utc)
-        + timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
-    ).date()
+    return hotel_today()
 
 
 @router.get("/bookings")
