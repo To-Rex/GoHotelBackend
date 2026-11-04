@@ -2,7 +2,8 @@ import logging
 from uuid import UUID
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, or_, select
+from sqlalchemy import Date, String, cast, func, literal, literal_column, null, or_, select, union_all
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import (
     BadRequestException,
@@ -15,6 +16,11 @@ from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.ledger import Ledger
 from app.infrastructure.database.models.journal_entry import JournalEntry, JournalEntryLine
 from app.infrastructure.database.models.user import User
+from app.infrastructure.database.models.guest import Guest
+from app.infrastructure.database.models.reservation import Reservation
+from app.infrastructure.database.models.room import Room
+from app.infrastructure.database.models.shop import ShopSale, ShopSaleItem, ShopSalePayment
+from app.infrastructure.tenant.branch_scope import scoped_branch_id
 from app.infrastructure.database.repositories.finance_repo import (
     LedgerRepository,
     JournalEntryRepository,
@@ -26,7 +32,9 @@ from app.application.services.move_discount_policy import (
     clamp_move_discount,
     discount_baseline,
 )
-from app.shared.utils import generate_code, hotel_today
+from app.application.services import payment_purpose as purpose
+from app.core.config import settings
+from app.shared.utils import generate_code, hotel_today, local_date_of, local_day_bounds
 
 logger = logging.getLogger(__name__)
 
@@ -610,6 +618,346 @@ class FinanceService:
             *self._payment_conditions(hotel_id, date_from, date_to, search)
         )
         return int((await self.session.execute(stmt)).scalar() or 0)
+
+    # ------------------------------------------------------------ feed --
+
+    def _feed_statements(
+        self,
+        hotel_id: UUID | None,
+        date_from: date | None,
+        date_to: date | None,
+        search: str | None,
+        sort_by: str | None,
+        sort_dir: str | None,
+        include_shop: bool,
+    ):
+        """Moliya → To'lovlar oqimi: sahifa uchun (id, manba) ro'yxati va
+        jami soni — ikkalasi BIR XIL shartlardan.
+
+        Bron to'lovlari (`payments`) va, so'ralsa, do'kon to'lovlari
+        (`shop_sale_payments`) bitta UNION ostida saralanadi va
+        sahifalanadi; to'liq qatorlar keyin id bo'yicha yuklanadi
+        (`payments_feed`). Qidiruv xodim ko'rib turgan narsasi bo'yicha:
+        raqam, izoh, bron raqami, xona, mehmon ismi, mahsulot nomi.
+        """
+        text = (search or "").strip()
+        like = f"%{text}%" if text else None
+        branch_id = scoped_branch_id(self.session, hotel_id)
+
+        res = select(
+            Payment.id.label("id"),
+            literal(purpose.SOURCE_RESERVATION).label("source"),
+            Payment.payment_number.label("number"),
+            Payment.payment_date.label("pay_date"),
+            Payment.payment_method.label("method"),
+            Payment.amount.label("amount"),
+            Payment.created_at.label("created_at"),
+        ).select_from(Payment)
+        conditions = self._payment_conditions(hotel_id, date_from, date_to, None)
+        if branch_id is not None:
+            # Filial chegarasi ORM tomonidan ham qo'shiladi; UNION ichida
+            # ham aniq turishi uchun shu yerda takrorlanadi
+            conditions.append(Payment.branch_id == branch_id)
+        if like:
+            res = (
+                res.outerjoin(Invoice, Invoice.id == Payment.invoice_id)
+                .outerjoin(Reservation, Reservation.id == Invoice.reservation_id)
+                .outerjoin(Room, Room.id == Reservation.room_id)
+                .outerjoin(Guest, Guest.id == Reservation.guest_id)
+            )
+            conditions.append(
+                or_(
+                    Payment.payment_number.ilike(like),
+                    Payment.reference.ilike(like),
+                    Payment.notes.ilike(like),
+                    Reservation.reservation_number.ilike(like),
+                    Room.room_number.ilike(like),
+                    Guest.first_name.ilike(like),
+                    Guest.last_name.ilike(like),
+                    (Guest.first_name + " " + Guest.last_name).ilike(like),
+                )
+            )
+        res = res.where(*conditions)
+
+        if include_shop:
+            # Do'kon to'lovining kuni — `paid_at` ning MAHALLIY sanasi
+            # (sessiya vaqt zonasiga bog'liq bo'lmasin: UTC + siljish)
+            local_day = cast(
+                func.timezone(literal_column("'UTC'"), ShopSalePayment.paid_at)
+                + literal_column(f"interval '{int(settings.APP_TZ_OFFSET_MINUTES)} minutes'"),
+                Date,
+            )
+            shop = select(
+                ShopSalePayment.id.label("id"),
+                literal(purpose.SOURCE_SHOP).label("source"),
+                cast(null(), String).label("number"),
+                local_day.label("pay_date"),
+                ShopSalePayment.payment_method.label("method"),
+                ShopSalePayment.amount.label("amount"),
+                ShopSalePayment.paid_at.label("created_at"),
+            ).select_from(ShopSalePayment)
+            shop_conditions = []
+            if hotel_id is not None:
+                shop_conditions.append(ShopSalePayment.hotel_id == hotel_id)
+            if branch_id is not None:
+                shop_conditions.append(ShopSalePayment.branch_id == branch_id)
+            day_start, day_end = local_day_bounds(date_from, date_to)
+            if day_start:
+                shop_conditions.append(ShopSalePayment.paid_at >= day_start)
+            if day_end:
+                shop_conditions.append(ShopSalePayment.paid_at < day_end)
+            if like:
+                shop = (
+                    shop.join(ShopSale, ShopSale.id == ShopSalePayment.sale_id)
+                    .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
+                    .outerjoin(Room, Room.id == Reservation.room_id)
+                    .outerjoin(Guest, Guest.id == Reservation.guest_id)
+                )
+                shop_conditions.append(
+                    or_(
+                        ShopSale.items.any(ShopSaleItem.product_name.ilike(like)),
+                        Reservation.reservation_number.ilike(like),
+                        Room.room_number.ilike(like),
+                        Guest.first_name.ilike(like),
+                        Guest.last_name.ilike(like),
+                        (Guest.first_name + " " + Guest.last_name).ilike(like),
+                    )
+                )
+            shop = shop.where(*shop_conditions)
+            feed = union_all(res, shop).subquery("feed")
+        else:
+            feed = res.subquery("feed")
+
+        sorts = {
+            "payment_number": feed.c.number,
+            "payment_date": feed.c.pay_date,
+            "payment_method": feed.c.method,
+            "amount": feed.c.amount,
+            "created_at": feed.c.created_at,
+        }
+        ids_stmt = select(feed.c.id, feed.c.source).order_by(
+            _ordering(sorts, sort_by, sort_dir, feed.c.created_at),
+            # Ikkinchi/uchinchi mezon — sahifalar orasida qator takrorlanmasin
+            feed.c.created_at.desc(),
+            feed.c.id,
+        )
+        count_stmt = select(func.count()).select_from(feed)
+        return ids_stmt, count_stmt
+
+    async def payments_feed(
+        self,
+        hotel_id: UUID | None,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        skip: int = 0,
+        limit: int | None = None,
+        search: str | None = None,
+        sort_by: str | None = None,
+        sort_dir: str | None = None,
+        include_shop: bool = False,
+    ) -> tuple[list[dict], int]:
+        """To'lovlar ro'yxati — har qator NIMA UCHUN olingani bilan.
+
+        Bron to'lovi: xona raqami, mehmon, bron raqami, haqlar taqsimoti
+        (xona / jarima / xizmat — `payment_purpose`), qarz to'lovi belgisi,
+        pulni qabul qilgan xodim. Do'kon to'lovi (`include_shop`): mahsulotlar
+        va bo'lsa bron. Javob `PaymentResponse` bilan mos — eski maydonlar
+        avvalgidek, yangilari qo'shimcha. Qaytaradi: (qatorlar, jami soni).
+        """
+        ids_stmt, count_stmt = self._feed_statements(
+            hotel_id, date_from, date_to, search, sort_by, sort_dir, include_shop
+        )
+        total = int((await self.session.execute(count_stmt)).scalar() or 0)
+        if limit is not None:
+            ids_stmt = ids_stmt.offset(skip).limit(limit)
+        page = (await self.session.execute(ids_stmt)).all()
+
+        rows: dict[tuple, dict] = {}
+        rows.update(
+            await self._reservation_payment_rows(
+                [r.id for r in page if r.source == purpose.SOURCE_RESERVATION]
+            )
+        )
+        rows.update(
+            await self._shop_payment_rows(
+                [r.id for r in page if r.source == purpose.SOURCE_SHOP]
+            )
+        )
+        ordered = [rows[(r.source, r.id)] for r in page if (r.source, r.id) in rows]
+        return ordered, total
+
+    @staticmethod
+    def _full_name(user) -> str | None:
+        if user is None:
+            return None
+        name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        return name or None
+
+    async def _reservation_payment_rows(self, ids: list) -> dict[tuple, dict]:
+        if not ids:
+            return {}
+        stmt = (
+            select(Payment, Invoice, Reservation, Room.room_number, Guest, User)
+            .join(Invoice, Invoice.id == Payment.invoice_id)
+            .outerjoin(Reservation, Reservation.id == Invoice.reservation_id)
+            .outerjoin(Room, Room.id == Reservation.room_id)
+            .outerjoin(Guest, Guest.id == Reservation.guest_id)
+            .outerjoin(User, User.id == Payment.created_by)
+            .where(Payment.id.in_(ids))
+        )
+        loaded = (await self.session.execute(stmt)).all()
+        invoice_ids = {inv.id for _, inv, *_ in loaded}
+
+        # Haqlar taqsimoti uchun fakturaning BARCHA qatorlari va to'lovlari
+        # (sahifadagi to'lov o'rtada bo'lishi mumkin — tarix to'liq kerak)
+        charges: dict = {}
+        for line in (
+            await self.session.execute(
+                select(InvoiceLineItem).where(InvoiceLineItem.invoice_id.in_(invoice_ids))
+            )
+        ).scalars():
+            charges.setdefault(line.invoice_id, []).append(
+                purpose.Charge(
+                    kind=purpose.line_kind(line.line_type),
+                    amount=float(line.total_price or 0),
+                    at=line.created_at,
+                    label=line.description,
+                )
+            )
+        paid: dict = {}
+        for pid, inv_id, amount, at in (
+            await self.session.execute(
+                select(Payment.id, Payment.invoice_id, Payment.amount, Payment.created_at).where(
+                    Payment.invoice_id.in_(invoice_ids)
+                )
+            )
+        ).all():
+            paid.setdefault(inv_id, []).append(purpose.Paid(id=pid, amount=float(amount or 0), at=at))
+
+        allocations: dict = {}
+        for inv_id in invoice_ids:
+            invoice = next(inv for _, inv, *_ in loaded if inv.id == inv_id)
+            allocations.update(
+                purpose.allocate(
+                    charges.get(inv_id, []),
+                    paid.get(inv_id, []),
+                    float(invoice.discount_amount or 0),
+                )
+            )
+
+        result: dict[tuple, dict] = {}
+        for payment, invoice, reservation, room_number, guest, user in loaded:
+            parts = allocations.get(payment.id, [])
+            amount = float(payment.amount or 0)
+            row = self._payment_dict(payment)
+            row.update(
+                {
+                    "source": purpose.SOURCE_RESERVATION,
+                    "kind": purpose.summary_kind(parts, amount),
+                    "parts": parts,
+                    "after_checkout": purpose.is_after_checkout(
+                        payment.created_at,
+                        reservation.status if reservation else None,
+                        reservation.check_out_date if reservation else None,
+                        reservation.check_out_datetime if reservation else None,
+                    ),
+                    "created_by_name": self._full_name(user),
+                    "reservation_id": reservation.id if reservation else None,
+                    "reservation_number": reservation.reservation_number if reservation else None,
+                    "reservation_status": reservation.status if reservation else None,
+                    "booking_type": reservation.booking_type if reservation else None,
+                    "check_in_date": reservation.check_in_date if reservation else None,
+                    "check_out_date": reservation.check_out_date if reservation else None,
+                    "check_in_datetime": reservation.check_in_datetime if reservation else None,
+                    "check_out_datetime": reservation.check_out_datetime if reservation else None,
+                    "room_number": room_number,
+                    "guest_name": self._full_name(guest),
+                    "sale_id": None,
+                    "items": None,
+                }
+            )
+            result[(purpose.SOURCE_RESERVATION, payment.id)] = row
+        return result
+
+    async def _shop_payment_rows(self, ids: list) -> dict[tuple, dict]:
+        if not ids:
+            return {}
+        stmt = (
+            select(ShopSalePayment, ShopSale, Reservation, Room.room_number, Guest, User)
+            .join(ShopSale, ShopSale.id == ShopSalePayment.sale_id)
+            .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
+            .outerjoin(Room, Room.id == Reservation.room_id)
+            .outerjoin(Guest, Guest.id == Reservation.guest_id)
+            .outerjoin(User, User.id == ShopSalePayment.created_by)
+            .options(selectinload(ShopSale.items))
+            .where(ShopSalePayment.id.in_(ids))
+        )
+        result: dict[tuple, dict] = {}
+        for sp, sale, reservation, room_number, guest, user in (
+            await self.session.execute(stmt)
+        ).all():
+            amount = float(sp.amount or 0)
+            items = [
+                {"product_name": i.product_name, "quantity": int(i.quantity or 0)}
+                for i in (sale.items or [])
+            ]
+            result[(purpose.SOURCE_SHOP, sp.id)] = {
+                "id": sp.id,
+                "hotel_id": sp.hotel_id,
+                "invoice_id": None,
+                "payment_number": None,
+                "amount": amount,
+                "payment_method": sp.payment_method or "UNKNOWN",
+                "payment_date": local_date_of(sp.paid_at) if sp.paid_at else None,
+                "reference": None,
+                "notes": None,
+                "created_at": sp.paid_at,
+                "method_changes": None,
+                "source": purpose.SOURCE_SHOP,
+                "kind": purpose.KIND_SHOP,
+                "parts": [
+                    {
+                        "kind": purpose.KIND_SHOP,
+                        "amount": round(amount, 2),
+                        "label": ", ".join(
+                            f"{i['product_name']} ×{i['quantity']}" for i in items
+                        )
+                        or None,
+                    }
+                ],
+                "after_checkout": False,
+                "created_by_name": self._full_name(user),
+                "reservation_id": reservation.id if reservation else None,
+                "reservation_number": reservation.reservation_number if reservation else None,
+                "reservation_status": reservation.status if reservation else None,
+                "booking_type": reservation.booking_type if reservation else None,
+                "check_in_date": reservation.check_in_date if reservation else None,
+                "check_out_date": reservation.check_out_date if reservation else None,
+                "check_in_datetime": reservation.check_in_datetime if reservation else None,
+                "check_out_datetime": reservation.check_out_datetime if reservation else None,
+                "room_number": room_number,
+                "guest_name": self._full_name(guest),
+                "sale_id": sale.id,
+                "items": items,
+            }
+        return result
+
+    @staticmethod
+    def _payment_dict(payment: Payment) -> dict:
+        return {
+            "id": payment.id,
+            "hotel_id": payment.hotel_id,
+            "invoice_id": payment.invoice_id,
+            "payment_number": payment.payment_number,
+            "amount": float(payment.amount or 0),
+            "payment_method": payment.payment_method,
+            "payment_date": payment.payment_date,
+            "reference": payment.reference,
+            "notes": payment.notes,
+            "created_at": payment.created_at,
+            "method_changes": payment.method_changes,
+        }
 
     async def get_ledgers(self, hotel_id: UUID | None) -> list[Ledger]:
         stmt = select(Ledger).where(Ledger.is_active.is_(True))

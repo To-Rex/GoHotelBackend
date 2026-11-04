@@ -372,26 +372,32 @@ async def list_payments(
     # `limit` berilmasa avvalgidek BARCHA to'lovlar qaytadi — bu endpointga
     # tayanadigan eski ekranlar buzilmasligi uchun
     limit: int | None = Query(default=None, ge=1, le=500),
+    # Do'kon to'lovlari ham ro'yxatda (Moliya → To'lovlar). Standart — yo'q:
+    # eski ekranlar (bosh sahifa) faqat bron to'lovlarini yig'adi
+    include_shop: bool = Query(default=False),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """To'lovlar ro'yxati — har qator NIMA UCHUN olingani bilan: xona,
+    mehmon, bron raqami, haqlar taqsimoti (xona / jarima / xizmat),
+    qarz to'lovi belgisi, pulni qabul qilgan xodim; `include_shop=true`
+    bo'lsa do'kon to'lovlari (mahsulotlari bilan) ham. Eski maydonlar
+    avvalgidek. `invoice_id` berilsa — bitta hujjat to'lovlari (chek)."""
     if current_user["user_type"] == "SUPER_ADMIN":
         h_id = hotel_id or current_user.get("hotel_id")
     else:
         h_id = _get_hotel_id(current_user)
     service = FinanceService(session)
-    if invoice_id is None:
-        response.headers[TOTAL_COUNT_HEADER] = str(
-            await service.count_payments(
-                h_id, date_from=date_from, date_to=date_to, search=search
-            )
-        )
-    return await service.get_payments(
-        h_id, invoice_id=invoice_id, date_from=date_from, date_to=date_to,
+    if invoice_id is not None:
+        return await service.get_payments(h_id, invoice_id=invoice_id)
+    rows, total = await service.payments_feed(
+        h_id, date_from=date_from, date_to=date_to,
         skip=skip, limit=limit, search=search,
-        sort_by=sort_by, sort_dir=sort_dir,
+        sort_by=sort_by, sort_dir=sort_dir, include_shop=include_shop,
     )
+    response.headers[TOTAL_COUNT_HEADER] = str(total)
+    return rows
 
 
 class PaymentMethodUpdateRequest(BaseModel):

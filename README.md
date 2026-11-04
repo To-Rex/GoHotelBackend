@@ -610,6 +610,35 @@ ekan savdo `PENDING` (qarz), to'liq to'langanda `PAID`.
 Kod: `app/application/services/shop_payments.py`, test:
 `pytest tests/test_shop_partial_payments.py`.
 
+### To'lovlar ro'yxati — har to'lov NIMA UCHUN (xona, jarima, qarz, do'kon)
+
+`GET /finance/payments` (sahifalangan, `invoice_id` siz) har qatorni to'lov
+maqsadi bilan qaytaradi — Moliya → To'lovlar jadvali shundan chiziladi:
+
+- `parts` — haqlar taqsimoti: `[{kind: ROOM|PENALTY|SERVICE|EXTRA|REFUND|SHOP,
+  amount, label}]`. Bron to'lovi hisob-fakturaga umumiy tushadi, shuning
+  uchun taqsimot vaqt tartibida hisoblanadi (FIFO): har to'lov o'sha paytda
+  mavjud ENG ESKI to'lanmagan haqni yopadi — xona haqi avval, keyin
+  yozilgan jarima keyin; chegirma xona haqidan ayiriladi; ortiqcha qism
+  `EXTRA`, manfiy summa `REFUND`. `kind` — asosiy tur (bir nechta bo'lsa
+  `MIXED`). Hisob `app/application/services/payment_purpose.py`, bazaga
+  hech narsa yozilmaydi.
+- `after_checkout` — qarz to'lovi: mehmon CHIQIB KETGAN bronga chiqish
+  kunidan keyingi kunlarda olingan to'lov (haqiqiy chiqish daqiqasi
+  saqlanmaydi, shuning uchun o'lchov — kun).
+- `room_number`, `guest_name`, `reservation_number/id/status`,
+  `booking_type`, `check_in_date/check_out_date`, `created_by_name` (pulni
+  qabul qilgan xodim).
+- `include_shop=true` — do'kon to'lovlari (`shop_sale_payments`, mahsulotlari
+  `items` bilan, `source=SHOP`, `payment_number` bo'sh) ham shu ro'yxatda:
+  bitta UNION ostida saralanadi va sahifalanadi; sana — `paid_at` ning
+  mahalliy kuni. Standart — faqat bron to'lovlari (eski ekranlar o'zgarmaydi).
+- Qidiruv: raqam, izoh, bron raqami, xona, mehmon ismi, mahsulot nomi.
+  Saralash yopiq ro'yxatdan: `payment_number`, `payment_date`,
+  `payment_method`, `amount`, `created_at` (standart).
+
+Test: `pytest tests/test_payment_purpose.py`.
+
 ### To'lov turini tahrirlash (butun yoki qisman, audit bilan)
 
 Xato usul tanlangan bo'lsa (masalan, naqd o'rniga karta bosilgan) to'lov

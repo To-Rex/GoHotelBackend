@@ -41,19 +41,54 @@ class InvoiceDetailResponse(InvoiceResponse):
     payments: list[dict] = []
 
 
+class PaymentPurposePart(BaseModel):
+    """To'lovning bir qismi NIMA UCHUN: ROOM / PENALTY / SERVICE / EXTRA /
+    REFUND / SHOP (`payment_purpose`)."""
+
+    kind: str
+    amount: float
+    label: str | None = None
+
+
 class PaymentResponse(BaseModel):
     id: UUID
     hotel_id: UUID
-    invoice_id: UUID
-    payment_number: str
+    #: Do'kon to'lovida (`source=SHOP`) bo'sh
+    invoice_id: UUID | None = None
+    payment_number: str | None = None
     amount: float
     payment_method: str
-    payment_date: date
+    payment_date: date | None = None
     reference: str | None
     notes: str | None
     created_at: datetime
     #: To'lov turi tahriri tarixi: [{old, new, by, by_name, at, note}, ...]
     method_changes: list | None = None
+
+    # --- To'lov nima uchun (GET /finance/payments ro'yxatida) ---------
+    #: RESERVATION — bron to'lovi (`payments`), SHOP — do'kon to'lovi
+    source: str | None = None
+    #: Asosiy tur: ROOM / PENALTY / SERVICE / MIXED / REFUND / SHOP / EXTRA
+    kind: str | None = None
+    parts: list[PaymentPurposePart] | None = None
+    #: Qarz to'lovi — mehmon chiqib ketgandan keyingi kunlarda olingan
+    after_checkout: bool | None = None
+    #: Pulni qabul qilgan xodim
+    created_by_name: str | None = None
+    reservation_id: UUID | None = None
+    reservation_number: str | None = None
+    reservation_status: str | None = None
+    booking_type: str | None = None
+    check_in_date: date | None = None
+    check_out_date: date | None = None
+    #: Soatlik bronda aniq soatlar
+    check_in_datetime: datetime | None = None
+    check_out_datetime: datetime | None = None
+    room_number: str | None = None
+    guest_name: str | None = None
+    sale_id: UUID | None = None
+    #: Do'kon to'lovida — chekdagi mahsulotlar
+    items: list[dict] | None = None
 
     model_config = {"from_attributes": True}
 
