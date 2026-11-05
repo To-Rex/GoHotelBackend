@@ -812,12 +812,15 @@ async def send_test_push(
 
 
 
-# --- So'rovlar jurnali (oxirgi 500 ta, faqat xotirada) -----------------
+# --- So'rovlar jurnali (oxirgi 500 ta xotirada + xatolar bazada 3 kun) ---
 
 
 @router.get("/api-logs")
 async def list_api_logs(
-    limit: int = Query(default=api_log.MAX_ENTRIES, ge=1, le=api_log.MAX_ENTRIES),
+    limit: int = Query(
+        default=api_log.MAX_ENTRIES, ge=1,
+        le=api_log.MAX_ENTRIES + api_log.STORED_MAX_ROWS,
+    ),
     method: str | None = Query(default=None),
     status: str | None = Query(default=None, description="2xx..5xx yoki aniq kod"),
     q: str | None = Query(default=None, description="URL bo'yicha qidiruv"),
@@ -829,17 +832,24 @@ async def list_api_logs(
     """Backendga kelgan so'rovlar — url, tana, javob, holat, davomiylik,
     mehmonxona/foydalanuvchi konteksti bilan.
 
-    Jurnal faqat xotirada: server qayta ko'tarilsa bo'shaydi, 500 tadan
-    eskisi o'z-o'zidan chiqib ketadi. Sir maydonlar niqoblangan.
+    Jonli jurnal xotirada: server qayta ko'tarilsa bo'shaydi, 500 tadan
+    eskisi chiqib ketadi. Xatolar (4xx/5xx) esa bazada
+    `API_ERROR_LOG_RETENTION_DAYS` kun saqlanadi va shu yerda jonli
+    yozuvlar bilan birga (`stored: true`) qaytadi — baza yotgan bo'lsa
+    faqat jonli jurnal. Sir maydonlar niqoblangan.
     """
+    stored = await api_log.load_stored_errors(
+        method=method, status=status, q=q, hotel_id=hotel_id,
+    )
     return api_log.snapshot(
         limit=limit, method=method, status=status, q=q,
-        hotel_id=hotel_id, sort=sort, order=order,
+        hotel_id=hotel_id, sort=sort, order=order, extra=stored,
     )
 
 
 @router.delete("/api-logs")
 async def clear_api_logs(_: PanelUser = Depends(current_panel_user)):
-    """Jurnalni tozalash — faqat xotiradagi yozuvlar o'chadi."""
+    """Jonli jurnalni tozalash — faqat xotiradagi yozuvlar o'chadi; bazada
+    saqlangan xatolar muddati bilan o'zi o'chadi."""
     api_log.clear()
     return {"ok": True}

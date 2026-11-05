@@ -78,6 +78,10 @@ class CORSSettings(BaseSettings):
 class LogSettings(BaseSettings):
     LOG_LEVEL: str = "DEBUG"
     LOG_FORMAT: str = "json"
+    # Panel so'rovlar jurnalidagi xatolar (4xx/5xx) bazada shuncha kun
+    # saqlanadi — jonli jurnal xotirada, har deploy'da bo'shaydi, xato esa
+    # keyin ham o'rganiladigan bo'lsin. 0 — bazaga yozilmaydi.
+    API_ERROR_LOG_RETENTION_DAYS: int = 3
 
 
 class WebAuthnSettings(BaseSettings):

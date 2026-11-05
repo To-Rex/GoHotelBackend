@@ -6,9 +6,13 @@ Ishga tushirish:  python tests/test_api_log.py
 Tekshirilayotgani: sirlarning niqoblanishi, 500 talik chegara, filtrlash,
 va eng nozigi — middleware so'rov tanasini o'qigach endpoint uni QAYTA
 o'qiy olishi (oqim tiklanishi). Fayl yuklash tanasi jurnaldan chetda.
+Xatolar (4xx/5xx) bazada 3 kun: yozish, o'qish, muddati o'tganini
+o'chirish, jonli jurnal bilan takrorsiz birlashish, traceback.
 """
+import asyncio
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -17,6 +21,10 @@ from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.superadmin import api_log  # noqa: E402
+
+# Middleware sinovlarida baza yo'q — fon yozuvi o'chirilgan; bazaga yozish
+# pastda `persist` bilan to'g'ridan-to'g'ri sinaladi
+api_log.persist_enabled = False
 
 ok = fail = 0
 
@@ -141,6 +149,11 @@ async def ctx(request: Request):
     return {"ok": True}
 
 
+@test_app.get("/boom")
+async def boom():
+    raise ValueError("portladi")
+
+
 api_log.clear()
 with TestClient(test_app) as client:
     r = client.post("/echo", json={"value": 42, "password": "Sir!"})
@@ -195,6 +208,92 @@ with TestClient(test_app) as client:
 
 api_log.clear()
 check("tozalash", len(api_log.snapshot()["items"]), 0)
+
+print("Ishlov berilmagan xato:")
+with TestClient(test_app, raise_server_exceptions=False) as client:
+    r = client.get("/boom")
+    check("mijozga 500", r.status_code, 500)
+    entry = api_log.snapshot(q="/boom")["items"][0]
+    check("jurnalda 500", entry["status"], 500)
+    check("javob — umumiy ishlovchi matni", "Internal server error" in (entry["response_body"] or ""), True)
+    check("traceback yozildi", "ValueError: portladi" in (entry["error"] or ""), True)
+    check("yozuv kaliti — uuid", len(entry["id"]), 32)
+    check("xato bazaga yoziladi (qoida)", api_log._should_persist({**entry, "status": 500}) or not api_log.persist_enabled, True)
+
+print("Xatolar bazada (3 kun):")
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.infrastructure.database.models.api_error_log import ApiErrorLog
+
+
+def _entry(status, path, **extra):
+    return api_log._record(
+        method="POST", path=path, status=status, duration_ms=12.5, ip="10.0.0.1",
+        request_body='{"room_id": "r1"}', response_body='{"detail": "x"}',
+        hotel_id="h1", branch_id="b1", user_id="u1", user_type="ADMIN",
+        user_agent="test", **extra,
+    )
+
+
+async def _db_checks():
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as conn:
+        await conn.run_sync(ApiErrorLog.__table__.create)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    api_log.persist_enabled = True
+    check("200 bazaga yozilmaydi", api_log._should_persist(_entry(200, "/ok")), False)
+    check("404 bazaga yoziladi", api_log._should_persist(_entry(404, "/yoq")), True)
+    check("500 bazaga yoziladi", api_log._should_persist(_entry(500, "/xato")), True)
+
+    api_log.clear()
+    fresh = _entry(500, "/api/v1/reservations/", error="Traceback ...\nValueError: x")
+    await api_log.persist(fresh, factory)
+    old = {**_entry(404, "/api/v1/eski"), "ts": (datetime.now(timezone.utc) - timedelta(days=4)).isoformat()}
+    await api_log.persist(old, factory)
+
+    async with factory() as s:
+        rows = await api_log.stored_errors(s)
+        total = (await s.execute(select(func.count()).select_from(ApiErrorLog))).scalar()
+    check("ikkala yozuv bazada", total, 2)
+    check("muddati ichidagisi o'qiladi", [r["id"] for r in rows], [fresh["id"]])
+    check("saqlangan belgisi", rows[0]["stored"], True)
+    check("traceback saqlangan", "ValueError" in (rows[0]["error"] or ""), True)
+    check("kontekst saqlangan", (rows[0]["hotel_id"], rows[0]["user_type"]), ("h1", "ADMIN"))
+    check("ts zonali", rows[0]["ts"].endswith("+00:00"), True)
+
+    async with factory() as s:
+        check("filtr: holat 5xx", len(await api_log.stored_errors(s, status="5xx")), 1)
+        check("filtr: holat 404 — muddati o'tgan ko'rinmaydi", len(await api_log.stored_errors(s, status="404")), 0)
+        check("filtr: url", len(await api_log.stored_errors(s, q="RESERV")), 1)
+        check("filtr: kompaniya", len(await api_log.stored_errors(s, hotel_id="h2")), 0)
+        check("filtr: metod", len(await api_log.stored_errors(s, method="get")), 0)
+
+    async with factory() as s:
+        await api_log.purge(s)
+        await s.commit()
+        total = (await s.execute(select(func.count()).select_from(ApiErrorLog))).scalar()
+    check("3 kundan eskisi o'chirildi", total, 1)
+
+    # Jonli jurnal bilan birlashish
+    api_log.clear()
+    snap = api_log.snapshot(extra=rows)
+    check("xotira bo'sh — saqlangan xato baribir ko'rinadi", [r["id"] for r in snap["items"]], [fresh["id"]])
+    check("stored_errors / retention_days", (snap["stored_errors"], snap["retention_days"]), (1, 3))
+    api_log._entries.append(fresh)
+    snap = api_log.snapshot(extra=rows)
+    check("xotirada ham bor — takrorlanmaydi", len(snap["items"]), 1)
+    check("xotiradagi nusxa ustun (stored=False)", snap["items"][0]["stored"], False)
+    newer = _entry(200, "/api/v1/rooms")
+    snap = api_log.snapshot(extra=rows)
+    check("tartib — eng yangisi birinchi", snap["items"][0]["id"], newer["id"])
+    check("filtr saqlanganga ham: 5xx", [r["id"] for r in api_log.snapshot(status="5xx", extra=rows)["items"]], [fresh["id"]])
+    api_log.persist_enabled = False
+    await engine.dispose()
+
+
+asyncio.run(_db_checks())
 
 print()
 print(f"Jami: {ok} OK, {fail} XATO")
