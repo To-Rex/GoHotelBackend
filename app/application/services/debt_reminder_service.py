@@ -239,7 +239,11 @@ class DebtReminderService:
         now_local = now_local or local_now()
         stats = {TYPE_LEFT: 0, TYPE_SOON: 0, TYPE_DIGEST: 0}
         from app.application.services.branch_settings import settings_owner
-        from app.infrastructure.tenant.branch_scope import get_branch_scope, set_branch_scope
+        from app.infrastructure.tenant.branch_scope import (
+            get_branch_scope,
+            set_branch_scope,
+            try_branch_write_lock,
+        )
 
         # Har FILIAL alohida: o'z sozlamasi, o'z qarzdorlari, o'z kassirlari.
         # Filial sessiyaga yoziladi — ichki so'rovlar (bronlar, savdolar,
@@ -249,6 +253,10 @@ class DebtReminderService:
             for hotel_id, branch_id in await self._branches_with_debt():
                 try:
                     set_branch_scope(self.session, hotel_id, branch_id)
+                    # Filial yozuv qulfi — xodim so'rovlari bilan bir navbat;
+                    # band bo'lsa kutilmaydi, keyingi o'tishda qaytib keladi
+                    if not await try_branch_write_lock(self.session, hotel_id, branch_id):
+                        continue
                     owner = await settings_owner(self.session, hotel_id, branch_id)
                     config = resolve_debt_settings(owner.settings if owner else None)
                     if not config["enabled"]:

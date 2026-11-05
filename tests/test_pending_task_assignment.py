@@ -44,6 +44,8 @@ class FakeSession:
         # Taqsimlash rejimi mehmonxona sozlamasidan o'qiladi (standart — navbat)
         self.hotel = SimpleNamespace(settings=hotel_settings or {})
         self.flushes = 0
+        # Har filial alohida tranzaksiyada yakunlanadi (filial yozuv qulfi)
+        self.commits = 0
 
     async def execute(self, _stmt):
         if is_branch_query(_stmt):  # sozlamalar filialda
@@ -57,6 +59,12 @@ class FakeSession:
 
     async def flush(self):
         self.flushes += 1
+
+    async def commit(self):
+        self.commits += 1
+
+    async def rollback(self):
+        pass
 
 
 def make_task(created_minutes_ago: float = 0.0):

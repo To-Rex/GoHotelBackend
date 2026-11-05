@@ -148,6 +148,42 @@ async def acquire_branch_write_lock(session, hotel_id: UUID | None, branch_id: U
         return False
 
 
+async def try_branch_write_lock(session, hotel_id: UUID | None, branch_id: UUID | None) -> bool:
+    """Filial yozuv qulfini KUTMASDAN oladi — fon xizmatlari uchun.
+
+    Fon vazifasi (avto-chiqish, vazifalarni yopish/biriktirish, qarz
+    eslatmalari) filial qatorlarini yozishdan OLDIN shu qulfni oladi, ya'ni
+    xodim so'rovlari bilan bir navbatda turadi. Aks holda ikkalasi bir
+    vaqtda bir filialning qatorlarini (xona, bron, vazifa) teskari tartibda
+    qulflab bir-birini kutardi — PostgreSQL bittasini deadlock deb yiqitadi
+    va xodim "so'rovlar to'qnashdi" (409) xatosini ko'rardi.
+
+    Kutmaydi: filial shu lahzada band bo'lsa False — vazifa keyingi tikda
+    qaytib keladi, xodim esa hech qachon fon ishini kutib qolmaydi. Qulf
+    tranzaksiya tugashi bilan (commit/rollback) bo'shaydi — shuning uchun
+    fon vazifasi har filialni alohida tranzaksiyada yakunlaydi.
+
+    PostgreSQL bo'lmasa (SQLite testlari) yoki qulf so'rovi xato bersa —
+    True: avvalgidek qulfsiz davom etadi (funksionallik saqlanadi).
+    """
+    key = branch_lock_key(hotel_id, branch_id)
+    if key is None:
+        return True
+    dialect = getattr(getattr(session, "bind", None), "dialect", None)
+    if dialect is None or getattr(dialect, "name", "") != "postgresql":
+        return True
+    try:
+        row = await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": key}
+        )
+        return bool(row.scalar())
+    except Exception:  # qulf hech qachon fon vazifasini yiqitmasin
+        logger.warning(
+            "Filial yozuv qulfi (kutmasdan) olinmadi — qulfsiz davom etiladi", exc_info=True
+        )
+        return True
+
+
 @contextmanager
 def without_branch_scope(session) -> Iterator[None]:
     """Blok ichida filial filtrisiz (masalan, unikal nomni butun bazada

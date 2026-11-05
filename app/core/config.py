@@ -116,6 +116,9 @@ class FirebaseSettings(BaseSettings):
     """
 
     FIREBASE_ENABLED: bool = True
+    # Firebase'ga HTTP so'rovlari uchun vaqt chegarasi (soniya). SDK standarti
+    # 120 s — Firebase javob bermasa push shuncha osilib qolmasin.
+    FIREBASE_HTTP_TIMEOUT_SECONDS: int = 15
     # Service-account JSON kalitiga yo'l (loyiha ildizidan nisbiy yoki absolyut).
     FIREBASE_CREDENTIALS_FILE: str = "secrets/gohotel-firebase-service-account.json"
     # Muqobil: service-account'ni butun JSON matn (yoki base64) sifatida env orqali

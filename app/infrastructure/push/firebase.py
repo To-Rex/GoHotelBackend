@@ -131,7 +131,12 @@ def _init():
             cred = _load_credential()
             if cred is None:
                 return None
-            _app = firebase_admin.initialize_app(cred)
+            # HTTP vaqt chegarasi: SDK standarti 120 s — Firebase javob
+            # bermasa push yuborayotgan so'rov (va u ushlab turgan filial
+            # yozuv qulfi) shuncha osilib qolardi
+            _app = firebase_admin.initialize_app(
+                cred, options={"httpTimeout": settings.FIREBASE_HTTP_TIMEOUT_SECONDS}
+            )
             _last_error = None
             logger.info("Firebase push ishga tushdi (project=%s)", cred.project_id)
         except Exception as exc:
@@ -302,3 +307,31 @@ async def send_push(
     except Exception:
         logger.exception("send_push kutilmagan xato")
         return 0
+
+
+_background: set[asyncio.Task] = set()
+
+
+def send_push_background(
+    tokens: list[str] | str | None,
+    title: str,
+    body: str | None = None,
+    data: dict | None = None,
+    data_only: bool = False,
+) -> bool:
+    """`send_push` ni fonda ishga tushiradi — chaqiruvchi kutmaydi.
+
+    Xabarning o'zi (notifications qatori) bazaga allaqachon yozilgan;
+    Firebase'ga HTTP so'rovi esa so'rov tranzaksiyasi va filial yozuv qulfi
+    TASHQARISIDA ketadi: Firebase sekin bo'lsa yoki javob bermasa ham
+    xodimlarning bron/to'lov yozuvlari kutib qolmaydi. Natija logga tushadi
+    (`send_push` xato tashlamaydi). Event loop bo'lmasa — False.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    task = loop.create_task(send_push(tokens, title, body, data, data_only))
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    return True

@@ -40,7 +40,21 @@ from app.infrastructure.database.repositories.user_repo import UserRepository
 from app.application.services.reservation_service import ReservationService
 from app.application.services.notification_service import NotificationService
 
+from app.infrastructure.tenant.branch_scope import try_branch_write_lock
+
 logger = logging.getLogger(__name__)
+
+
+def _by_branch(items) -> dict[tuple, list]:
+    """Yozuvlar (hotel_id, branch_id) bo'yicha guruhlanadi, uchrash tartibida.
+
+    Har filial alohida: avval filial yozuv qulfi (xodim so'rovlari bilan bir
+    navbat), keyin shu filialning yozuvlari, oxirida commit — qulf darhol
+    bo'shaydi. Band filial o'tkazib yuboriladi (keyingi tik)."""
+    groups: dict[tuple, list] = {}
+    for item in items:
+        groups.setdefault((item.hotel_id, item.branch_id), []).append(item)
+    return groups
 
 #: Yetim CLEANING xona uchun tiklangan vazifaning izohi — kechiktirilgan
 #: biriktirish (_assign_pending_tasks) uni shu izoh bo'yicha taniydi.
@@ -130,6 +144,14 @@ class AutomationService:
                     or reservation.is_deleted
                     or reservation.status not in ("CHECKED_IN", "CONFIRMED")
                 ):
+                    continue
+                # Filial yozuv qulfi — xodim so'rovlari bilan bir navbatda
+                # (deadlock → xodimga 409 bo'lmasin). Filial band bo'lsa
+                # kutilmaydi: bron keyingi tikda qayta ko'riladi.
+                if not await try_branch_write_lock(
+                    self.session, reservation.hotel_id, reservation.branch_id
+                ):
+                    logger.debug("Filial band — bron %s keyingi tikda", rid)
                     continue
                 # Bron o'z FILIALI ichida qayta ishlanadi: sozlamalar, xona,
                 # farrosh, xabar oluvchilar — hammasi shu filialdan
@@ -225,47 +247,60 @@ class AutomationService:
         # Rejim va fallback muddati filial sozlamasidan (har filial o'zinikini
         # tanlaydi); bitta tickda bir filial uchun qayta o'qilmaydi
         mode_cache: dict[tuple, tuple[str, int]] = {}
-        for task in rows.scalars().all():
-            key = (task.hotel_id, task.branch_id)
-            if key not in mode_cache:
-                owner = await settings_owner(self.session, task.hotel_id, task.branch_id)
-                settings = owner.settings if owner else None
-                mode_cache[key] = (
-                    resolve_assign_mode(settings),
-                    resolve_claim_fallback_minutes(settings),
-                )
-            mode, fallback_minutes = mode_cache[key]
-            if mode == ASSIGN_MODE_CLAIM:
-                if fallback_minutes <= 0:
-                    continue  # sof claim — farroshlar o'zi oladi
-                created = task.created_at
-                if created is None or now - created < timedelta(minutes=fallback_minutes):
-                    continue  # hali "kim birinchi olsa" oynasi ochiq
-                # Muddat o'tdi, hech kim olmadi — navbat qoidasi bo'yicha
-                # biriktiriladi (quyidagi umumiy yo'l)
-            cleaner_id = await self._find_cleaner(task.hotel_id, task.branch_id)
-            if cleaner_id is None:
-                continue  # hali hech kim ishda emas — keyingi tikda
-            task.assigned_to = cleaner_id
-            await self.session.flush()
-            room = await self.session.get(Room, task.room_id)
-            number = room.room_number if room else "?"
-            logger.info("Pending task %s assigned to %s", task.id, cleaner_id)
-            # Push xatosi biriktirishni buzmasin
+        tasks = rows.scalars().all()
+        for (hotel_id, branch_id), group in _by_branch(tasks).items():
+            # Filial yozuv qulfi (xodim so'rovlari bilan bir navbat); band
+            # bo'lsa shu filial keyingi tikda. Har filial alohida commit —
+            # qulf shu zahoti bo'shaydi, xodimlar kutib qolmaydi
+            if not await try_branch_write_lock(self.session, hotel_id, branch_id):
+                logger.debug("Filial %s band — biriktirish keyingi tikda", branch_id)
+                continue
+            for task in group:
+                key = (task.hotel_id, task.branch_id)
+                if key not in mode_cache:
+                    owner = await settings_owner(self.session, task.hotel_id, task.branch_id)
+                    settings = owner.settings if owner else None
+                    mode_cache[key] = (
+                        resolve_assign_mode(settings),
+                        resolve_claim_fallback_minutes(settings),
+                    )
+                mode, fallback_minutes = mode_cache[key]
+                if mode == ASSIGN_MODE_CLAIM:
+                    if fallback_minutes <= 0:
+                        continue  # sof claim — farroshlar o'zi oladi
+                    created = task.created_at
+                    if created is None or now - created < timedelta(minutes=fallback_minutes):
+                        continue  # hali "kim birinchi olsa" oynasi ochiq
+                    # Muddat o'tdi, hech kim olmadi — navbat qoidasi bo'yicha
+                    # biriktiriladi (quyidagi umumiy yo'l)
+                cleaner_id = await self._find_cleaner(task.hotel_id, task.branch_id)
+                if cleaner_id is None:
+                    continue  # hali hech kim ishda emas — keyingi tikda
+                task.assigned_to = cleaner_id
+                await self.session.flush()
+                room = await self.session.get(Room, task.room_id)
+                number = room.room_number if room else "?"
+                logger.info("Pending task %s assigned to %s", task.id, cleaner_id)
+                # Push xatosi biriktirishni buzmasin
+                try:
+                    await NotificationService(self.session).notify(
+                        hotel_id=task.hotel_id,
+                        user_id=cleaner_id,
+                        title="Sizga tozalash vazifasi biriktirildi",
+                        body=f"{number}-xona — xonani tozalab tekshiring",
+                        entity_type="task",
+                        entity_id=task.id,
+                        send_push=True,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Pending task notification yuborilmadi (task=%s)", task.id
+                    )
             try:
-                await NotificationService(self.session).notify(
-                    hotel_id=task.hotel_id,
-                    user_id=cleaner_id,
-                    title="Sizga tozalash vazifasi biriktirildi",
-                    body=f"{number}-xona — xonani tozalab tekshiring",
-                    entity_type="task",
-                    entity_id=task.id,
-                    send_push=True,
-                )
+                await self.session.commit()
             except Exception:
-                logger.exception(
-                    "Pending task notification yuborilmadi (task=%s)", task.id
-                )
+                await self.session.rollback()
+                logger.exception("biriktirish: filial %s saqlanmadi", branch_id)
 
     async def _auto_complete_tasks(self) -> None:
         """Belgilangan vaqtdan oshib ketgan OPEN/IN_PROGRESS vazifalarni yopadi.
@@ -301,48 +336,60 @@ class AutomationService:
         from app.application.services.branch_settings import branch_settings
 
         settings_cache: dict = {}
-        for task in rows:
-            try:
-                key = (task.hotel_id, task.branch_id)
-                if key not in settings_cache:
-                    settings_cache[key] = await branch_settings(
-                        self.session, task.hotel_id, task.branch_id
+        for (hotel_id, branch_id), group in _by_branch(rows).items():
+            # Filial yozuv qulfi (xodim so'rovlari bilan bir navbat); band
+            # bo'lsa shu filial keyingi tikda. Har filial alohida commit —
+            # qulf shu zahoti bo'shaydi, xodimlar kutib qolmaydi
+            if not await try_branch_write_lock(self.session, hotel_id, branch_id):
+                logger.debug("Filial %s band — avto-yakunlash keyingi tikda", branch_id)
+                continue
+            for task in group:
+                try:
+                    key = (task.hotel_id, task.branch_id)
+                    if key not in settings_cache:
+                        settings_cache[key] = await branch_settings(
+                            self.session, task.hotel_id, task.branch_id
+                        )
+                    # Mehmonxona umuman o'chirib qo'ygan bo'lsa ham 0 — tegilmaydi:
+                    # xona faqat farrosh/menejer yakunlaganda o'zgaradi
+                    minutes = effective_auto_complete_minutes(
+                        settings_cache[key], task.task_type
                     )
-                # Mehmonxona umuman o'chirib qo'ygan bo'lsa ham 0 — tegilmaydi:
-                # xona faqat farrosh/menejer yakunlaganda o'zgaradi
-                minutes = effective_auto_complete_minutes(
-                    settings_cache[key], task.task_type
-                )
-                if minutes <= 0:
-                    continue  # avto-yakunlash o'chirilgan (umuman yoki shu tur uchun)
+                    if minutes <= 0:
+                        continue  # avto-yakunlash o'chirilgan (umuman yoki shu tur uchun)
 
-                # Boshlangan vazifada — boshlangan vaqtdan, ochiqda — yaratilgandan
-                ref = (
-                    task.started_at
-                    if task.status == "IN_PROGRESS" and task.started_at
-                    else task.created_at
-                )
-                if ref is None:
-                    continue
-                if ref.tzinfo is None:
-                    ref = ref.replace(tzinfo=timezone.utc)
-                if ref + timedelta(minutes=minutes) > now_utc:
-                    continue
+                    # Boshlangan vazifada — boshlangan vaqtdan, ochiqda — yaratilgandan
+                    ref = (
+                        task.started_at
+                        if task.status == "IN_PROGRESS" and task.started_at
+                        else task.created_at
+                    )
+                    if ref is None:
+                        continue
+                    if ref.tzinfo is None:
+                        ref = ref.replace(tzinfo=timezone.utc)
+                    if ref + timedelta(minutes=minutes) > now_utc:
+                        continue
 
-                # Odatiy yakunlash oqimi: xona holati va bron hook'lari ishlaydi
-                completed = await HousekeepingService(self.session).update_task_status(
-                    task.id, task.hotel_id, "COMPLETED", task.created_by
-                )
-                completed.auto_completed = True
-                await self.session.flush()
-                logger.info(
-                    "Task %s auto-completed (%s, %d daqiqa o'tdi)",
-                    task.id,
-                    task.task_type,
-                    minutes,
-                )
+                    # Odatiy yakunlash oqimi: xona holati va bron hook'lari ishlaydi
+                    completed = await HousekeepingService(self.session).update_task_status(
+                        task.id, task.hotel_id, "COMPLETED", task.created_by
+                    )
+                    completed.auto_completed = True
+                    await self.session.flush()
+                    logger.info(
+                        "Task %s auto-completed (%s, %d daqiqa o'tdi)",
+                        task.id,
+                        task.task_type,
+                        minutes,
+                    )
+                except Exception:
+                    logger.exception("Auto-complete failed for task %s", task.id)
+            try:
+                await self.session.commit()
             except Exception:
-                logger.exception("Auto-complete failed for task %s", task.id)
+                await self.session.rollback()
+                logger.exception("avto-yakunlash: filial %s saqlanmadi", branch_id)
 
     async def _repair_orphan_cleaning_rooms(self) -> None:
         """CLEANING da qolib ketgan, lekin ochiq tozalash vazifasi yo'q xonalar.
@@ -385,133 +432,145 @@ class AutomationService:
             .scalars()
             .all()
         )
-        for room in rooms:
-            try:
-                active = (
-                    await self.session.execute(
-                        select(HousekeepingTask.id)
-                        .where(
-                            HousekeepingTask.room_id == room.id,
-                            HousekeepingTask.task_type.in_(
-                                ["CLEANING", "DEEP_CLEANING"]
-                            ),
-                            HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
-                        )
-                        .limit(1)
-                    )
-                ).first()
-                if active:
-                    continue  # hammasi joyida — farrosh ko'radi
-
-                # Xona qachondan beri CLEANING da. Grace davri odatdagi oqimga
-                # xalaqit bermaslik uchun: chiqish yo'llari xonani CLEANING ga
-                # o'tkazib, o'sha yerning o'zida vazifani ham yaratadi.
-                since = (
-                    await self.session.execute(
-                        select(RoomStatusHistory.created_at)
-                        .where(
-                            RoomStatusHistory.room_id == room.id,
-                            RoomStatusHistory.status == "CLEANING",
-                        )
-                        .order_by(RoomStatusHistory.created_at.desc())
-                        .limit(1)
-                    )
-                ).scalar_one_or_none()
-                if since is None:
-                    # Tarixsiz xona — qachon o'tganini bilmaymiz, tegmaymiz
-                    continue
-                if since.tzinfo is None:
-                    since = since.replace(tzinfo=timezone.utc)
-                if since > cutoff:
-                    continue
-
-                # Chiqish so'ralgan, lekin yopilmay qolgan bron bo'lsa vazifani
-                # unga bog'laymiz — yakunlanganda bron ham odatdagidek
-                # CHECKED_OUT bo'ladi. Bo'lmasa bog'lanmagan vazifa yaratamiz:
-                # u hech qaysi bronning holatiga tegmaydi.
-                reservation = (
-                    (
+        for (hotel_id, branch_id), group in _by_branch(rooms).items():
+            # Filial yozuv qulfi (xodim so'rovlari bilan bir navbat); band
+            # bo'lsa shu filial keyingi tikda. Har filial alohida commit —
+            # qulf shu zahoti bo'shaydi, xodimlar kutib qolmaydi
+            if not await try_branch_write_lock(self.session, hotel_id, branch_id):
+                logger.debug("Filial %s band — yetim xona tiklash keyingi tikda", branch_id)
+                continue
+            for room in group:
+                try:
+                    active = (
                         await self.session.execute(
-                            select(Reservation)
+                            select(HousekeepingTask.id)
                             .where(
-                                Reservation.room_id == room.id,
-                                Reservation.is_deleted.is_(False),
-                                Reservation.status.in_(["CHECKED_IN", "CONFIRMED"]),
-                                Reservation.checkout_requested_at.isnot(None),
+                                HousekeepingTask.room_id == room.id,
+                                HousekeepingTask.task_type.in_(
+                                    ["CLEANING", "DEEP_CLEANING"]
+                                ),
+                                HousekeepingTask.status.in_(["OPEN", "IN_PROGRESS"]),
                             )
-                            .order_by(Reservation.checkout_requested_at.desc())
                             .limit(1)
                         )
-                    )
-                    .scalars()
-                    .first()
-                )
+                    ).first()
+                    if active:
+                        continue  # hammasi joyida — farrosh ko'radi
 
-                plan = await self._plan_assignment(room.hotel_id, room.branch_id)
-                cleaner_id = plan.assignee
-                # created_by NOT NULL — tizim amali uchun mavjud odamni olamiz
-                created_by = (
-                    (reservation.created_by if reservation is not None else None)
-                    or cleaner_id
-                    or (plan.notify[0] if plan.notify else None)
-                    or (
+                    # Xona qachondan beri CLEANING da. Grace davri odatdagi oqimga
+                    # xalaqit bermaslik uchun: chiqish yo'llari xonani CLEANING ga
+                    # o'tkazib, o'sha yerning o'zida vazifani ham yaratadi.
+                    since = (
                         await self.session.execute(
-                            select(User.id)
-                            .where(User.hotel_id == room.hotel_id)
+                            select(RoomStatusHistory.created_at)
+                            .where(
+                                RoomStatusHistory.room_id == room.id,
+                                RoomStatusHistory.status == "CLEANING",
+                            )
+                            .order_by(RoomStatusHistory.created_at.desc())
                             .limit(1)
                         )
                     ).scalar_one_or_none()
-                )
-                if created_by is None:
-                    logger.warning(
-                        "Room %s CLEANING da vazifasiz, lekin mehmonxonada "
-                        "foydalanuvchi topilmadi — vazifa yaratilmadi",
-                        room.id,
+                    if since is None:
+                        # Tarixsiz xona — qachon o'tganini bilmaymiz, tegmaymiz
+                        continue
+                    if since.tzinfo is None:
+                        since = since.replace(tzinfo=timezone.utc)
+                    if since > cutoff:
+                        continue
+
+                    # Chiqish so'ralgan, lekin yopilmay qolgan bron bo'lsa vazifani
+                    # unga bog'laymiz — yakunlanganda bron ham odatdagidek
+                    # CHECKED_OUT bo'ladi. Bo'lmasa bog'lanmagan vazifa yaratamiz:
+                    # u hech qaysi bronning holatiga tegmaydi.
+                    reservation = (
+                        (
+                            await self.session.execute(
+                                select(Reservation)
+                                .where(
+                                    Reservation.room_id == room.id,
+                                    Reservation.is_deleted.is_(False),
+                                    Reservation.status.in_(["CHECKED_IN", "CONFIRMED"]),
+                                    Reservation.checkout_requested_at.isnot(None),
+                                )
+                                .order_by(Reservation.checkout_requested_at.desc())
+                                .limit(1)
+                            )
+                        )
+                        .scalars()
+                        .first()
                     )
-                    continue
 
-                task = HousekeepingTask(
-                    hotel_id=room.hotel_id,
-                    branch_id=room.branch_id,
-                    room_id=room.id,
-                    reservation_id=reservation.id if reservation is not None else None,
-                    task_type="CLEANING",
-                    status="OPEN",
-                    priority="HIGH",
-                    assigned_to=cleaner_id,
-                    notes=ORPHAN_REPAIR_NOTE,
-                    scheduled_date=now_utc.date(),
-                    created_by=created_by,
-                )
-                self.session.add(task)
-                await self.session.flush()
-                # Tiklangan vazifa ham bandlarsiz qolmasin
-                from app.application.services.checklist_template_service import (
-                    ChecklistTemplateService,
-                )
+                    plan = await self._plan_assignment(room.hotel_id, room.branch_id)
+                    cleaner_id = plan.assignee
+                    # created_by NOT NULL — tizim amali uchun mavjud odamni olamiz
+                    created_by = (
+                        (reservation.created_by if reservation is not None else None)
+                        or cleaner_id
+                        or (plan.notify[0] if plan.notify else None)
+                        or (
+                            await self.session.execute(
+                                select(User.id)
+                                .where(User.hotel_id == room.hotel_id)
+                                .limit(1)
+                            )
+                        ).scalar_one_or_none()
+                    )
+                    if created_by is None:
+                        logger.warning(
+                            "Room %s CLEANING da vazifasiz, lekin mehmonxonada "
+                            "foydalanuvchi topilmadi — vazifa yaratilmadi",
+                            room.id,
+                        )
+                        continue
 
-                await ChecklistTemplateService(self.session).attach_to_task(task)
-                logger.info(
-                    "Room %s CLEANING da vazifasiz edi — vazifa tiklandi "
-                    "(task=%s, cleaner=%s)",
-                    room.id,
-                    task.id,
-                    cleaner_id,
-                )
+                    task = HousekeepingTask(
+                        hotel_id=room.hotel_id,
+                        branch_id=room.branch_id,
+                        room_id=room.id,
+                        reservation_id=reservation.id if reservation is not None else None,
+                        task_type="CLEANING",
+                        status="OPEN",
+                        priority="HIGH",
+                        assigned_to=cleaner_id,
+                        notes=ORPHAN_REPAIR_NOTE,
+                        scheduled_date=now_utc.date(),
+                        created_by=created_by,
+                    )
+                    self.session.add(task)
+                    await self.session.flush()
+                    # Tiklangan vazifa ham bandlarsiz qolmasin
+                    from app.application.services.checklist_template_service import (
+                        ChecklistTemplateService,
+                    )
 
-                await notify_cleaners(
-                    self.session,
-                    plan.notify,
-                    hotel_id=room.hotel_id,
-                    title="Tozalanmagan xona",
-                    body=(
-                        f"{room.room_number}-xona tozalash holatida "
-                        f"turibdi — tozalab, vazifani yakunlang"
-                    ),
-                    entity_id=task.id,
-                )
+                    await ChecklistTemplateService(self.session).attach_to_task(task)
+                    logger.info(
+                        "Room %s CLEANING da vazifasiz edi — vazifa tiklandi "
+                        "(task=%s, cleaner=%s)",
+                        room.id,
+                        task.id,
+                        cleaner_id,
+                    )
+
+                    await notify_cleaners(
+                        self.session,
+                        plan.notify,
+                        hotel_id=room.hotel_id,
+                        title="Tozalanmagan xona",
+                        body=(
+                            f"{room.room_number}-xona tozalash holatida "
+                            f"turibdi — tozalab, vazifani yakunlang"
+                        ),
+                        entity_id=task.id,
+                    )
+                except Exception:
+                    logger.exception("Orphan CLEANING repair failed for room %s", room.id)
+            try:
+                await self.session.commit()
             except Exception:
-                logger.exception("Orphan CLEANING repair failed for room %s", room.id)
+                await self.session.rollback()
+                logger.exception("yetim xona tiklash: filial %s saqlanmadi", branch_id)
 
     async def _process(self, reservation: Reservation, now: datetime) -> None:
         moment = self._checkout_moment(reservation)

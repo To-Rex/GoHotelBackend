@@ -67,16 +67,17 @@ class NotificationService:
             data = self._build_data(entity_type, entity_id)
             if is_task:
                 data["kind"] = "task_alarm"
-            sent = await firebase.send_push(
+            # Fonda: Firebase'ga HTTP so'rovi chaqiruvchining tranzaksiyasini
+            # (va filial yozuv qulfini) ushlab turmasin — push sekin bo'lsa
+            # ham xodimlarning bron/to'lov yozuvlari kutib qolmaydi
+            firebase.send_push_background(
                 token,
                 title,
                 body,
                 data=data,
                 data_only=is_task,
             )
-            logger.info(
-                "Push yuborildi (user_id=%s, natija=%s, title=%s)", user_id, sent, title
-            )
+            logger.info("Push fonda yuborilmoqda (user_id=%s, title=%s)", user_id, title)
         except Exception:
             logger.exception("Push yuborishda xato (user_id=%s)", user_id)
 
@@ -132,7 +133,8 @@ class NotificationService:
             try:
                 tokens = await self._get_hotel_tokens(hotel_id)
                 if tokens:
-                    await firebase.send_push(
+                    # Fonda — tranzaksiya va filial qulfi kutmaydi
+                    firebase.send_push_background(
                         tokens, title, body, data=self._build_data(entity_type, entity_id)
                     )
             except Exception:
