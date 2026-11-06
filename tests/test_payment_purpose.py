@@ -190,6 +190,42 @@ def test_feed_with_shop_is_a_union_with_local_day_and_bounds():
     assert "UNION ALL" in sql(count)
 
 
+def test_split_row_follows_its_origin_at_the_same_moment():
+    """Qisman tahrirda ajralgan qator asl to'lov VAQTIDA turadi. Taqsimot
+    barqaror: avval asl to'lov (xona haqi), keyin ajralgan qism — ro'yxat
+    qaysi tartibda kelganidan qat'i nazar."""
+    charges = [room(60_000), penalty(40_000, 0)]
+    origin = pp.Paid("origin", 50_000, t(1))
+    split = pp.Paid("split", 50_000, t(1), rank=1)
+
+    for payments in ([origin, split], [split, origin]):
+        alloc = pp.allocate(charges, payments)
+        assert kinds(alloc["origin"]) == [(pp.KIND_ROOM, 50_000.0)]
+        assert kinds(alloc["split"]) == [(pp.KIND_ROOM, 10_000.0), (pp.KIND_PENALTY, 40_000.0)]
+
+
+def test_same_moment_payments_keep_the_given_order():
+    """`rank` teng bo'lsa kiritilgan tartib saqlanadi (so'rov vaqt va id
+    bo'yicha tartiblaydi) — natija har chaqiruvda bir xil."""
+    charges = [room(60_000), penalty(40_000, 0)]
+    alloc = pp.allocate(charges, [pp.Paid("a", 50_000, t(1)), pp.Paid("b", 50_000, t(1))])
+    assert kinds(alloc["a"]) == [(pp.KIND_ROOM, 50_000.0)]
+    assert kinds(alloc["b"]) == [(pp.KIND_ROOM, 10_000.0), (pp.KIND_PENALTY, 40_000.0)]
+
+
+def test_split_total_matches_the_unsplit_allocation():
+    """Bo'lingan to'lov qismlari yig'indisi bo'linmagan to'lov taqsimotiga teng."""
+    charges = [room(60_000), penalty(40_000, 0)]
+    whole = pp.allocate(charges, [pp.Paid("p", 100_000, t(1))])["p"]
+    parts = pp.allocate(
+        charges, [pp.Paid("p", 50_000, t(1)), pp.Paid("s", 50_000, t(1), rank=1)]
+    )
+    merged: dict = {}
+    for part in [*parts["p"], *parts["s"]]:
+        merged[part["kind"]] = merged.get(part["kind"], 0) + part["amount"]
+    assert merged == {p["kind"]: p["amount"] for p in whole}
+
+
 def test_feed_search_covers_room_guest_product_and_notes():
     ids, _ = svc()._feed_statements(HOTEL, None, None, "12", None, None, True)
     text = sql(ids)

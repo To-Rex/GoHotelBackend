@@ -68,6 +68,9 @@ class Paid:
     id: object
     amount: float
     at: datetime | None = None
+    #: Bir xil vaqtli to'lovlar orasidagi o'rin: 0 — oddiy/asl to'lov,
+    #: 1 — undan qisman tahrirda ajralgan qism (asl to'lovdan keyin turadi)
+    rank: int = 0
 
 
 def line_kind(line_type: str | None) -> str:
@@ -106,8 +109,10 @@ def allocate(
     to'lov "tegmaydi"). Qolgani — ORTIQCHA. Manfiy to'lov — QAYTARIM.
     Chegirma (`discount`) birinchi xona haqidan ayiriladi.
     """
-    events = [(_order(c.at, 0), 0, c) for c in charges] + [
-        (_order(p.at, 1), 1, p) for p in payments
+    # Kalit: (vaqt, haq/to'lov, rank). Qolgan tenglikda kiritilgan tartib
+    # saqlanadi (sort barqaror) — chaqiruvchi ro'yxatni aniq tartibda beradi
+    events = [((*_order(c.at, 0), 0), 0, c) for c in charges] + [
+        ((*_order(p.at, 1), p.rank), 1, p) for p in payments
     ]
     events.sort(key=lambda e: e[0])
 

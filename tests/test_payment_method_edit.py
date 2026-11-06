@@ -250,6 +250,7 @@ def test_partial_split_creates_a_second_payment(monkeypatch):
     assert split.invoice_id == payment.invoice_id
     assert split.created_by == payment.created_by
     assert split.payment_date == payment.payment_date
+    assert split.created_at == payment.created_at
     assert "Qisman o'tkazildi" in (split.notes or "")
     assert split.payment_number
 
@@ -329,3 +330,133 @@ def test_partial_same_method_is_rejected(monkeypatch):
 
     assert exc.value.error_code == "PAYMENT_METHOD_UNCHANGED"
     assert svc.session.added == []
+
+
+# ------------------------------- tahrir pul olingan VAQTNI o'zgartirmaydi --
+
+def test_partial_split_of_an_old_payment_stays_at_its_original_moment(monkeypatch):
+    """Kechagi to'lov bugun qisman tahrirlandi: ajralgan qism ham KECHAGI
+    daqiqada turadi — smena kassasi va shaxsiy hisobot `created_at` oynasi
+    bilan ishlaydi, aks holda pul bugungi smenaga o'tib qolardi."""
+    payment = make_payment(created_hours_ago=30, method="CASH")
+    payment.amount = 100000.0
+    paid_at = payment.created_at
+    svc, _ = build(monkeypatch, payment, make_actor())
+
+    edit(svc, ADMIN, payment.id, "ONLINE", amount=50000)
+
+    split = svc.session.added[0]
+    assert split.created_at == paid_at
+    assert datetime.now(timezone.utc) - split.created_at > timedelta(hours=29)
+    # Asl to'lov vaqti va sanasi ham o'zgarmadi
+    assert payment.created_at == paid_at
+    assert payment.payment_date == dt_date(2026, 10, 15)
+    assert split.payment_date == dt_date(2026, 10, 15)
+    # Tahrir PAYTI yo'qolmadi — u tarixda
+    edited_at = datetime.fromisoformat(payment.method_changes[0]["at"])
+    assert datetime.now(timezone.utc) - edited_at < timedelta(minutes=1)
+
+
+def test_split_of_a_split_keeps_the_first_moment(monkeypatch):
+    payment = make_payment(created_hours_ago=30, method="CASH")
+    payment.amount = 100000.0
+    paid_at = payment.created_at
+    svc, _ = build(monkeypatch, payment, make_actor())
+    edit(svc, ADMIN, payment.id, "ONLINE", amount=50000)
+    first_split = svc.session.added[0]
+
+    # Ajralgan qatorning o'zi yana bo'linadi
+    svc2, _ = build(monkeypatch, first_split, make_actor())
+    edit(svc2, ADMIN, first_split.id, "CARD", amount=20000)
+
+    second_split = svc2.session.added[0]
+    assert second_split.created_at == paid_at
+    assert float(first_split.amount) == 30000.0
+    # Birinchi ajralgan qator tarixi: kelib chiqishi + o'zining qisman tahriri
+    assert [e["kind"] for e in first_split.method_changes] == ["split_from", "partial"]
+
+
+def test_split_without_original_moment_falls_back_to_now(monkeypatch):
+    """`created_at` NOT NULL; baribir bo'sh bo'lsa ajralgan qator vaqtsiz
+    qolmaydi (insert yiqilmasin)."""
+    payment = make_payment(method="CASH")
+    payment.amount = 100000.0
+    payment.created_at = None
+    svc, _ = build(monkeypatch, payment)
+
+    edit(svc, ADMIN, payment.id, "ONLINE", amount=50000)
+
+    assert svc.session.added[0].created_at is not None
+
+
+# --------------------------- tarix: necha puldan necha pulga, qayerdan --
+
+def test_partial_history_records_amount_before_and_after(monkeypatch):
+    payment = make_payment(method="CASH")
+    payment.amount = 100000.0
+    svc, audit = build(monkeypatch, payment, make_actor())
+
+    edit(svc, ADMIN, payment.id, "ONLINE", note="Yarmi online", amount=30000)
+
+    entry = payment.method_changes[0]
+    assert entry["total_before"] == 100000.0
+    assert entry["total_after"] == 70000.0
+    assert entry["amount"] == 30000.0
+    assert float(payment.amount) == 70000.0
+    # Audit jurnalida ham
+    assert audit[0]["new_values"]["total_before"] == 100000.0
+    assert audit[0]["new_values"]["total_after"] == 70000.0
+    assert audit[0]["new_values"]["new_payment_number"] == entry["new_payment_number"]
+
+
+def test_split_row_history_says_where_it_came_from(monkeypatch):
+    payment = make_payment(method="CASH")
+    payment.amount = 100000.0
+    svc, _ = build(monkeypatch, payment, make_actor())
+
+    edit(svc, ADMIN, payment.id, "ONLINE", note="Yarmi online", amount=30000)
+
+    split = svc.session.added[0]
+    assert len(split.method_changes) == 1
+    origin = split.method_changes[0]
+    assert origin["kind"] == "split_from"
+    assert origin["from_payment_number"] == "PAY-1"
+    assert origin["from_total"] == 100000.0
+    assert origin["amount"] == 30000.0
+    assert origin["old"] == "CASH" and origin["new"] == "ONLINE"
+    assert origin["by"] == ADMIN["id"]
+    assert origin["by_name"] == "Aziz Karimov"
+    assert origin["note"] == "Yarmi online"
+    # Ikkala qatorda tahrir payti bir xil
+    assert origin["at"] == payment.method_changes[0]["at"]
+    # Asl qator tarixi ajralgan qatorga aralashmaydi
+    assert payment.method_changes[0]["kind"] == "partial"
+    assert "from_payment_number" not in payment.method_changes[0]
+
+
+def test_full_edit_records_the_unchanged_total(monkeypatch):
+    payment = make_payment(method="CASH")
+    svc, audit = build(monkeypatch, payment)
+
+    edit(svc, ADMIN, payment.id, "CARD")
+
+    entry = payment.method_changes[0]
+    assert entry["kind"] == "full"
+    assert entry["total_before"] == 250000.0
+    assert entry["total_after"] == 250000.0
+    assert float(payment.amount) == 250000.0
+    assert svc.session.added == []
+    assert audit[0]["new_values"]["new_payment_number"] is None
+
+
+def test_partial_amounts_are_rounded_to_tiyin(monkeypatch):
+    payment = make_payment(method="CASH")
+    payment.amount = 100000.1
+    svc, _ = build(monkeypatch, payment)
+
+    edit(svc, ADMIN, payment.id, "ONLINE", amount=33333.33)
+
+    entry = payment.method_changes[0]
+    assert entry["total_before"] == 100000.1
+    assert entry["total_after"] == 66666.77
+    assert float(payment.amount) == 66666.77

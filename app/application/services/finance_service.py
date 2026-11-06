@@ -34,6 +34,12 @@ from app.application.services.move_discount_policy import (
 )
 from app.application.services import payment_purpose as purpose
 from app.core.config import settings
+from app.shared.payment_splits import (
+    KIND_FULL,
+    KIND_PARTIAL,
+    is_split_row,
+    split_origin_entry,
+)
 from app.shared.utils import generate_code, hotel_today, local_date_of, local_day_bounds
 
 logger = logging.getLogger(__name__)
@@ -412,6 +418,12 @@ class FinanceService:
         qoladi. Masalan: 100 000 naqd → 50 000 naqd + 50 000 online.
         Summa, sana va hisobga bog'lanish o'zgarmaydi (yig'indi teng).
 
+        Tahrir pulning QACHON olinganini o'zgartirmaydi: ajralgan qator
+        ham asl to'lovning `created_at` va `payment_date` ini oladi —
+        smena kassasi, shaxsiy hisobot va To'lovlar jadvalida u o'z
+        kunida qoladi, bugunga o'tib qolmaydi. Tahrir payti, kim va
+        necha puldan necha pulga — `method_changes` tarixida.
+
         Huquq: administrator/super admin (cheklovsiz) yoki menejer
         (`shift.force_close`) — menejerga faqat oxirgi 2 kunlik to'lovlar
         (`PAYMENT_EDIT_WINDOW_HOURS`). Har tahrir `method_changes` ga
@@ -476,27 +488,46 @@ class FinanceService:
             if actor is not None:
                 by_name = f"{actor.first_name} {actor.last_name}".strip() or None
 
+        edited_at = datetime.now(timezone.utc)
         entry = {
             "old": old_method,
             "new": new_method,
             "by": str(actor_id) if actor_id else None,
             "by_name": by_name,
-            "at": datetime.now(timezone.utc).isoformat(),
+            "at": edited_at.isoformat(),
             "note": note,
+            # Shu qator summasi tahrirdan OLDIN va KEYIN — "necha puldan
+            # necha pulga" ekranda aniq ko'rinadi (butun tahrirda teng)
+            "total_before": round(total, 2),
+            "total_after": round(total, 2),
         }
 
         if partial_amount is None:
-            entry.update({"kind": "full", "amount": None, "new_payment_number": None})
+            entry.update({"kind": KIND_FULL, "amount": None, "new_payment_number": None})
             payment.payment_method = new_method
         else:
-            # Qism yangi to'lov qatori bo'ladi. Pulni QABUL QILGAN xodim
-            # saqlanadi (kassa/hisobot atributsiyasi o'zgarmasin), sana ham
-            # asl to'lovniki — kunlik hisobotlar o'sha kunda qoladi.
             hotel_code = await self._get_hotel_code(payment.hotel_id)
+            split_number = generate_code("PAY", hotel_code)
+            remaining = round(total - partial_amount, 2)
+            entry.update(
+                {
+                    "kind": KIND_PARTIAL,
+                    "amount": partial_amount,
+                    "new_payment_number": split_number,
+                    "total_after": remaining,
+                }
+            )
+            # Qism yangi to'lov qatori bo'ladi. Pulni QABUL QILGAN xodim
+            # saqlanadi (kassa/hisobot atributsiyasi o'zgarmasin), sana va
+            # VAQT ham asl to'lovniki: pul o'sha paytda olingan. Tahrir
+            # payti yozilsa ajralgan qism smena kassasi, shaxsiy hisobot
+            # va To'lovlar jadvalida BUGUNGA o'tib qolardi (kechagi
+            # smenadan ayirilib, bugungisiga qo'shilardi). Tahrir payti
+            # yo'qolmaydi — u qatorning o'z tarixida (`split_from`).
             split = Payment(
                 hotel_id=payment.hotel_id,
                 invoice_id=payment.invoice_id,
-                payment_number=generate_code("PAY", hotel_code),
+                payment_number=split_number,
                 amount=partial_amount,
                 payment_method=new_method,
                 payment_date=payment.payment_date,
@@ -506,17 +537,11 @@ class FinanceService:
                     f"{partial_amount:.0f} So'm ({old_method} → {new_method})"
                 ),
                 created_by=payment.created_by,
-                created_at=datetime.now(timezone.utc),
+                created_at=payment.created_at or edited_at,
+                method_changes=[split_origin_entry(entry, payment.payment_number)],
             )
             self.session.add(split)
-            payment.amount = total - partial_amount
-            entry.update(
-                {
-                    "kind": "partial",
-                    "amount": partial_amount,
-                    "new_payment_number": split.payment_number,
-                }
-            )
+            payment.amount = remaining
 
         # JSONB — YANGI ro'yxat bilan almashtiriladi (SQLAlchemy o'zgarishni
         # sezishi uchun; smena `corrections` bilan bir xil naqsh)
@@ -537,6 +562,9 @@ class FinanceService:
                     "kind": entry["kind"],
                     "amount": partial_amount,
                     "note": note,
+                    "total_before": entry["total_before"],
+                    "total_after": entry["total_after"],
+                    "new_payment_number": entry["new_payment_number"],
                 },
             )
         except Exception:
@@ -825,15 +853,32 @@ class FinanceService:
                     label=line.description,
                 )
             )
+        # Qisman tahrirda ajralgan qator asl to'lov VAQTINI oladi — ikkalasi
+        # bir xil daqiqada turadi. Taqsimot har so'rovda bir xil chiqishi
+        # uchun tartib aniq: vaqt, keyin asl to'lov (`rank` 0), keyin undan
+        # ajralgan qism (`rank` 1); qolgani id bo'yicha.
         paid: dict = {}
-        for pid, inv_id, amount, at in (
+        for pid, inv_id, amount, at, changes in (
             await self.session.execute(
-                select(Payment.id, Payment.invoice_id, Payment.amount, Payment.created_at).where(
-                    Payment.invoice_id.in_(invoice_ids)
+                select(
+                    Payment.id,
+                    Payment.invoice_id,
+                    Payment.amount,
+                    Payment.created_at,
+                    Payment.method_changes,
                 )
+                .where(Payment.invoice_id.in_(invoice_ids))
+                .order_by(Payment.created_at, Payment.id)
             )
         ).all():
-            paid.setdefault(inv_id, []).append(purpose.Paid(id=pid, amount=float(amount or 0), at=at))
+            paid.setdefault(inv_id, []).append(
+                purpose.Paid(
+                    id=pid,
+                    amount=float(amount or 0),
+                    at=at,
+                    rank=1 if is_split_row(changes) else 0,
+                )
+            )
 
         allocations: dict = {}
         for inv_id in invoice_ids:

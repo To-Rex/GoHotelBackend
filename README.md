@@ -661,8 +661,18 @@ TURI tahrirlanadi — **butun summa yoki qisman**:
   404 `PAYMENT_NOT_FOUND`.
 - **Tarix o'chirilmaydi:** har tahrir `payments.method_changes` da
   (nimadan nimaga, **qancha** — `kind: full|partial`, `amount`,
+  `total_before` → `total_after` (necha puldan necha pulga),
   `new_payment_number`, kim, qachon, izoh) va `audit_logs` da qoladi;
   javobda `method_changes` qaytadi. Migratsiya `e9c0d1e2f3a4`.
+- **Tahrir pul olingan vaqtni o'zgartirmaydi:** qisman tahrirda ajralgan
+  qator asl to'lovning `created_at` va `payment_date` ini oladi — smena
+  kassasi, shaxsiy hisobot va To'lovlar jadvalida u o'z kunida qoladi,
+  tahrir kuniga o'tib qolmaydi. Ajralgan qator tarixining birinchi yozuvi
+  `kind: split_from` (`from_payment_number`, `from_total`). Eski ajralgan
+  qatorlarni migratsiya `c1e3f5a7b9d2` tuzatgan
+  (`app/shared/payment_splits.py`, `pytest tests/test_payment_splits.py`).
+  Vebda tahrirlangan to'lov sariq belgi bilan turadi ("100 000 → 50 000"
+  yoki "Naqd → Online"), bosilsa to'liq tarix ochiladi — hammaga ko'rinadi.
 - Usul o'zgarishi moliyaviy ko'rsatkichlarga ta'sir qiladi (to'lov usullari
   kesimi, smena kassasidagi kutilgan naqd, xodimlar hisoboti) — vebda
   tegishli kesh kalitlari yangilanadi. Vebda: Moliya → To'lovlar

@@ -62,7 +62,11 @@ class PaymentResponse(BaseModel):
     reference: str | None
     notes: str | None
     created_at: datetime
-    #: To'lov turi tahriri tarixi: [{old, new, by, by_name, at, note}, ...]
+    #: To'lov turi tahriri tarixi: [{kind, old, new, amount, total_before,
+    #: total_after, by, by_name, at, note, new_payment_number}, ...].
+    #: `kind`: full — butun summa; partial — qismi yangi qatorga o'tdi;
+    #: split_from — shu qator boshqa to'lovdan ajralgan
+    #: (`from_payment_number`, `from_total`). `app/shared/payment_splits.py`
     method_changes: list | None = None
 
     # --- To'lov nima uchun (GET /finance/payments ro'yxatida) ---------
