@@ -32,6 +32,7 @@ from app.infrastructure.database.models.file_attachment import FileAttachment
 from app.infrastructure.database.models.notification import Notification
 from app.infrastructure.database.models.report import Report
 from app.infrastructure.database.models.expense import Expense
+from app.infrastructure.database.models.expense_category import ExpenseCategory
 from app.infrastructure.database.models.webauthn_credential import WebAuthnCredential
 from app.infrastructure.database.models.webauthn_challenge import WebAuthnChallenge
 from app.infrastructure.database.models.shop import ShopProduct, ShopBatch, ShopSale, ShopSaleItem, ShopSalePayment, ShopWriteoff
@@ -51,7 +52,7 @@ __all__ = [
     "HousekeepingTask", "ChecklistItem", "Problem",
     "Ledger", "JournalEntry", "JournalEntryLine",
     "Invoice", "InvoiceLineItem", "InvoiceItem", "Payment", "AuditLog",
-    "FileAttachment", "Notification", "Report", "Expense",
+    "FileAttachment", "Notification", "Report", "Expense", "ExpenseCategory",
     "Amenity", "HotelAmenity", "RoomAmenity",
     "WebAuthnCredential", "WebAuthnChallenge",
     "ShopProduct", "ShopBatch", "ShopSale", "ShopSaleItem", "ShopSalePayment", "ShopWriteoff",

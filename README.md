@@ -833,6 +833,24 @@ naqd/karta, qaytarim va xarajat. `GET /finance/by-staff?date_from&date_to`
 teng. Ko'rish — admin yoki `finance.view` / `shift.force_close` /
 `report.view`. Test: `pytest tests/test_finance_by_staff.py`.
 
+### Xarajat toifalari
+
+Xarajat toifani NOM bilan saqlaydi (`expenses.category`) — hisobotlar va
+mobil ilova shu nom bo'yicha guruhlaydi, eski yozuvlar o'zgarmaydi.
+Toifalar ro'yxati (`expense_categories`: nom, belgi, rang, tartib, arxiv)
+mehmonxonaniki, filiallar uchun umumiy. `GET/POST /expenses/categories`,
+`PUT /expenses/categories/{id}`, `PUT /expenses/categories/reorder`,
+`DELETE /expenses/categories/{id}` — o'qish hammaga, o'zgartirish
+ADMIN/SUPER_ADMIN va `expense.delete` ruxsati borlarga
+(`expense_category_service.py`). Qoidalar: qayta nomlash shu mehmonxona
+xarajatlariga ham o'tadi (barcha filiallar); ishlatilgan toifa
+o'chirilmaydi — arxivga tushadi; yangi mehmonxona ro'yxatni birinchi
+ochganda 13 ta standart toifa yoziladi, mavjud mehmonxonalarga ular va
+xarajatlarda ilgari qo'lda yozilgan nomlar `e5a7c9d1f3b5` migratsiyasida
+kiritilgan (`app/shared/expense_categories.py`). Xarajat yaratishda
+`category` ro'yxatdagi toifaga mos kelsa uning yozilishi olinadi
+("gaz" → "Gaz").
+
 ### Mijozga SMS (Xabarchi)
 
 Mijozga SMS [Xabarchi](https://github.com/To-Rex/Xabarchi-Backend) orqali

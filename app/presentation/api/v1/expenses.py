@@ -4,6 +4,11 @@ Ko'rish va kiritish BARCHA tizimga kirgan xodimlar uchun ochiq (har bir
 xarajatda kim kiritgani created_by sifatida majburiy saqlanadi va ro'yxatda
 ism-familiya bilan qaytariladi — javobgarlik saqlanadi). O'chirish esa faqat
 expense.delete ruxsati bilan (ADMIN/SUPER_ADMIN avtomatik).
+
+Toifalar (`/expenses/categories`): mehmonxonaning tanlash ro'yxati — nom,
+belgi, rang, tartib. O'qish hammaga; qo'shish, qayta nomlash, arxivlash
+ADMIN/SUPER_ADMIN va expense.delete ruxsati borlarga
+(expense_category_service).
 """
 from datetime import date
 from typing import Literal
@@ -14,12 +19,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.expense_category_service import (
+    ExpenseCategoryService,
+    can_manage_categories,
+)
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.user import User
-from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel, require_open_shift
+from app.presentation.middleware.auth import get_current_user, require_permission
 from app.shared.utils import hotel_today
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
@@ -48,6 +57,39 @@ class ExpenseCreateRequest(BaseModel):
     branch_id: UUID | None = None
 
 
+class ExpenseCategoryCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+    #: app/shared/expense_categories.ICONS dan biri (bo'sh — "tag")
+    icon: str | None = Field(default=None, max_length=30)
+    #: app/shared/expense_categories.COLORS dan biri (bo'sh — "gray")
+    color: str | None = Field(default=None, max_length=20)
+    sort_order: int | None = None
+
+
+class ExpenseCategoryUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=50)
+    icon: str | None = Field(default=None, max_length=30)
+    color: str | None = Field(default=None, max_length=20)
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+class ExpenseCategoryReorderRequest(BaseModel):
+    ids: list[UUID] = Field(default_factory=list, max_length=200)
+
+
+def _scope_hotel_id(current_user: dict, hotel_id: UUID | None) -> UUID:
+    """Toifalar uchun mehmonxona: SUPER_ADMIN `?hotel_id=` bilan, qolganlar
+    o'z mehmonxonasi."""
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    if not h_id:
+        raise ForbiddenException("Hotel context required")
+    return h_id
+
+
 def _expense_dict(e: Expense, creator: User | None) -> dict:
     return {
         "id": str(e.id),
@@ -65,6 +107,80 @@ def _expense_dict(e: Expense, creator: User | None) -> dict:
         ),
         "created_at": e.created_at.isoformat() if e.created_at else None,
     }
+
+
+# ----------------------------------------------------------- toifalar --
+
+
+@router.get("/categories")
+async def list_expense_categories(
+    include_archived: bool = Query(default=False),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Toifalar ro'yxati — xarajat kirita oladigan har bir xodimga.
+
+    Yangi mehmonxonada birinchi ochilishda standart toifalar yoziladi.
+    `can_manage` — shu foydalanuvchi ro'yxatni o'zgartira oladimi (mijoz
+    tugmalarni shunga qarab ko'rsatadi; server baribir qayta tekshiradi)."""
+    h_id = _scope_hotel_id(current_user, hotel_id)
+    items = await ExpenseCategoryService(session).list_categories(h_id, include_archived)
+    return {"items": items, "can_manage": can_manage_categories(current_user)}
+
+
+@router.post("/categories")
+async def create_expense_category(
+    data: ExpenseCategoryCreateRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _scope_hotel_id(current_user, hotel_id)
+    return await ExpenseCategoryService(session).create(h_id, data.model_dump(), current_user)
+
+
+@router.put("/categories/reorder")
+async def reorder_expense_categories(
+    data: ExpenseCategoryReorderRequest,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    h_id = _scope_hotel_id(current_user, hotel_id)
+    return await ExpenseCategoryService(session).reorder(h_id, data.ids, current_user)
+
+
+@router.put("/categories/{category_id}")
+async def update_expense_category(
+    data: ExpenseCategoryUpdateRequest,
+    category_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Nom o'zgarsa shu mehmonxonaning xarajatlaridagi toifa nomi ham
+    o'zgaradi — javobdagi `renamed_expenses` nechta qator ekanini aytadi."""
+    h_id = _scope_hotel_id(current_user, hotel_id)
+    return await ExpenseCategoryService(session).update(
+        h_id, category_id, data.model_dump(exclude_unset=True), current_user
+    )
+
+
+@router.delete("/categories/{category_id}")
+async def delete_expense_category(
+    category_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Ishlatilmagan toifa o'chadi; xarajati bor toifa ARXIVGA tushadi
+    (`archived: true`) — eski xarajatlar o'z toifasida qoladi."""
+    h_id = _scope_hotel_id(current_user, hotel_id)
+    return await ExpenseCategoryService(session).delete(h_id, category_id, current_user)
+
+
+# ---------------------------------------------------------- xarajatlar --
 
 
 @router.get("/")
@@ -119,7 +235,9 @@ async def create_expense(
         hotel_id=h_id,
         branch_id=data.branch_id or current_user.get("branch_id"),
         title=data.title.strip(),
-        category=(data.category or "").strip() or None,
+        # Ro'yxatdagi toifaga mos kelsa uning yozilishi ("ish haqi" →
+        # "Ish haqi") — hisobot bitta guruhda qoladi; bo'lmasa matnning o'zi
+        category=await ExpenseCategoryService(session).resolve_name(h_id, data.category),
         amount=data.amount,
         payment_method=data.payment_method,
         # Sana berilmasa MAHALLIY bugun (server UTC da — tunda date.today()

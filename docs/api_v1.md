@@ -1833,6 +1833,91 @@ Yozuv shakli:
 
 ---
 
+### Expenses
+
+Expense categories are stored on the expense **by name** (`category`): reports group by that name and old rows keep working. The category list (`/expenses/categories`) is the hotel's pick list — name, icon, color, order, archive. Renaming a category renames it on the hotel's expenses too (all branches); a category that is in use is never deleted, it is archived.
+
+**GET /expenses/categories**
+
+- Auth: required (anyone who can record expenses; `?hotel_id=` for SUPER_ADMIN)
+- Query: `?include_archived=true` (default false — active only)
+- Description: The hotel's expense categories in display order. A hotel that has no categories yet (new hotel) gets the default list on first call; existing hotels received it, plus the category names already used in their expenses, in migration `e5a7c9d1f3b5`. `usage_count` / `usage_total` are hotel-wide (all branches). `can_manage` tells the client whether this user may change the list.
+- Response 200:
+
+```json
+{
+  "items": [
+    {"id": "…", "hotel_id": "…", "name": "Ish haqi", "icon": "wallet", "color": "emerald",
+     "sort_order": 0, "is_active": true, "usage_count": 12, "usage_total": 18500000.0, "created_at": "…"}
+  ],
+  "can_manage": true
+}
+```
+
+- Icons: `wallet zap flame droplets wifi utensils shopping-basket washing-machine wrench car landmark megaphone ellipsis tag hammer paintbrush truck phone shield-check users gift package bed sparkles receipt banknote building-2 fuel lightbulb thermometer printer monitor scissors leaf bath coins percent heart-handshake cable briefcase-business stethoscope bus shirt` (lucide names). Colors: `gray slate red orange amber lime emerald teal sky indigo violet fuchsia rose`.
+- Defaults (in order): Ish haqi, Elektr energiyasi, Gaz, Suv, Internet va aloqa, Oziq-ovqat, Xo'jalik buyumlari, Kir yuvish, Ta'mirlash, Transport, Soliqlar, Reklama, Boshqa.
+
+---
+
+**POST /expenses/categories**
+
+- Auth: ADMIN / SUPER_ADMIN or `expense.delete` (403 `EXPENSE_CATEGORY_FORBIDDEN`)
+- Body: `{"name": "Qo'riqlash", "icon": "shield-check", "color": "indigo", "sort_order": null}` — `icon`/`color` optional (defaults `tag`/`gray`), must be from the lists above (422 `INVALID_ICON` / `INVALID_COLOR`); name 1–50 characters after trimming (422 `NAME_REQUIRED` / `NAME_TOO_LONG`)
+- Description: Adds a category. Names are compared case- and whitespace-insensitively: an active duplicate → 409 `EXPENSE_CATEGORY_EXISTS`; an **archived** one with the same name is re-activated (and returned) instead of creating a copy. Without `sort_order` the new category goes before "Boshqa" (if it is last), otherwise to the end.
+- Response 200: the category object (as in the list).
+
+---
+
+**PUT /expenses/categories/{category_id}**
+
+- Auth: as POST
+- Body (all optional): `{"name": "…", "icon": "…", "color": "…", "sort_order": 3, "is_active": true}`
+- Description: Edits a category. A new `name` is written to this hotel's expenses that carry the old name (all branches) — the response adds `renamed_expenses` with the row count. `is_active: true` restores an archived category.
+- Errors: 404 `EXPENSE_CATEGORY_NOT_FOUND`, 409 `EXPENSE_CATEGORY_EXISTS`, 422 as POST
+
+---
+
+**PUT /expenses/categories/reorder**
+
+- Auth: as POST
+- Body: `{"ids": ["…", "…"]}` — the listed categories take positions 0…n in this order, the rest keep their relative order after them
+- Response 200: the full list including archived (as GET with `include_archived=true`, without `can_manage`)
+- Errors: 404 `EXPENSE_CATEGORY_NOT_FOUND` (unknown id)
+
+---
+
+**DELETE /expenses/categories/{category_id}**
+
+- Auth: as POST
+- Description: A category with no expenses is deleted. A category that is in use is **archived** (`is_active = false`): it leaves the pick list, the expenses keep their category name and all reports stay the same.
+- Response 200: `{"archived": true, "deleted": false, "usage_count": 12, "category": {…}}` or `{"archived": false, "deleted": true, "usage_count": 0, "category": null}`
+
+---
+
+**GET /expenses/**
+
+- Auth: required (all signed-in staff); `?hotel_id=` for SUPER_ADMIN
+- Query: `?date_from=&date_to=&skip=0&limit=500` (limit ≤ 1000)
+- Response 200: list of expenses — `{"id", "hotel_id", "branch_id", "title", "category", "amount", "payment_method", "expense_date", "notes", "created_by", "created_by_name", "created_at"}`, newest first.
+
+---
+
+**POST /expenses/**
+
+- Auth: required (all signed-in staff); an open shift where the shift mode requires one
+- Body: `{"title": "Oktyabr uchun gaz", "amount": 450000, "category": "gaz", "payment_method": "CASH", "expense_date": "2026-11-08", "notes": null}`
+- Description: Records an expense; `created_by` is the caller. `category` is free text, but when it matches a category of the hotel (case- and whitespace-insensitively) the stored spelling is used (`"gaz"` → `"Gaz"`) so reports keep one group. `expense_date` defaults to the hotel's local today.
+- Response 200: the expense object.
+
+---
+
+**DELETE /expenses/{expense_id}**
+
+- Auth: `expense.delete` (ADMIN / SUPER_ADMIN automatically)
+- Response 200: `{"message": "Expense deleted"}`; 404 `EXPENSE_NOT_FOUND`
+
+---
+
 ### Finance
 
 **GET /finance/daily**
