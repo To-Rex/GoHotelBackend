@@ -1,15 +1,20 @@
-from uuid import UUID
 from datetime import date
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.personal_report_service import PersonalReportService
+from app.application.services.report_access import (
+    resolve_report_user,
+    staff_options,
+    user_brief,
+)
+from app.application.services.reporting_service import ReportingService
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
-from app.application.services.personal_report_service import PersonalReportService
-from app.application.services.reporting_service import ReportingService
-from app.presentation.middleware.auth import get_current_user, require_permission
 from app.presentation.api.v1._deps import require_active_hotel
+from app.presentation.middleware.auth import get_current_user, require_permission
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -27,13 +32,17 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
 async def my_summary(
     date_from: date = Query(...),
     date_to: date = Query(...),
+    user_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Joriy xodimning tanlangan kunlardagi shaxsiy hisoboti.
+    """Xodimning tanlangan kunlardagi shaxsiy hisoboti.
 
-    Ruxsat talab qilinmaydi — har kim FAQAT o'zining ma'lumotini oladi
-    (`user_id` tokendan olinadi, so'rovdan emas).
+    `user_id` siz — so'rovchining o'zi, ruxsat talab qilinmaydi. `user_id`
+    bilan boshqa xodimning hisoboti — faqat administrator va menejer
+    (`finance.view` / `shift.force_close` / `report.view`), xodim shu
+    mehmonxonadan bo'lishi kerak (report_access). Javobda `user` — kimning
+    hisoboti, `is_self` — so'rovchining o'ziniki.
 
     Pul har doim to'lovning o'zidan olinadi (kim qabul qilgan), bronlar esa
     mualliflik ko'rsatkichi sifatida alohida turadi. Sabab uchun
@@ -45,11 +54,26 @@ async def my_summary(
     if (date_to - date_from).days > 366:
         raise ForbiddenException("Oraliq bir yildan oshmasligi kerak", "RANGE_TOO_WIDE")
 
-    user_id = current_user["id"]
-    if isinstance(user_id, str):
-        user_id = UUID(user_id)
+    h_id = _get_hotel_id(current_user)
+    target_id, target = await resolve_report_user(session, current_user, h_id, user_id)
     service = PersonalReportService(session)
-    return await service.summary(_get_hotel_id(current_user), user_id, date_from, date_to)
+    result = await service.summary(h_id, target_id, date_from, date_to)
+    me = current_user["id"]
+    me = me if isinstance(me, UUID) else UUID(str(me))
+    result["user"] = user_brief(target, me) if target is not None else {"id": str(target_id)}
+    result["is_self"] = target_id == me
+    return result
+
+
+@router.get("/staff")
+async def report_staff(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Hisobotini ko'rish mumkin bo'lgan xodimlar — administrator va
+    menejer uchun (boshqalarga 403 `STAFF_REPORT_FORBIDDEN`). So'rovchi
+    birinchi, keyin faollar, keyin qolganlar; ism bo'yicha."""
+    return await staff_options(session, current_user, _get_hotel_id(current_user))
 
 
 @router.get("/")

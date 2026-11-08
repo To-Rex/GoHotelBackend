@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Path, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.finance_summary_service import can_view_staff_report
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.invoice import Invoice
@@ -49,6 +50,7 @@ async def list_debtors(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     mine: bool = Query(default=False),
+    created_by: UUID | None = Query(default=None),
     guest_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -56,18 +58,31 @@ async def list_debtors(
     """Qarzdorlar — to'lovi tugallanmagan bronlar.
 
     `mine=true` bo'lsa faqat so'rovchi xodim ochgan bronlar qaytadi —
-    shaxsiy hisobot uchun. Ta'rif va cheklovlar `debtor_service` da.
+    shaxsiy hisobot uchun. `created_by=<xodim>` — boshqa xodimning
+    qarzdorlari (shaxsiy hisobotda xodim tanlanganda); bu faqat
+    administrator va menejerga (`can_view_staff_report`, 403
+    `STAFF_REPORT_FORBIDDEN`). Ta'rif va cheklovlar `debtor_service` da.
     """
     from app.application.services.debtor_service import DebtorService
 
     h_id = _get_hotel_id(current_user)
     if not h_id:
         raise ForbiddenException("Hotel context required")
+    owner = None
+    if created_by is not None and str(created_by) != str(current_user["id"]):
+        if not can_view_staff_report(current_user):
+            raise ForbiddenException(
+                "Boshqa xodimning qarzdorlarini faqat administrator yoki menejer ko'ra oladi",
+                "STAFF_REPORT_FORBIDDEN",
+            )
+        owner = created_by
+    elif mine or created_by is not None:
+        owner = current_user["id"]
     return await DebtorService(session).list_debtors(
         h_id,
         date_from=date_from,
         date_to=date_to,
-        created_by=current_user["id"] if mine else None,
+        created_by=owner,
         guest_id=guest_id,
     )
 

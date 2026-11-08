@@ -2000,6 +2000,7 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 **POST /reservations/{id}/settle-payment** — for a CHECKED_IN guest a PAY first raises `total_amount` to the check-out total (extended stay), so the extension can be collected before the guest leaves. Body: `{"amount": 100000, "payment_method": "CASH", "direction": "PAY"}`. **Split payment:** `payments: [{"amount": 50000, "payment_method": "CASH"}, {"amount": 50000, "payment_method": "ONLINE"}]` — each part is recorded as its own Payment (methods may differ); the parts total must equal `amount` (422 `PARTS_SUM_MISMATCH`), split is PAY-only (422 `PARTS_NOT_ALLOWED`), and when `payments` is given `amount`/`payment_method` are derived from it.
 
 **GET /finance/debtors** — each item now also has `reservation_debt`, `shop_debt`, `expected_total`, `projected`, `reasons`, `reason_text`, `overdue_days`, `acknowledged`; `debt_amount` = booking + shop. Includes CHECKED_IN guests whose check-out total exceeds what they paid, and bookings with only an unpaid shop sale. `summary` adds `reservation_debt` and `shop_debt`.
+- `created_by=<user id>`: another employee's debtors (the personal report page with an employee selected) — ADMIN / SUPER_ADMIN or `finance.view` / `shift.force_close` / `report.view`, otherwise 403 `STAFF_REPORT_FORBIDDEN`. `mine=true` stays the caller's own.
 
 ---
 
@@ -2290,6 +2291,24 @@ The cash drawer is cash-only: the expected amount, the count and the handover ch
 ---
 
 ### Reports
+
+**GET /reports/my-summary**
+
+- Auth: required
+- Query: `?date_from=2026-11-01&date_to=2026-11-08` (required, at most 366 days; swapped if inverted) and optional `user_id`
+- Description: The personal report of one employee for the period — reservations they created, payments they took (refunds negative), shop sales they recorded, expenses they entered, income, net result and net cash, all by payment method, with the row lists. Without `user_id` it is the caller's own report and needs no permission. With `user_id` of **another** employee it is that employee's report: allowed for ADMIN / SUPER_ADMIN and for staff holding `finance.view`, `shift.force_close` or `report.view` (the same circle as `/finance/by-staff`); the employee must belong to the caller's hotel and not be deleted.
+- Response 200: the summary (see `personal_report_service`) plus `"user": {"id", "first_name", "last_name", "name", "user_type", "status", "is_me"}` — whose report it is — and `"is_self": true|false`.
+- Errors: 403 `STAFF_REPORT_FORBIDDEN` (another employee without the right), 404 `USER_NOT_FOUND`, 403 `RANGE_TOO_WIDE`
+
+---
+
+**GET /reports/staff**
+
+- Auth: ADMIN / SUPER_ADMIN or any of `finance.view`, `shift.force_close`, `report.view` (403 `STAFF_REPORT_FORBIDDEN`)
+- Description: Employees whose report the caller may open (for the employee picker of the personal report page): the hotel's non-deleted users of the current branch plus hotel administrators; the caller first, then active users, then inactive ones, by name.
+- Response 200: `[{"id", "first_name", "last_name", "name", "user_type", "status", "is_me"}]`
+
+---
 
 **GET /reports**
 
