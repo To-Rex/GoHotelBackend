@@ -49,6 +49,13 @@ class StaffSession:
         if "FROM shop_sale_payments" in sql:
             return Rows(list(self.shop))
         if "FROM expenses" in sql:
+            if "expenses.payment_method" not in sql:
+                # Xarajatlar SONI — xodim bo'yicha (qisman to'lov bo'laklari
+                # bitta xarajat; soxta qatorlarda guruh yo'q — soni yig'iladi)
+                counts: dict = {}
+                for user_id, _method, _total, count in self.expenses:
+                    counts[user_id] = counts.get(user_id, 0) + int(count)
+                return Rows(list(counts.items()))
             return Rows(list(self.expenses))
         if "FROM users" in sql:
             return Rows(list(self.users))
@@ -115,11 +122,14 @@ def test_revenue_is_split_by_who_took_the_money():
 def test_dates_match_summary_definition():
     session = StaffSession()
     build(session)
-    pay, shop, exp = session.sql
+    # Xarajatlar ikki so'rov: usullar kesimi va SONI (qisman to'lov
+    # bo'laklari bitta xarajat) — ikkalasi ham sana bo'yicha
+    pay, shop, exp, exp_count = session.sql
     assert "payments.payment_date >=" in pay and "payments.payment_date <=" in pay
     # Do'kon — to'lov sanasi bo'yicha (qisman to'lovlar o'z kunida)
     assert "shop_sale_payments.paid_at >=" in shop and "shop_sale_payments.hotel_id" in shop
     assert "expenses.expense_date >=" in exp
+    assert "expenses.expense_date >=" in exp_count and "count(distinct(" in exp_count
     # Faoliyat bo'lmasa — bo'sh, foydalanuvchilar so'ralmaydi
     assert build(StaffSession())["items"] == []
 

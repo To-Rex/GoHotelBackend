@@ -851,6 +851,15 @@ kiritilgan (`app/shared/expense_categories.py`). Xarajat yaratishda
 `category` ro'yxatdagi toifaga mos kelsa uning yozilishi olinadi
 ("gaz" → "Gaz").
 
+Qisman (aralash) to'lov: `POST /expenses/` ga `payments: [{payment_method,
+amount}, ...]` berilsa (yig'indisi `amount`, har tur bir marta) har bo'lak
+ALOHIDA `expenses` qatori bo'lib yoziladi va `split_group` bilan
+bog'lanadi (`expense_service.py`, migratsiya `f7b9d1e3a5c7`). Shu tufayli
+smena kassasi, usullar kesimi va shaxsiy hisobot o'zgarmaydi (kassadan
+faqat naqd bo'lak chiqadi); ro'yxatlar bo'laklarni bitta xarajat qilib
+ko'rsatadi, `/finance/summary`, `/finance/by-staff` va `/reports/my` dagi
+xarajat SONI guruh bo'yicha. Bo'lak o'chirilsa butun xarajat o'chadi.
+
 ### Mijozga SMS (Xabarchi)
 
 Mijozga SMS [Xabarchi](https://github.com/To-Rex/Xabarchi-Backend) orqali

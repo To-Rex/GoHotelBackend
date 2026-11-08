@@ -223,16 +223,31 @@ class FinanceSummaryService:
             exp = exp.where(Expense.expense_date >= date_from)
         if date_to:
             exp = exp.where(Expense.expense_date <= date_to)
-        for user_id, exp_method, total, count in (
+        for user_id, exp_method, total, _count in (
             await self.session.execute(
                 exp.group_by(Expense.created_by, Expense.payment_method)
             )
         ).all():
             r = row(user_id)
             r["expense"] += _num(total)
-            r["expense_count"] += int(count or 0)
             if _method_key(exp_method) == "CASH":
                 r["cash_expense"] += _num(total)
+        # Soni alohida — XARAJATLAR bo'yicha: qisman to'lovning bo'laklari
+        # ikki usul qatorida turadi, lekin bitta xarajat (expense_service)
+        exp_count = select(
+            Expense.created_by,
+            func.count(func.distinct(func.coalesce(Expense.split_group, Expense.id))),
+        )
+        if hotel_id is not None:
+            exp_count = exp_count.where(Expense.hotel_id == hotel_id)
+        if date_from:
+            exp_count = exp_count.where(Expense.expense_date >= date_from)
+        if date_to:
+            exp_count = exp_count.where(Expense.expense_date <= date_to)
+        for user_id, count in (
+            await self.session.execute(exp_count.group_by(Expense.created_by))
+        ).all():
+            row(user_id)["expense_count"] += int(count or 0)
 
         ids = [uid for uid in rows if uid is not None]
         people: dict = {}
@@ -460,12 +475,14 @@ class FinanceSummaryService:
                 stmt = stmt.where(Expense.expense_date <= date_to)
             return stmt
 
+        # Soni — XARAJATLAR bo'yicha: qisman to'lov bo'laklari (bir
+        # `split_group`) bitta xarajat (expense_service)
         total, count = (
             await self.session.execute(
                 scoped(
                     select(
                         func.coalesce(func.sum(Expense.amount), 0),
-                        func.count(Expense.id),
+                        func.count(func.distinct(func.coalesce(Expense.split_group, Expense.id))),
                     )
                 )
             )
@@ -493,7 +510,7 @@ class FinanceSummaryService:
                     select(
                         Expense.category,
                         func.coalesce(func.sum(Expense.amount), 0),
-                        func.count(Expense.id),
+                        func.count(func.distinct(func.coalesce(Expense.split_group, Expense.id))),
                     )
                 ).group_by(Expense.category)
             )

@@ -393,11 +393,15 @@ class PersonalReportService:
                     "expense_date": expense.expense_date.isoformat()
                     if expense.expense_date
                     else None,
+                    # Qisman to'lov bo'laklarini bog'laydigan kalit (mijoz
+                    # ularni bitta xarajat qilib ko'rsatadi)
+                    "split_group": str(expense.split_group) if expense.split_group else None,
                 }
             )
         items.sort(key=lambda item: item["expense_date"] or "", reverse=True)
         return {
-            "count": len(items),
+            # Soni XARAJATLAR bo'yicha: bir guruhdagi bo'laklar — bitta
+            "count": len({item["split_group"] or item["id"] for item in items}),
             "total": float(total),
             "by_method": _money(by_method),
             "items": items,

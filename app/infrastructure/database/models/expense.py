@@ -5,10 +5,11 @@ from datetime import date
 from typing import Optional
 
 from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
-from app.shared.mixins import FullMixin, BranchScoped
+from app.shared.mixins import BranchScoped, FullMixin
 
 
 class Expense(BranchScoped, FullMixin, Base):
@@ -43,6 +44,13 @@ class Expense(BranchScoped, FullMixin, Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Qisman (aralash) to'lov: bitta xarajat bir necha to'lov turiga
+    #: bo'linganda har bo'lak alohida qator bo'lib, shu kalit bilan
+    #: bog'lanadi (expense_service). Oddiy xarajatda bo'sh. Hisobotlar
+    #: qatorlar bo'yicha ishlayveradi — har bo'lakning o'z to'lov turi bor.
+    split_group: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
     )
 
     created_by_user: Mapped["User"] = relationship("User", foreign_keys=[created_by])

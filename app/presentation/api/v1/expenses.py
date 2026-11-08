@@ -23,13 +23,13 @@ from app.application.services.expense_category_service import (
     ExpenseCategoryService,
     can_manage_categories,
 )
+from app.application.services.expense_service import ExpenseService, expense_dict
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException, NotFoundException
+from app.core.exceptions import ForbiddenException
 from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.user import User
 from app.presentation.api.v1._deps import require_active_hotel, require_open_shift
 from app.presentation.middleware.auth import get_current_user, require_permission
-from app.shared.utils import hotel_today
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
 
@@ -43,15 +43,30 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     return hotel_id
 
 
+PaymentMethodCode = Literal[
+    # Kanonik to'rtlik + eski kodlar (eski klientlar uchun)
+    "CASH", "CARD", "ONLINE", "BANK_TRANSFER",
+    "CREDIT_CARD", "DEBIT_CARD", "MOBILE_PAYMENT", "TRANSFER",
+]
+
+
+class ExpensePartRequest(BaseModel):
+    """Qisman (aralash) to'lovning bitta bo'lagi."""
+
+    payment_method: PaymentMethodCode
+    amount: float = Field(..., gt=0)
+
+
 class ExpenseCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     amount: float = Field(..., gt=0)
     category: str | None = Field(default=None, max_length=50)
-    payment_method: Literal[
-        # Kanonik to'rtlik + eski kodlar (eski klientlar uchun)
-        "CASH", "CARD", "ONLINE", "BANK_TRANSFER",
-        "CREDIT_CARD", "DEBIT_CARD", "MOBILE_PAYMENT", "TRANSFER",
-    ] = "CASH"
+    payment_method: PaymentMethodCode = "CASH"
+    #: Qisman to'lov: summa bir necha to'lov turiga bo'linadi (yig'indisi
+    #: `amount` ga teng, har tur bir marta). Berilsa `payment_method`
+    #: e'tiborga olinmaydi; har bo'lak alohida qator bo'lib yoziladi
+    #: (expense_service).
+    payments: list[ExpensePartRequest] | None = Field(default=None, max_length=4)
     expense_date: date | None = None
     notes: str | None = None
     branch_id: UUID | None = None
@@ -90,23 +105,7 @@ def _scope_hotel_id(current_user: dict, hotel_id: UUID | None) -> UUID:
     return h_id
 
 
-def _expense_dict(e: Expense, creator: User | None) -> dict:
-    return {
-        "id": str(e.id),
-        "hotel_id": str(e.hotel_id),
-        "branch_id": str(e.branch_id) if e.branch_id else None,
-        "title": e.title,
-        "category": e.category,
-        "amount": float(e.amount),
-        "payment_method": e.payment_method,
-        "expense_date": str(e.expense_date),
-        "notes": e.notes,
-        "created_by": str(e.created_by),
-        "created_by_name": (
-            f"{creator.first_name} {creator.last_name}".strip() if creator else None
-        ),
-        "created_at": e.created_at.isoformat() if e.created_at else None,
-    }
+_expense_dict = expense_dict
 
 
 # ----------------------------------------------------------- toifalar --
@@ -231,26 +230,7 @@ async def create_expense(
     if not h_id:
         raise ForbiddenException("Hotel context required")
 
-    expense = Expense(
-        hotel_id=h_id,
-        branch_id=data.branch_id or current_user.get("branch_id"),
-        title=data.title.strip(),
-        # Ro'yxatdagi toifaga mos kelsa uning yozilishi ("ish haqi" →
-        # "Ish haqi") — hisobot bitta guruhda qoladi; bo'lmasa matnning o'zi
-        category=await ExpenseCategoryService(session).resolve_name(h_id, data.category),
-        amount=data.amount,
-        payment_method=data.payment_method,
-        # Sana berilmasa MAHALLIY bugun (server UTC da — tunda date.today()
-        # kechagi sanani berardi)
-        expense_date=data.expense_date or hotel_today(),
-        notes=data.notes,
-        created_by=current_user["id"],
-    )
-    session.add(expense)
-    await session.flush()
-
-    creator = await session.get(User, current_user["id"])
-    return _expense_dict(expense, creator)
+    return await ExpenseService(session).create(h_id, data.model_dump(), current_user)
 
 
 @router.delete("/{expense_id}")
@@ -265,10 +245,6 @@ async def delete_expense(
     else:
         h_id = _get_hotel_id(current_user)
 
-    expense = await session.get(Expense, expense_id)
-    if not expense or (h_id is not None and expense.hotel_id != h_id):
-        raise NotFoundException("Expense not found", "EXPENSE_NOT_FOUND")
-
-    await session.delete(expense)
-    await session.flush()
-    return {"message": "Expense deleted"}
+    # Qisman to'lov bo'lagi o'chirilsa BUTUN xarajat (barcha bo'laklari) o'chadi
+    deleted = await ExpenseService(session).delete(h_id, expense_id)
+    return {"message": "Expense deleted", "deleted": deleted}

@@ -1898,7 +1898,7 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 
 - Auth: required (all signed-in staff); `?hotel_id=` for SUPER_ADMIN
 - Query: `?date_from=&date_to=&skip=0&limit=500` (limit ≤ 1000)
-- Response 200: list of expenses — `{"id", "hotel_id", "branch_id", "title", "category", "amount", "payment_method", "expense_date", "notes", "created_by", "created_by_name", "created_at"}`, newest first.
+- Response 200: list of expenses — `{"id", "hotel_id", "branch_id", "title", "category", "amount", "payment_method", "expense_date", "notes", "created_by", "created_by_name", "created_at", "split_group"}`, newest first. Rows with the same non-null `split_group` are the parts of one split-payment expense (see POST).
 
 ---
 
@@ -1906,15 +1906,17 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 
 - Auth: required (all signed-in staff); an open shift where the shift mode requires one
 - Body: `{"title": "Oktyabr uchun gaz", "amount": 450000, "category": "gaz", "payment_method": "CASH", "expense_date": "2026-11-08", "notes": null}`
-- Description: Records an expense; `created_by` is the caller. `category` is free text, but when it matches a category of the hotel (case- and whitespace-insensitively) the stored spelling is used (`"gaz"` → `"Gaz"`) so reports keep one group. `expense_date` defaults to the hotel's local today.
-- Response 200: the expense object.
+- Split payment (one expense paid with several methods): add `"payments": [{"payment_method": "CASH", "amount": 60000}, {"payment_method": "ONLINE", "amount": 40000}]` — the parts must add up to `amount` (422 `PARTS_SUM_MISMATCH`), each method at most once (422 `PARTS_DUPLICATE_METHOD`), at most 4 parts; zero parts are dropped and a single remaining part is stored as an ordinary expense with that method. `payment_method` is ignored when `payments` has two or more parts.
+- Description: Records an expense; `created_by` is the caller. `category` is free text, but when it matches a category of the hotel (case- and whitespace-insensitively) the stored spelling is used (`"gaz"` → `"Gaz"`) so reports keep one group. `expense_date` defaults to the hotel's local today. A split expense is stored as **one row per part** (own amount and method) sharing a `split_group`; shift cash, method breakdowns and the personal report keep working per row, while list clients group rows by `split_group` and the counts in `/finance/summary`, `/finance/by-staff` and `/reports/my` count a split expense once.
+- Response 200: the expense object (first part for a split) — fields as in the list plus `split_group` (null for an ordinary expense); for a split also `parts`: the list of all part rows.
 
 ---
 
 **DELETE /expenses/{expense_id}**
 
 - Auth: `expense.delete` (ADMIN / SUPER_ADMIN automatically)
-- Response 200: `{"message": "Expense deleted"}`; 404 `EXPENSE_NOT_FOUND`
+- Description: Deletes the expense. Deleting any part of a split expense deletes the **whole** expense (all parts) — half an expense never remains.
+- Response 200: `{"message": "Expense deleted", "deleted": 2}`; 404 `EXPENSE_NOT_FOUND`
 
 ---
 
