@@ -21,6 +21,7 @@ from app.application.services.finance_service import (
     PAYMENT_EDIT_WINDOW_HOURS,
     FinanceService,
 )
+from app.application.services.payment_edit_settings import ReceptionEditRules
 from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
@@ -92,10 +93,16 @@ def build(monkeypatch, payment=None, actor=None):
     return svc, audit_calls
 
 
-def edit(svc, user, payment_id, method, note=None, amount=None):
+def edit(svc, user, payment_id, method, note=None, amount=None, rules=None):
     return asyncio.run(
-        svc.update_payment_method(HOTEL, payment_id, method, user, note, amount)
+        svc.update_payment_method(
+            HOTEL, payment_id, method, user, note, amount, reception_rules=rules
+        )
     )
+
+
+RECEPTION_ON = ReceptionEditRules(enabled=True, max_edits=2)
+RECEPTION_OFF = ReceptionEditRules(enabled=False, max_edits=2)
 
 
 # ----------------------------------------------------------- huquqlar --
@@ -128,13 +135,72 @@ def test_super_admin_has_no_window(monkeypatch):
     assert edit(svc, SUPER, payment.id, "ONLINE").payment_method == "ONLINE"
 
 
-def test_cashier_cannot_edit(monkeypatch):
+def test_cashier_cannot_edit_without_rules_or_when_disabled(monkeypatch):
+    """Qoida berilmasa (eski chaqiruv) yoki sozlama o'chiq — qabulxona yopiq."""
     payment = make_payment()
     svc, _ = build(monkeypatch, payment)
     with pytest.raises(ForbiddenException) as exc:
         edit(svc, CASHIER, payment.id, "CARD")
+    assert exc.value.error_code == "PAYMENT_EDIT_RECEPTION_DISABLED"
+    with pytest.raises(ForbiddenException) as exc:
+        edit(svc, CASHIER, payment.id, "CARD", rules=RECEPTION_OFF)
+    assert exc.value.error_code == "PAYMENT_EDIT_RECEPTION_DISABLED"
+    assert payment.payment_method == "CASH" and not payment.method_changes
+
+
+def test_staff_without_payment_permission_is_forbidden(monkeypatch):
+    payment = make_payment()
+    svc, _ = build(monkeypatch, payment)
+    housekeeper = {"id": str(uuid.uuid4()), "user_type": "EMPLOYEE", "permissions": ["room.view"]}
+    with pytest.raises(ForbiddenException) as exc:
+        edit(svc, housekeeper, payment.id, "CARD", rules=RECEPTION_ON)
     assert exc.value.error_code == "FORBIDDEN"
-    assert payment.payment_method == "CASH"
+
+
+# ------------------------------------------ qabulxona: sozlama va chegara --
+
+def test_reception_edits_twice_then_blocked(monkeypatch):
+    payment = make_payment(created_hours_ago=3)
+    svc, audit = build(monkeypatch, payment, make_actor("Dilnoza", "Karimova"))
+
+    assert edit(svc, CASHIER, payment.id, "CARD", rules=RECEPTION_ON).payment_method == "CARD"
+    assert payment.method_changes[0]["by_role"] == "RECEPTION"
+    assert edit(svc, CASHIER, payment.id, "ONLINE", rules=RECEPTION_ON).payment_method == "ONLINE"
+    assert len(payment.method_changes) == 2
+
+    with pytest.raises(ForbiddenException) as exc:
+        edit(svc, CASHIER, payment.id, "CASH", rules=RECEPTION_ON)
+    assert exc.value.error_code == "PAYMENT_EDIT_LIMIT"
+    assert payment.payment_method == "ONLINE" and len(payment.method_changes) == 2
+    assert len(audit) == 2
+
+    # Menejer va administrator chegaraga bog'liq emas
+    assert edit(svc, MANAGER, payment.id, "CASH", rules=RECEPTION_ON).payment_method == "CASH"
+    assert payment.method_changes[-1]["by_role"] == "MANAGER"
+    assert edit(svc, ADMIN, payment.id, "CARD", rules=RECEPTION_ON).payment_method == "CARD"
+    assert payment.method_changes[-1]["by_role"] == "ADMIN"
+
+
+def test_reception_limit_counts_partial_edits_and_any_editor(monkeypatch):
+    payment = make_payment(created_hours_ago=3)
+    svc, _ = build(monkeypatch, payment)
+    # Admin bir marta, qabulxona bir marta (qisman) — ikkinchisi chegara
+    edit(svc, ADMIN, payment.id, "CARD", rules=RECEPTION_ON)
+    edit(svc, CASHIER, payment.id, "ONLINE", amount=50000.0, rules=RECEPTION_ON)
+    assert len(payment.method_changes) == 2
+    with pytest.raises(ForbiddenException) as exc:
+        edit(svc, CASHIER, payment.id, "CASH", rules=RECEPTION_ON)
+    assert exc.value.error_code == "PAYMENT_EDIT_LIMIT"
+    # Chegara 3 bo'lsa — yana bir marta mumkin
+    assert edit(svc, CASHIER, payment.id, "CASH", rules=ReceptionEditRules(enabled=True, max_edits=3)).payment_method == "CASH"
+
+
+def test_reception_respects_two_day_window(monkeypatch):
+    old = make_payment(created_hours_ago=PAYMENT_EDIT_WINDOW_HOURS + 1)
+    svc, _ = build(monkeypatch, old)
+    with pytest.raises(ForbiddenException) as exc:
+        edit(svc, CASHIER, old.id, "CARD", rules=RECEPTION_ON)
+    assert exc.value.error_code == "PAYMENT_EDIT_WINDOW"
 
 
 # ------------------------------------------------- menejer: 2 kunlik oyna --

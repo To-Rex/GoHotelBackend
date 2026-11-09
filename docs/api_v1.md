@@ -1984,6 +1984,15 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 - Response 200: `{"enabled": true, "interval_minutes": 120, "allowed_intervals": [...], "default": {...}}`
 - Debt reminders (`debt_reminder_service`, run from the automation tick every 5 min): a digest of debtors with reasons every `interval_minutes` (08:00–22:00 local), plus once-per-booking alerts "left with debt" (checked out in the last 24 h) and "leaves today with debt". Recipients: hotel ADMINs and employees with `finance.payment.create`; DB notification + FCM push. Notification `type` in `/notifications` is `debt` (`entity_type` `debt_*`).
 
+
+---
+
+**GET /hotels/payment-edit-settings** / **PUT /hotels/payment-edit-settings**
+
+- Auth: GET — any signed-in employee (the payments table shows the edit button by it); PUT — configurator / SUPER_ADMIN only (`SETTINGS_CONFIGURATOR_ONLY`)
+- Body (PUT): `{"reception_enabled": true, "reception_max_edits": 2}` — `reception_max_edits` ∈ {1, 2, 3} (422 `INVALID_MAX_EDITS`)
+- Description: Whether a receptionist (`finance.payment.create` without `shift.force_close`) may edit the payment method of payments and how many edits one payment may receive (`PATCH /finance/payments/{id}/method`). Default: disabled, 2. Stored per branch in `settings.payment_edit`. Administrators and managers are not affected.
+- Response 200: `{"reception_enabled": false, "reception_max_edits": 2, "allowed_max_edits": [1, 2, 3], "default": {"reception_enabled": false, "reception_max_edits": 2}}`
 ---
 
 **GET /reservations/{id}/debt**
@@ -2159,9 +2168,9 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 
 **PATCH /finance/payments/{payment_id}/method**
 
-- Auth: ADMIN / SUPER_ADMIN (no limit) or a manager (`shift.force_close`) — the manager may edit only payments created within the last 2 days (403 `PAYMENT_EDIT_WINDOW`); other employees 403 `FORBIDDEN`
+- Auth: ADMIN / SUPER_ADMIN (no limit); a manager (`shift.force_close`) — only payments created within the last 2 days (403 `PAYMENT_EDIT_WINDOW`); a receptionist (`finance.payment.create`, not a manager) — only when the hotel setting `payment_edit.reception_enabled` is on (403 `PAYMENT_EDIT_RECEPTION_DISABLED`), within the same 2-day window and at most `reception_max_edits` edits per payment (default 2; 403 `PAYMENT_EDIT_LIMIT` — counts every full/partial edit already in `method_changes`, by anyone); other employees 403 `FORBIDDEN`
 - Body: `{"payment_method": "CASH" | "CARD" | "ONLINE" | "BANK_TRANSFER", "note": "optional", "amount": 50000}`
-- Description: edits the payment METHOD — fully or partially. Without `amount` the whole payment switches method. With `amount` (0 < amount < payment amount) that part becomes a **new payment row** in the new method (same invoice, same `created_by`, `payment_date` **and `created_at`** — the money was received at the original moment, so the split part stays in the original shift / personal report / day and never moves to the day of the edit; totals unchanged), e.g. 100 000 cash → 50 000 cash + 50 000 online. `amount` equal to the total = a plain full edit; larger → 422 `PARTIAL_AMOUNT_RANGE`; negative/refund payments cannot be split (`PARTIAL_INVALID_PAYMENT`). Every edit is appended to `payments.method_changes` (`{old, new, kind: full|partial, amount, total_before, total_after, new_payment_number, by, by_name, at, note}` — `total_before`/`total_after` are the row amount before/after the edit) and written to the audit log — nothing is overwritten. The split row gets its own first entry `{kind: split_from, old, new, amount, from_payment_number, from_total, by, by_name, at, note}`. Entries written before 2026-11-06 have no totals (clients derive them backwards from the current amount); migration `c1e3f5a7b9d2` moved earlier split rows back to the original `created_at` and added their `split_from` entry.
+- Description: edits the payment METHOD — fully or partially. Without `amount` the whole payment switches method. With `amount` (0 < amount < payment amount) that part becomes a **new payment row** in the new method (same invoice, same `created_by`, `payment_date` **and `created_at`** — the money was received at the original moment, so the split part stays in the original shift / personal report / day and never moves to the day of the edit; totals unchanged), e.g. 100 000 cash → 50 000 cash + 50 000 online. `amount` equal to the total = a plain full edit; larger → 422 `PARTIAL_AMOUNT_RANGE`; negative/refund payments cannot be split (`PARTIAL_INVALID_PAYMENT`). Every edit is appended to `payments.method_changes` (`{old, new, kind: full|partial, amount, total_before, total_after, new_payment_number, by, by_name, by_role, at, note}` — `by_role` is `ADMIN` / `SUPER_ADMIN` / `MANAGER` / `RECEPTION` (entries before 2026-11-09 have none) — `total_before`/`total_after` are the row amount before/after the edit) and written to the audit log — nothing is overwritten. The split row gets its own first entry `{kind: split_from, old, new, amount, from_payment_number, from_total, by, by_name, at, note}`. Entries written before 2026-11-06 have no totals (clients derive them backwards from the current amount); migration `c1e3f5a7b9d2` moved earlier split rows back to the original `created_at` and added their `split_from` entry.
 - Response 200: the payment with `method_changes`
 - Errors: 422 `PAYMENT_METHOD_UNCHANGED` (same method), 404 `PAYMENT_NOT_FOUND`
 

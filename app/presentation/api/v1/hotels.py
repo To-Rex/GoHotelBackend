@@ -1,42 +1,45 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.services.configurator_access import assert_can_manage_settings
-from app.application.services.branch_settings import settings_owner
-from app.core.database import get_db
-from pydantic import BaseModel, Field
-
-from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
-from app.infrastructure.database.models.hotel import Hotel
-from app.application.services.hotel_service import HotelService
-from app.application.services.amenity_service import AmenityService
-from app.application.services.room_service import RoomService
-from app.application.dto.hotel import (
-    HotelCreateRequest,
-    HotelUpdateRequest,
-    HotelStatusUpdate,
-    HotelResponse,
-    HotelBriefResponse,
-)
-from app.application.dto.amenity import HotelAmenityRequest, AmenityResponse
-from app.application.dto.room import HotelRoomTypeRequest, RoomTypeResponse
+from app.application.dto.amenity import AmenityResponse, HotelAmenityRequest
 from app.application.dto.common import MessageResponse
-from app.presentation.middleware.auth import get_current_user, require_permission
+from app.application.dto.hotel import (
+    HotelBriefResponse,
+    HotelCreateRequest,
+    HotelResponse,
+    HotelStatusUpdate,
+    HotelUpdateRequest,
+)
+from app.application.dto.room import HotelRoomTypeRequest, RoomTypeResponse
+from app.application.services.amenity_service import AmenityService
+from app.application.services.branch_settings import settings_owner
+from app.application.services.configurator_access import assert_can_manage_settings
 from app.application.services.discount_policy import (
     DISCOUNT_SETTINGS_KEY,
     resolve_discount_rules,
 )
+from app.application.services.hotel_service import HotelService
 from app.application.services.move_discount_policy import (
     MOVE_DISCOUNT_SETTINGS_KEY,
     resolve_move_discount_settings,
 )
+from app.application.services.room_service import RoomService
 from app.application.services.work_hours_access import (
     WORK_HOURS_SETTINGS_KEY,
     resolve_work_hours_settings,
 )
+from app.core.database import get_db
+from app.core.exceptions import (
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
+from app.infrastructure.database.models.hotel import Hotel
+from app.presentation.middleware.auth import get_current_user, require_permission
 
 router = APIRouter()
 
@@ -455,6 +458,77 @@ async def save_debt_settings(
         "allowed_intervals": list(ALLOWED_INTERVALS),
         "default": DEFAULT_DEBT_SETTINGS,
     }
+
+
+# ------------------------------------------ qabulxona to'lov tahriri --
+
+
+class PaymentEditSettingsRequest(BaseModel):
+    """Qabulxona xodimi to'lov turini tahrirlay oladimi va necha marta."""
+
+    reception_enabled: bool = Field(default=False)
+    reception_max_edits: int = Field(default=2)
+
+
+def _payment_edit_payload(settings: dict | None) -> dict:
+    from app.application.services.payment_edit_settings import (
+        ALLOWED_MAX_EDITS,
+        DEFAULT_PAYMENT_EDIT_SETTINGS,
+        resolve_payment_edit_settings,
+    )
+
+    return {
+        **resolve_payment_edit_settings(settings),
+        "allowed_max_edits": list(ALLOWED_MAX_EDITS),
+        "default": DEFAULT_PAYMENT_EDIT_SETTINGS,
+    }
+
+
+@router.get("/payment-edit-settings")
+async def get_payment_edit_settings(
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Qabulxona to'lov tahriri sozlamasi — HAR QANDAY xodim o'qiydi
+    (To'lovlar jadvali tugmani shunga qarab ko'rsatadi; server baribir
+    qayta tekshiradi)."""
+    hotel_id = current_user.get("hotel_id")
+    hotel = await settings_owner(session, hotel_id)
+    return _payment_edit_payload(hotel.settings if hotel else None)
+
+
+@router.put("/payment-edit-settings")
+async def save_payment_edit_settings(
+    data: PaymentEditSettingsRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Saqlash — faqat sozlovchi (configurator_access)."""
+    from app.application.services.payment_edit_settings import (
+        ALLOWED_MAX_EDITS,
+        PAYMENT_EDIT_SETTINGS_KEY,
+    )
+
+    assert_can_manage_settings(current_user)
+    if data.reception_max_edits not in ALLOWED_MAX_EDITS:
+        raise ValidationException(
+            f"Tahrirlar soni quyidagilardan biri bo'lishi kerak: {list(ALLOWED_MAX_EDITS)}",
+            "INVALID_MAX_EDITS",
+        )
+    hotel_id = current_user.get("hotel_id")
+    if not hotel_id:
+        raise ForbiddenException("Hotel context required")
+    hotel = await settings_owner(session, hotel_id)
+    if not hotel:
+        raise NotFoundException("Hotel not found", "HOTEL_NOT_FOUND")
+    new_settings = dict(hotel.settings or {})
+    new_settings[PAYMENT_EDIT_SETTINGS_KEY] = {
+        "reception_enabled": data.reception_enabled,
+        "reception_max_edits": data.reception_max_edits,
+    }
+    hotel.settings = new_settings
+    await session.flush()
+    return _payment_edit_payload(new_settings)
 
 
 # ------------------------------------- ish vaqtidan tashqarida ishlash --

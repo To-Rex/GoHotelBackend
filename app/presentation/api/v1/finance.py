@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.finance_summary_service import can_view_staff_report
+from app.application.services.branch_settings import branch_settings
+from app.application.services.payment_edit_settings import ReceptionEditRules
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException, ValidationException
 from app.infrastructure.database.models.invoice import Invoice
@@ -439,13 +441,17 @@ async def update_payment_method(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """To'lov turini tahrirlash (to'liq yoki qisman) — admin/super admin yoki menejer.
+    """To'lov turini tahrirlash (to'liq yoki qisman) — admin/super admin,
+    menejer yoki (sozlama yoqilgan bo'lsa) qabulxona.
 
     Menejer (`shift.force_close`) faqat oxirgi 2 kunlik to'lovlarni
     tahrirlay oladi (403 `PAYMENT_EDIT_WINDOW`); administrator va tizim
-    ma'murida cheklov yo'q. Qisman tahrirda summaning bir qismi yangi
-    to'lov qatori bo'ladi. Tahrir tarixi javobdagi `method_changes` da
-    qaytadi.
+    ma'murida cheklov yo'q. Qabulxona (`finance.payment.create`) — faqat
+    mehmonxona sozlamasida yoqilgan bo'lsa (403
+    `PAYMENT_EDIT_RECEPTION_DISABLED`), o'sha oyna va bitta to'lovni ko'pi
+    bilan N marta (403 `PAYMENT_EDIT_LIMIT`; N — sozlamada, standart 2).
+    Qisman tahrirda summaning bir qismi yangi to'lov qatori bo'ladi.
+    Tahrir tarixi javobdagi `method_changes` da qaytadi.
     """
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
@@ -459,8 +465,11 @@ async def update_payment_method(
         h_id = _get_hotel_id(current_user)
     if not h_id:
         raise ForbiddenException("Hotel context required")
+    # Qabulxona qoidasi — joriy filial sozlamasidan
+    rules = ReceptionEditRules.from_settings(await branch_settings(session, h_id))
     return await FinanceService(session).update_payment_method(
-        h_id, payment_id, data.payment_method, current_user, data.note, data.amount
+        h_id, payment_id, data.payment_method, current_user, data.note, data.amount,
+        reception_rules=rules,
     )
 
 

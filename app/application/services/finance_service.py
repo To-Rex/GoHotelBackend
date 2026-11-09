@@ -34,6 +34,13 @@ from app.application.services.move_discount_policy import (
 )
 from app.application.services import payment_purpose as purpose
 from app.core.config import settings
+from app.application.services.payment_edit_settings import (
+    RECEPTION_DISABLED,
+    ROLE_RECEPTION,
+    ReceptionEditRules,
+    edit_count,
+    editor_role,
+)
 from app.shared.payment_splits import (
     KIND_FULL,
     KIND_PARTIAL,
@@ -409,6 +416,7 @@ class FinanceService:
         current_user: dict,
         note: str | None = None,
         amount: float | None = None,
+        reception_rules: ReceptionEditRules | None = None,
     ) -> Payment:
         """To'lov TURINI tahrirlash — butun summa yoki QISMAN.
 
@@ -426,9 +434,13 @@ class FinanceService:
 
         Huquq: administrator/super admin (cheklovsiz) yoki menejer
         (`shift.force_close`) — menejerga faqat oxirgi 2 kunlik to'lovlar
-        (`PAYMENT_EDIT_WINDOW_HOURS`). Har tahrir `method_changes` ga
-        (kim, qachon, nimadan nimaga, qancha, izoh) yoziladi va audit
-        jurnaliga tushadi — hech narsa o'chirilmaydi.
+        (`PAYMENT_EDIT_WINDOW_HOURS`). Qabulxona (`finance.payment.create`)
+        — faqat `reception_rules.enabled` bo'lsa (mehmonxona sozlamasi),
+        o'sha 2 kunlik oyna va bitta to'lovni ko'pi bilan
+        `reception_rules.max_edits` marta (payment_edit_settings). Qoida
+        berilmasa qabulxona tahrirlay olmaydi. Har tahrir `method_changes`
+        ga (kim, qaysi vazifada, qachon, nimadan nimaga, qancha, izoh)
+        yoziladi va audit jurnaliga tushadi — hech narsa o'chirilmaydi.
         """
         payment = await self.session.get(Payment, payment_id)
         if not payment:
@@ -436,13 +448,27 @@ class FinanceService:
         if hotel_id is not None and str(payment.hotel_id) != str(hotel_id):
             raise NotFoundException("Payment not found", "PAYMENT_NOT_FOUND")
 
-        is_admin = current_user.get("user_type") in ("ADMIN", "SUPER_ADMIN")
-        is_manager = "shift.force_close" in (current_user.get("permissions") or [])
-        if not (is_admin or is_manager):
+        rules = reception_rules or RECEPTION_DISABLED
+        role = editor_role(current_user)
+        is_admin = role in ("ADMIN", "SUPER_ADMIN")
+        if role is None:
             raise ForbiddenException(
-                "To'lov turini faqat administrator yoki menejer tahrirlaydi",
+                "To'lov turini faqat administrator, menejer yoki qabulxona xodimi tahrirlaydi",
                 "FORBIDDEN",
             )
+        if role == ROLE_RECEPTION:
+            if not rules.enabled:
+                raise ForbiddenException(
+                    "Qabulxona xodimi to'lovni tahrirlay olmaydi — bu imkoniyat sozlamalarda o'chirilgan",
+                    "PAYMENT_EDIT_RECEPTION_DISABLED",
+                )
+            done = edit_count(payment.method_changes)
+            if done >= rules.max_edits:
+                raise ForbiddenException(
+                    f"Bu to'lov allaqachon {done} marta tahrirlangan — qabulxona xodimi "
+                    f"bitta to'lovni ko'pi bilan {rules.max_edits} marta tahrirlay oladi",
+                    "PAYMENT_EDIT_LIMIT",
+                )
 
         new_method = (method or "").strip().upper()
         old_method = payment.payment_method
@@ -477,7 +503,8 @@ class FinanceService:
                 age = datetime.now(timezone.utc) - created
                 if age > timedelta(hours=PAYMENT_EDIT_WINDOW_HOURS):
                     raise ForbiddenException(
-                        "Menejer faqat oxirgi 2 kunlik to'lovlarni tahrirlay oladi",
+                        "Faqat oxirgi 2 kunlik to'lovlarni tahrirlash mumkin "
+                        "(eski to'lovni administrator tahrirlaydi)",
                         "PAYMENT_EDIT_WINDOW",
                     )
 
@@ -494,6 +521,8 @@ class FinanceService:
             "new": new_method,
             "by": str(actor_id) if actor_id else None,
             "by_name": by_name,
+            # Qaysi vazifada tahrirlagani — tarixda ko'rinadi
+            "by_role": role,
             "at": edited_at.isoformat(),
             "note": note,
             # Shu qator summasi tahrirdan OLDIN va KEYIN — "necha puldan
