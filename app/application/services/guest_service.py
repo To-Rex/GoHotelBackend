@@ -14,11 +14,25 @@ class GuestService:
         self.repo = GuestRepository(session)
 
     async def create_guest(self, hotel_id: UUID, data: dict) -> Guest:
-        # Dublikatning oldini olish: passport yoki telefon bo'yicha mavjud
-        # mehmon topilsa, yangisini yaratmasdan o'shani qaytaramiz — xato ham
-        # bermaymiz, mijoz avtomatik "tanlangan" bo'ladi. Mavjud mehmonning
-        # BO'SH maydonlarigina yangi ma'lumot bilan to'ldiriladi (ustiga
-        # yozilmaydi — mavjud ma'lumot buzilmasin)
+        """Mehmon yaratadi yoki mavjudini qaytaradi (create_or_match)."""
+        guest, _existing = await self.create_or_match(hotel_id, data)
+        return guest
+
+    async def find_matches(
+        self, passport_number: str | None, phone: str | None, limit: int = 5
+    ) -> list[tuple[Guest, str]]:
+        """Shu passport/telefon bilan bazada bor mehmonlar — forma
+        to'ldirilayotganda "bu mehmon bazada bor" deb ko'rsatish uchun."""
+        return await self.repo.find_duplicates(passport_number, phone, limit=limit)
+
+    async def create_or_match(self, hotel_id: UUID, data: dict) -> tuple[Guest, bool]:
+        """Yangi mehmon yoki passport/telefon bo'yicha MAVJUDI.
+
+        Qaytaradi: (mehmon, mavjud_edimi). Mavjud mehmon topilsa yangisi
+        yaratilmaydi va xato ham berilmaydi — mijoz tanlangan bo'ladi;
+        uning BO'SH maydonlarigina yangi ma'lumot bilan to'ldiriladi
+        (ustiga yozilmaydi — mavjud ma'lumot buzilmasin).
+        """
         existing = await self.repo.find_duplicate(
             data.get("passport_number"), data.get("phone")
         )
@@ -37,7 +51,12 @@ class GuestService:
                 if not getattr(existing, field, None) and data.get(field):
                     setattr(existing, field, data[field])
             await self.session.flush()
-            return existing
+            # `updated_at` serverda (`onupdate=func.now()`) yangilanadi va
+            # flush'dan keyin eskiradi; javob seriyalanayotganda u sinxron
+            # joyda lazy-load bo'lib MissingGreenlet (500) berardi — shuning
+            # uchun shu yerning o'zida qayta o'qiladi
+            await self.session.refresh(existing)
+            return existing, True
 
         from app.infrastructure.tenant.branch_scope import scoped_branch_id
 
@@ -57,7 +76,7 @@ class GuestService:
             address=data.get("address"),
             notes=data.get("notes"),
         )
-        return await self.repo.create(guest)
+        return await self.repo.create(guest), False
 
     async def get_guests(
         self, hotel_id: UUID | None, skip: int = 0, limit: int = 100, query: str | None = None

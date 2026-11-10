@@ -387,6 +387,28 @@ async def list_guests(
     return await service.get_guests(h_id, skip=skip, limit=page_size, query=query)
 
 
+@router.get("/lookup")
+async def lookup_guests(
+    passport_number: str | None = Query(default=None, max_length=100),
+    phone: str | None = Query(default=None, max_length=50),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Shu passport yoki telefon bilan bazada BOR mehmonlar — yangi mehmon
+    formasi to'ldirilayotganda "bu mehmon bazada bor, tanlang" deb
+    ko'rsatish uchun. Mehmonlar butun tizim uchun umumiy, shuning uchun
+    qidiruv ham global (`find_duplicates`: passport harf-raqamlari,
+    telefon oxirgi 9 raqami bo'yicha). Passport 5 belgidan, telefon 7
+    raqamdan qisqa bo'lsa — bo'sh ro'yxat."""
+    matches = await GuestService(session).find_matches(passport_number, phone)
+    items = []
+    for guest, matched_by in matches:
+        payload = GuestResponse.model_validate(guest)
+        payload.matched_by = matched_by
+        items.append(payload)
+    return {"matches": items}
+
+
 @router.post("/", response_model=GuestResponse)
 async def register_guest(
     data: GuestCreateRequest,
@@ -394,6 +416,9 @@ async def register_guest(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("guest.create")),
 ):
+    """Yangi mehmon. Passport yoki telefon bo'yicha mehmon allaqachon bor
+    bo'lsa — yangisi yaratilmaydi, mavjudi (bo'sh maydonlari to'ldirilib)
+    qaytariladi va javobda `existing: true` turadi."""
     if current_user["user_type"] == "SUPER_ADMIN":
         if not hotel_id:
             raise ForbiddenException("Hotel ID required for SUPER_ADMIN")
@@ -403,7 +428,10 @@ async def register_guest(
     if not h_id:
         raise ForbiddenException("Hotel context required")
     service = GuestService(session)
-    return await service.create_guest(h_id, data.model_dump())
+    guest, existing = await service.create_or_match(h_id, data.model_dump())
+    payload = GuestResponse.model_validate(guest)
+    payload.existing = existing
+    return payload
 
 
 class BlacklistRequest(BaseModel):

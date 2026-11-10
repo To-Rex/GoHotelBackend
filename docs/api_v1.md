@@ -886,10 +886,19 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 
 ---
 
+**GET /guests/lookup**
+
+- Auth: required
+- Query: `?passport_number=AD4469339&phone=+998881534433` (either or both; passport shorter than 5 alphanumerics / phone shorter than 7 digits is ignored)
+- Description: Guests already in the database with this passport or phone — for the "this guest already exists, pick them" hint while a new-guest form is being filled. Guests are global, so the lookup is too. Format-tolerant: passport letters/digits only, phone by its last 9 digits (with or without +998). Passport matches first, each guest once, at most 5.
+- Response 200: `{"matches": [Guest object + "matched_by": "passport" | "phone"]}`
+
+---
+
 **POST /guests**
 
 - Auth: require_permission("guest.create")
-- Description: Register a new guest profile
+- Description: Register a new guest profile. If a guest with the same passport number or phone already exists (same matching as `/guests/lookup`), **no new guest is created**: the existing guest is returned with `"existing": true`, and only their empty fields are filled from the request (existing data is never overwritten). Before 2026-11-10 this path returned 500 (`updated_at` lazy-load after flush); it now refreshes the row.
 - Body:
 
 ```json
@@ -904,7 +913,7 @@ All endpoints in this section require the `SUPER_ADMIN` role. Use `?hotel_id=` f
 }
 ```
 
-- Response 201: Guest object
+- Response 200: Guest object (+ `"existing": false | true`)
 
 ---
 

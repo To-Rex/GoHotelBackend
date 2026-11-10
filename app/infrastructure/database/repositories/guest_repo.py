@@ -63,65 +63,88 @@ class GuestRepository(TenantBaseRepository[Guest]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def find_duplicate(
-        self, passport_number: str | None, phone: str | None
-    ) -> Guest | None:
-        """Passport raqami yoki telefon bo'yicha mavjud mehmonni topadi (global).
+    @staticmethod
+    def normalize_passport(passport_number: str | None) -> str:
+        """Passport: faqat harf va raqamlar, bosh harfda ("ad 446-9339" → "AD4469339")."""
+        return re.sub(r"[^A-Z0-9]", "", (passport_number or "").upper())
+
+    @staticmethod
+    def normalize_phone(phone: str | None) -> str:
+        """Telefon: faqat raqamlar ("+998 88 153-44-33" → "998881534433")."""
+        return re.sub(r"\D", "", phone or "")
+
+    async def find_duplicates(
+        self, passport_number: str | None, phone: str | None, limit: int = 5
+    ) -> list[tuple[Guest, str]]:
+        """Passport yoki telefon bo'yicha mavjud mehmonlar (global), har biri
+        nima bo'yicha mos kelgani bilan: ("passport" | "phone").
 
         Formatga chidamli: passport harflari/raqamlaridan boshqa belgilar,
         telefonning esa raqamlardan boshqa belgilari e'tiborga olinmaydi.
         Telefon oxirgi 9 raqami bo'yicha solishtiriladi — +998 kod bilan
-        yoki kodsiz yozilgani farq qilmaydi.
+        yoki kodsiz yozilgani farq qilmaydi. Passport mosliklari birinchi,
+        bir mehmon bir marta.
         """
-        if passport_number:
-            norm = re.sub(r"[^A-Z0-9]", "", passport_number.upper())
-            if len(norm) >= 5:
-                stmt = (
-                    select(Guest)
-                    .where(
-                        Guest.is_deleted.is_(False),
-                        func.upper(
-                            func.regexp_replace(
-                                func.coalesce(Guest.passport_number, ""),
-                                "[^A-Za-z0-9]",
-                                "",
-                                "g",
-                            )
+        found: list[tuple[Guest, str]] = []
+        seen: set = set()
+
+        norm = self.normalize_passport(passport_number)
+        if len(norm) >= 5:
+            stmt = (
+                select(Guest)
+                .where(
+                    Guest.is_deleted.is_(False),
+                    func.upper(
+                        func.regexp_replace(
+                            func.coalesce(Guest.passport_number, ""),
+                            "[^A-Za-z0-9]",
+                            "",
+                            "g",
                         )
-                        == norm,
                     )
-                    .order_by(Guest.created_at.desc())
-                    .limit(1)
+                    == norm,
                 )
-                guest = (await self.session.execute(stmt)).scalars().first()
-                if guest:
-                    return guest
-        if phone:
-            digits = re.sub(r"\D", "", phone)
-            if len(digits) >= 7:
-                tail = digits[-9:]
-                stored = func.regexp_replace(
-                    func.coalesce(Guest.phone, ""), r"\D", "", "g"
+                .order_by(Guest.created_at.desc())
+                .limit(limit)
+            )
+            for guest in (await self.session.execute(stmt)).scalars().all():
+                if guest.id not in seen:
+                    seen.add(guest.id)
+                    found.append((guest, "passport"))
+
+        digits = self.normalize_phone(phone)
+        if len(digits) >= 7 and len(found) < limit:
+            tail = digits[-9:]
+            stored = func.regexp_replace(
+                func.coalesce(Guest.phone, ""), r"\D", "", "g"
+            )
+            cond = (
+                func.right(stored, 9) == tail
+                if len(digits) >= 9
+                else stored == digits
+            )
+            stmt = (
+                select(Guest)
+                .where(
+                    Guest.is_deleted.is_(False),
+                    func.length(stored) >= 7,
+                    cond,
                 )
-                cond = (
-                    func.right(stored, 9) == tail
-                    if len(digits) >= 9
-                    else stored == digits
-                )
-                stmt = (
-                    select(Guest)
-                    .where(
-                        Guest.is_deleted.is_(False),
-                        func.length(stored) >= 7,
-                        cond,
-                    )
-                    .order_by(Guest.created_at.desc())
-                    .limit(1)
-                )
-                guest = (await self.session.execute(stmt)).scalars().first()
-                if guest:
-                    return guest
-        return None
+                .order_by(Guest.created_at.desc())
+                .limit(limit)
+            )
+            for guest in (await self.session.execute(stmt)).scalars().all():
+                if guest.id not in seen and len(found) < limit:
+                    seen.add(guest.id)
+                    found.append((guest, "phone"))
+        return found
+
+    async def find_duplicate(
+        self, passport_number: str | None, phone: str | None
+    ) -> Guest | None:
+        """Birinchi moslik: avval passport, keyin telefon (find_duplicates)."""
+        matches = await self.find_duplicates(passport_number, phone, limit=1)
+        return matches[0][0] if matches else None
 
     async def get_by_passport(
         self, hotel_id: UUID, passport_number: str

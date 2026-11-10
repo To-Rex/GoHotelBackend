@@ -57,6 +57,11 @@ class GuestResponse(BaseModel):
     #: Qora ro'yxat — sana qo'yilgan bo'lsa mehmon ro'yxatda
     blacklisted_at: datetime | None = None
     blacklist_reason: str | None = None
+    #: POST /guests: passport/telefon bo'yicha MAVJUD mehmon qaytarildi
+    #: (yangisi yaratilmadi) — mijoz "bazada bor edi" deb ko'rsatadi
+    existing: bool = False
+    #: GET /guests/lookup: nima bo'yicha mos kelgani ("passport" | "phone")
+    matched_by: str | None = None
 
     model_config = {"from_attributes": True}
 
