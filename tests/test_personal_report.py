@@ -53,6 +53,36 @@ class TestLocalDayBounds:
         start, end = local_day_bounds(date(2026, 8, 1), date(2026, 8, 31))
         assert (end - start).days == 30
 
+    def test_hours_narrow_the_window_end_minute_excluded(self):
+        """08:00–20:00 mahalliy = UTC 03:00 dan 15:00 gacha (15:00 kirmaydi)."""
+        from datetime import time as t
+
+        start, end = local_day_bounds(date(2026, 8, 28), date(2026, 8, 28), t(8, 0), t(20, 0))
+        assert start == datetime(2026, 8, 28, 3, 0, tzinfo=timezone.utc)
+        assert end < datetime(2026, 8, 28, 15, 0, tzinfo=timezone.utc)
+        assert (datetime(2026, 8, 28, 15, 0, tzinfo=timezone.utc) - end).total_seconds() < 0.001
+
+    def test_consecutive_shifts_do_not_overlap_or_leave_a_gap(self):
+        """Kunduzgi 08–20 va tungi 20–08 (ertasi kun) — ulanib turadi."""
+        from datetime import time as t
+
+        _, day_end = local_day_bounds(date(2026, 8, 28), date(2026, 8, 28), t(8, 0), t(20, 0))
+        night_start, night_end = local_day_bounds(date(2026, 8, 28), date(2026, 8, 29), t(20, 0), t(8, 0))
+        assert day_end < night_start
+        assert (night_start - day_end).total_seconds() < 0.001
+        assert (night_end - night_start).total_seconds() < 12 * 3600
+
+    def test_only_one_hour_given_keeps_the_other_day_edge(self):
+        from datetime import time as t
+
+        start, end = local_day_bounds(date(2026, 8, 28), date(2026, 8, 28), t(14, 30), None)
+        full_start, full_end = local_day_bounds(date(2026, 8, 28), date(2026, 8, 28))
+        assert start == datetime(2026, 8, 28, 9, 30, tzinfo=timezone.utc)
+        assert end == full_end
+        start, end = local_day_bounds(date(2026, 8, 28), date(2026, 8, 28), None, t(9, 0))
+        assert start == full_start
+        assert end < datetime(2026, 8, 28, 4, 0, tzinfo=timezone.utc)
+
     def test_offset_comes_from_configuration(self):
         """Boshqa mintaqaga o'tilganda chegaralar sozlamaga ergashsin."""
         assert settings.APP_TZ_OFFSET_MINUTES == 300
@@ -111,6 +141,8 @@ class TestEndpointShape:
             "income",
             "net",
             "net_cash",
+            "time_from",
+            "time_to",
         ],
     )
     def test_summary_contract_is_documented(self, field):

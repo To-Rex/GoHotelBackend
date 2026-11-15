@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, time
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -12,7 +12,7 @@ from app.application.services.report_access import (
 )
 from app.application.services.reporting_service import ReportingService
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenException
+from app.core.exceptions import ForbiddenException, ValidationException
 from app.presentation.api.v1._deps import require_active_hotel
 from app.presentation.middleware.auth import get_current_user, require_permission
 
@@ -28,11 +28,24 @@ def _get_hotel_id(current_user: dict) -> UUID | None:
     return hotel_id
 
 
+#: "HH:MM" — 00:00 dan 23:59 gacha
+_HHMM = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
+
+
+def _parse_hhmm(value: str | None) -> time | None:
+    if not value:
+        return None
+    hours, minutes = value.split(":")
+    return time(int(hours), int(minutes))
+
+
 @router.get("/my-summary")
 async def my_summary(
     date_from: date = Query(...),
     date_to: date = Query(...),
     user_id: UUID | None = Query(default=None),
+    time_from: str | None = Query(default=None, pattern=_HHMM),
+    time_to: str | None = Query(default=None, pattern=_HHMM),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -44,20 +57,35 @@ async def my_summary(
     mehmonxonadan bo'lishi kerak (report_access). Javobda `user` — kimning
     hisoboti, `is_self` — so'rovchining o'ziniki.
 
+    `time_from` / `time_to` ("HH:MM", ixtiyoriy) — davrni soat bilan
+    toraytiradi: `date_from` kuni `time_from` dan `date_to` kuni `time_to`
+    gacha (tugash daqiqasi kirmaydi). Tungi smena uchun mijoz `date_to` ni
+    ertasi kunga qo'yadi (20:00 → ertasi 08:00). Boshlanish tugashdan
+    keyin bo'lsa — 422 `INVALID_RANGE`.
+
     Pul har doim to'lovning o'zidan olinadi (kim qabul qilgan), bronlar esa
     mualliflik ko'rsatkichi sifatida alohida turadi. Sabab uchun
     `personal_report_service` modulining izohiga qarang.
     """
-    if date_to < date_from:
+    t_from = _parse_hhmm(time_from)
+    t_to = _parse_hhmm(time_to)
+    if date_to < date_from and t_from is None and t_to is None:
         date_from, date_to = date_to, date_from
     # Oqilona chegara: hisobot sahifasi eng ko'pi bilan bir yilni so'raydi
-    if (date_to - date_from).days > 366:
+    if abs((date_to - date_from).days) > 366:
         raise ForbiddenException("Oraliq bir yildan oshmasligi kerak", "RANGE_TOO_WIDE")
+    if t_from is not None or t_to is not None:
+        start = datetime.combine(date_from, t_from or time.min)
+        end = datetime.combine(date_to, t_to) if t_to is not None else datetime.combine(date_to, time.max)
+        if start >= end:
+            raise ValidationException(
+                "Boshlanish vaqti tugash vaqtidan oldin bo'lishi kerak", "INVALID_RANGE"
+            )
 
     h_id = _get_hotel_id(current_user)
     target_id, target = await resolve_report_user(session, current_user, h_id, user_id)
     service = PersonalReportService(session)
-    result = await service.summary(h_id, target_id, date_from, date_to)
+    result = await service.summary(h_id, target_id, date_from, date_to, t_from, t_to)
     me = current_user["id"]
     me = me if isinstance(me, UUID) else UUID(str(me))
     result["user"] = user_brief(target, me) if target is not None else {"id": str(target_id)}

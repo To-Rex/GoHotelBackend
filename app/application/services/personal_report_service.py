@@ -71,16 +71,34 @@ def _dec(value) -> Decimal:
     return Decimal(str(value or 0))
 
 
-def local_day_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
-    """Mahalliy kunlar oralig'ini UTC timestamp oralig'iga aylantiradi.
+def local_day_bounds(
+    date_from: date,
+    date_to: date,
+    time_from: time | None = None,
+    time_to: time | None = None,
+) -> tuple[datetime, datetime]:
+    """Mahalliy kunlar (va ixtiyoriy soatlar) oralig'ini UTC oralig'iga aylantiradi.
 
     Ustunlar UTC saqlanadi, xodim esa mahalliy kun bilan o'ylaydi. Bu
     almashtirilmasa, O'zbekistonda soat 19:00 dan keyingi har bir amal ertangi
     kunga tushib qolardi.
+
+    Soatlar berilsa: boshlanish — `date_from` kuni `time_from` dan (shu
+    daqiqa kiradi), tugash — `date_to` kuni `time_to` GACHA (shu daqiqa
+    kirmaydi). Shunda ketma-ket smenalar (08:00–20:00, 20:00–08:00) bir-
+    biriga tushmaydi va orasida bo'shliq qolmaydi. Soat berilmasa —
+    avvalgidek butun kun (00:00 dan 23:59:59.999999 gacha).
     """
     offset = timedelta(minutes=settings.APP_TZ_OFFSET_MINUTES)
-    start = datetime.combine(date_from, time.min).replace(tzinfo=timezone.utc) - offset
-    end = datetime.combine(date_to, time.max).replace(tzinfo=timezone.utc) - offset
+    start = datetime.combine(date_from, time_from or time.min).replace(tzinfo=timezone.utc) - offset
+    if time_to is None:
+        end = datetime.combine(date_to, time.max).replace(tzinfo=timezone.utc) - offset
+    else:
+        end = (
+            datetime.combine(date_to, time_to).replace(tzinfo=timezone.utc)
+            - offset
+            - timedelta(microseconds=1)
+        )
     return start, end
 
 
@@ -123,13 +141,21 @@ class PersonalReportService:
         user_id: UUID,
         date_from: date,
         date_to: date,
+        time_from: time | None = None,
+        time_to: time | None = None,
     ) -> dict:
-        start, end = local_day_bounds(date_from, date_to)
+        start, end = local_day_bounds(date_from, date_to, time_from, time_to)
+        # Soat belgilangan bo'lsa xarajat ham KIRITILGAN PAYTI bo'yicha
+        # (`created_at`) olinadi — `expense_date` faqat sana, soatsiz.
+        # Smena kassasi ham xarajatni shu paytdan oladi.
+        timed = time_from is not None or time_to is not None
 
         reservations = await self._reservations(hotel_id, user_id, start, end)
         payments = await self._payments(hotel_id, user_id, start, end)
         shop = await self._shop(hotel_id, user_id, start, end)
-        expenses = await self._expenses(hotel_id, user_id, date_from, date_to)
+        expenses = await self._expenses(
+            hotel_id, user_id, date_from, date_to, window=(start, end) if timed else None
+        )
 
         # Jami tushum: bron to'lovlari + do'kon savdosi, har bir to'lov turi
         # bo'yicha. Qaytarimlar manfiy Payment bo'lgani uchun ular allaqachon
@@ -152,6 +178,9 @@ class PersonalReportService:
         return {
             "date_from": date_from.isoformat(),
             "date_to": date_to.isoformat(),
+            # Soat belgilanmagan bo'lsa — null (butun kun)
+            "time_from": time_from.strftime("%H:%M") if time_from else None,
+            "time_to": time_to.strftime("%H:%M") if time_to else None,
             "reservations": reservations,
             "payments": payments,
             "shop": shop,
@@ -359,18 +388,31 @@ class PersonalReportService:
 
     # ------------------------------------------------------------ xarajatlar
 
-    async def _expenses(self, hotel_id, user_id, date_from, date_to) -> dict:
+    async def _expenses(
+        self, hotel_id, user_id, date_from, date_to, window: tuple[datetime, datetime] | None = None
+    ) -> dict:
         """Xodim kiritgan xarajatlar.
 
         `expense_date` — DATE ustuni va u xodim tomonidan qo'lda qo'yiladi,
         shuning uchun u mahalliy sana bilan to'g'ridan-to'g'ri solishtiriladi
         (vaqt mintaqasi almashtirish bu yerda o'rinsiz).
+
+        `window` berilsa (hisobotda soat belgilangan) — sana emas, xarajat
+        KIRITILGAN payt (`created_at`) shu oraliqda bo'lishi kerak: sanada
+        soat yo'q, "08:00–20:00" savoliga u javob bera olmaydi.
         """
-        stmt = select(Expense).where(
-            Expense.created_by == user_id,
-            Expense.expense_date >= date_from,
-            Expense.expense_date <= date_to,
-        )
+        if window is not None:
+            stmt = select(Expense).where(
+                Expense.created_by == user_id,
+                Expense.created_at >= window[0],
+                Expense.created_at <= window[1],
+            )
+        else:
+            stmt = select(Expense).where(
+                Expense.created_by == user_id,
+                Expense.expense_date >= date_from,
+                Expense.expense_date <= date_to,
+            )
         if hotel_id is not None:
             stmt = stmt.where(Expense.hotel_id == hotel_id)
 
