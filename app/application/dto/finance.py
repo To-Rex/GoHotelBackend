@@ -32,6 +32,10 @@ class InvoiceResponse(BaseModel):
     notes: str | None
     created_at: datetime
     updated_at: datetime
+    #: Qaysi bron / mehmon / xona — ro'yxatda (GET /finance/invoices)
+    reservation_number: str | None = None
+    guest_name: str | None = None
+    room_number: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -78,6 +82,7 @@ class PaymentResponse(BaseModel):
     #: Qarz to'lovi — mehmon chiqib ketgandan keyingi kunlarda olingan
     after_checkout: bool | None = None
     #: Pulni qabul qilgan xodim
+    created_by: UUID | None = None
     created_by_name: str | None = None
     reservation_id: UUID | None = None
     reservation_number: str | None = None

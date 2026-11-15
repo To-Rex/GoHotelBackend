@@ -1,8 +1,22 @@
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import Date, String, cast, func, literal, literal_column, null, or_, select, union_all
+from sqlalchemy import (
+    Date,
+    String,
+    case,
+    cast,
+    false,
+    func,
+    literal,
+    literal_column,
+    null,
+    or_,
+    select,
+    union_all,
+)
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import (
@@ -85,6 +99,94 @@ def _ordering(columns: dict, sort_by: str | None, sort_dir: str | None, default)
     """Tanlangan ustun bo'yicha tartib; noma'lum nom standartga qaytadi."""
     column = columns.get(sort_by or "", default)
     return column.asc() if (sort_dir or "desc").lower() == "asc" else column.desc()
+
+
+#: Filtrdagi to'lov turi -> bazadagi kodlar. Eski kodlar ham o'z kanonik
+#: turiga tushadi: "Bank kartasi" tanlansa CREDIT_CARD / DEBIT_CARD bilan
+#: yozilgan eski to'lovlar ham chiqadi (hisobotlardagi kabi).
+METHOD_CODES = {
+    "CASH": ("CASH",),
+    "CARD": ("CARD", "CREDIT_CARD", "DEBIT_CARD"),
+    "ONLINE": ("ONLINE", "MOBILE_PAYMENT"),
+    "BANK_TRANSFER": ("BANK_TRANSFER", "TRANSFER"),
+}
+
+
+def method_codes(raw: str | None) -> tuple[str, ...]:
+    """`"CASH,CARD"` -> bazadagi barcha mos kodlar. Notanish tur tashlanadi."""
+    codes: list[str] = []
+    for value in (raw or "").split(","):
+        for code in METHOD_CODES.get(value.strip().upper(), ()):
+            if code not in codes:
+                codes.append(code)
+    return tuple(codes)
+
+
+@dataclass(frozen=True)
+class PaymentFeedFilters:
+    """Moliya → To'lovlar filtrlari. Hammasi ixtiyoriy: bo'sh — avvalgidek.
+
+    `kinds` — "Turi" (tanlanganlardan birortasi — "yoki"): manba (bron /
+    do'kon), qaytarim va ekrandagi haq belgilari (xona, jarima, xizmat,
+    ortiqcha, qarz to'lovi) — `payment_purpose.matches_kinds`.
+    """
+
+    kinds: frozenset[str] = frozenset()
+    #: Bazadagi to'lov kodlari (`method_codes`)
+    methods: tuple[str, ...] = ()
+    #: Pulni qabul qilgan xodim
+    created_by: UUID | None = None
+    #: Summa oralig'i — MODUL bo'yicha (qaytarim ham o'z kattaligi bilan)
+    min_amount: float | None = None
+    max_amount: float | None = None
+    #: Faqat turi tahrirlangan (yoki tahrirda ajralgan) to'lovlar
+    edited: bool = False
+
+    @property
+    def needs_purpose(self) -> bool:
+        """Taqsimotni hisoblash kerakmi (xona/jarima/... bazada yozilmaydi)."""
+        return bool(self.kinds & purpose.PURPOSE_FILTERS) and (
+            purpose.FILTER_RESERVATION not in self.kinds
+        )
+
+
+@dataclass(frozen=True)
+class InvoiceFilters:
+    """Hisob-fakturalar qo'shimcha filtrlari (hammasi ixtiyoriy)."""
+
+    #: Faqat qoldig'i bor (to'lanmagan qismi qolgan) hujjatlar
+    debt_only: bool = False
+    #: Faqat chegirmali hujjatlar
+    discount_only: bool = False
+    #: Umumiy summa oralig'i
+    min_amount: float | None = None
+    max_amount: float | None = None
+
+
+#: Bir so'rovdagi IN ro'yxati chegarasi (asyncpg 32767 parametrdan oshmasin)
+_IN_CHUNK = 5000
+
+
+def _chunks(values: list, size: int = _IN_CHUNK):
+    for start in range(0, len(values), size):
+        yield values[start:start + size]
+
+
+def _amount_bounds(column, low: float | None, high: float | None) -> list:
+    """Summa oralig'i — modul bo'yicha (qaytarim −200 000 ham "200 000")."""
+    conditions = []
+    if low is not None:
+        conditions.append(func.abs(column) >= low)
+    if high is not None:
+        conditions.append(func.abs(column) <= high)
+    return conditions
+
+
+def _person_name(model):
+    """"Ism Familiya" — saralash uchun (bo'sh qismlar bo'sh satr)."""
+    return func.trim(
+        func.coalesce(model.first_name, "") + " " + func.coalesce(model.last_name, "")
+    )
 
 
 class FinanceService:
@@ -262,6 +364,7 @@ class FinanceService:
         date_from: date | None,
         date_to: date | None,
         search: str | None,
+        filters: InvoiceFilters | None = None,
     ) -> list:
         """Ro'yxat va sanoq bitta shartlar to'plamidan foydalanadi.
 
@@ -281,7 +384,44 @@ class FinanceService:
             conditions.append(Invoice.invoice_date <= date_to)
         text = (search or "").strip()
         if text:
-            conditions.append(Invoice.invoice_number.ilike(f"%{text}%"))
+            # Hujjat raqami, bron raqami, mehmon ismi yoki xona — jadvalda
+            # ko'rinadigan narsalar. Bron tomoni ichki so'rov: asosiy
+            # so'rovga JOIN qo'shilmaydi, ro'yxat va sanoq bir xil qoladi
+            like = f"%{text}%"
+            people = (
+                select(Reservation.id)
+                .outerjoin(Guest, Guest.id == Reservation.guest_id)
+                .outerjoin(Room, Room.id == Reservation.room_id)
+                .where(
+                    or_(
+                        Reservation.reservation_number.ilike(like),
+                        Room.room_number.ilike(like),
+                        Guest.first_name.ilike(like),
+                        Guest.last_name.ilike(like),
+                        (Guest.first_name + " " + Guest.last_name).ilike(like),
+                    )
+                )
+            )
+            if hotel_id is not None:
+                people = people.where(Reservation.hotel_id == hotel_id)
+            conditions.append(
+                or_(
+                    Invoice.invoice_number.ilike(like),
+                    Invoice.reservation_id.in_(people),
+                )
+            )
+        f = filters or InvoiceFilters()
+        if f.debt_only:
+            # Qarzdorlik kartasidagi qoida: bekor qilingan/qaytarilgan hujjat
+            # qarz emas; so'mning kasri (yaxlitlash) ham qarz emas
+            conditions.append(Invoice.total_amount - Invoice.paid_amount > 0.005)
+            conditions.append(Invoice.status.notin_(("VOID", "REFUNDED")))
+        if f.discount_only:
+            conditions.append(Invoice.discount_amount > 0)
+        if f.min_amount is not None:
+            conditions.append(Invoice.total_amount >= f.min_amount)
+        if f.max_amount is not None:
+            conditions.append(Invoice.total_amount <= f.max_amount)
         return conditions
 
     async def get_invoices(
@@ -295,11 +435,12 @@ class FinanceService:
         search: str | None = None,
         sort_by: str | None = None,
         sort_dir: str | None = None,
+        filters: InvoiceFilters | None = None,
     ) -> list[Invoice]:
         stmt = (
             select(Invoice)
             .where(*self._invoice_conditions(
-                hotel_id, status, date_from, date_to, search
+                hotel_id, status, date_from, date_to, search, filters
             ))
             # `Invoice.id` — qat'iy tartib uchun ikkinchi mezon. Usiz bir xil
             # sanadagi hujjatlar tartibi so'rovdan so'rovga o'zgarib, sahifalar
@@ -321,11 +462,62 @@ class FinanceService:
         date_from: date | None = None,
         date_to: date | None = None,
         search: str | None = None,
+        filters: InvoiceFilters | None = None,
     ) -> int:
         stmt = select(func.count(Invoice.id)).where(
-            *self._invoice_conditions(hotel_id, status, date_from, date_to, search)
+            *self._invoice_conditions(hotel_id, status, date_from, date_to, search, filters)
         )
         return int((await self.session.execute(stmt)).scalar() or 0)
+
+    async def invoice_totals(
+        self,
+        hotel_id: UUID | None,
+        status: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        search: str | None = None,
+        filters: InvoiceFilters | None = None,
+    ) -> dict:
+        """Filtrdan o'tgan hujjatlar: soni, umumiy summa va qoldiq yig'indisi
+        (ro'yxat bilan BIR XIL shartlar). Qoldiq qatordagidek — manfiy emas."""
+        remaining = Invoice.total_amount - Invoice.paid_amount
+        stmt = select(
+            func.count(Invoice.id),
+            func.coalesce(func.sum(Invoice.total_amount), 0),
+            func.coalesce(
+                func.sum(case((remaining > 0, remaining), else_=0)), 0
+            ),
+        ).where(
+            *self._invoice_conditions(hotel_id, status, date_from, date_to, search, filters)
+        )
+        count, total, left = (await self.session.execute(stmt)).one()
+        return {
+            "count": int(count or 0),
+            "total": float(total or 0),
+            "remaining": float(left or 0),
+        }
+
+    async def invoice_people(self, invoices: list) -> dict:
+        """Hujjatlar qaysi bron / mehmon / xonaga tegishli — jadval uchun.
+
+        Qaytaradi: {reservation_id: {reservation_number, guest_name, room_number}}.
+        """
+        ids = list({inv.reservation_id for inv in invoices if inv.reservation_id})
+        found: dict = {}
+        for chunk in _chunks(ids):
+            stmt = (
+                select(Reservation.id, Reservation.reservation_number, Guest, Room.room_number)
+                .outerjoin(Guest, Guest.id == Reservation.guest_id)
+                .outerjoin(Room, Room.id == Reservation.room_id)
+                .where(Reservation.id.in_(chunk))
+            )
+            for rid, number, guest, room_number in (await self.session.execute(stmt)).all():
+                found[rid] = {
+                    "reservation_number": number,
+                    "guest_name": self._full_name(guest),
+                    "room_number": room_number,
+                }
+        return found
 
     async def get_invoice(self, invoice_id: UUID, hotel_id: UUID | None) -> dict:
         if hotel_id is None:
@@ -687,19 +879,39 @@ class FinanceService:
         sort_by: str | None,
         sort_dir: str | None,
         include_shop: bool,
+        filters: PaymentFeedFilters | None = None,
     ):
-        """Moliya → To'lovlar oqimi: sahifa uchun (id, manba) ro'yxati va
-        jami soni — ikkalasi BIR XIL shartlardan.
+        """Moliya → To'lovlar oqimi: sahifa uchun (id, manba, summa) ro'yxati
+        va jami (soni, summasi) — ikkalasi BIR XIL shartlardan.
 
         Bron to'lovlari (`payments`) va, so'ralsa, do'kon to'lovlari
         (`shop_sale_payments`) bitta UNION ostida saralanadi va
         sahifalanadi; to'liq qatorlar keyin id bo'yicha yuklanadi
         (`payments_feed`). Qidiruv xodim ko'rib turgan narsasi bo'yicha:
         raqam, izoh, bron raqami, xona, mehmon ismi, mahsulot nomi.
+
+        Filtrlar (`filters`): to'lov turi, xodim, summa oralig'i, tahrirlangan
+        va "Turi" ning SQL qismi (manba, qaytarim). Haq turlari (xona,
+        jarima, ...) taqsimotdan chiqadi — ular `payments_feed` da.
         """
+        f = filters or PaymentFeedFilters()
+        kinds = f.kinds
         text = (search or "").strip()
         like = f"%{text}%" if text else None
         branch_id = scoped_branch_id(self.session, hotel_id)
+        # Xona bo'yicha saralash va qidiruv bron/xona/mehmonni ulaydi;
+        # xodim bo'yicha saralash — foydalanuvchini
+        need_people = bool(like) or sort_by == "room_number"
+        need_staff = sort_by == "created_by_name"
+
+        # Qaysi tarmoqlar kerak: "Turi" da faqat do'kon tanlansa bron
+        # to'lovlari kerak emas va aksincha. Tahrir faqat bron to'lovida bor
+        want_reservations = not kinds or bool(kinds - {purpose.FILTER_SHOP})
+        want_shop = (
+            include_shop
+            and not f.edited
+            and (not kinds or purpose.FILTER_SHOP in kinds)
+        )
 
         res = select(
             Payment.id.label("id"),
@@ -709,19 +921,24 @@ class FinanceService:
             Payment.payment_method.label("method"),
             Payment.amount.label("amount"),
             Payment.created_at.label("created_at"),
+            (Room.room_number if need_people else cast(null(), String)).label("room"),
+            (_person_name(User) if need_staff else cast(null(), String)).label("staff"),
         ).select_from(Payment)
         conditions = self._payment_conditions(hotel_id, date_from, date_to, None)
         if branch_id is not None:
             # Filial chegarasi ORM tomonidan ham qo'shiladi; UNION ichida
             # ham aniq turishi uchun shu yerda takrorlanadi
             conditions.append(Payment.branch_id == branch_id)
-        if like:
+        if need_people:
             res = (
                 res.outerjoin(Invoice, Invoice.id == Payment.invoice_id)
                 .outerjoin(Reservation, Reservation.id == Invoice.reservation_id)
                 .outerjoin(Room, Room.id == Reservation.room_id)
                 .outerjoin(Guest, Guest.id == Reservation.guest_id)
             )
+        if need_staff:
+            res = res.outerjoin(User, User.id == Payment.created_by)
+        if like:
             conditions.append(
                 or_(
                     Payment.payment_number.ilike(like),
@@ -734,9 +951,34 @@ class FinanceService:
                     (Guest.first_name + " " + Guest.last_name).ilike(like),
                 )
             )
+        if f.methods:
+            conditions.append(func.upper(Payment.payment_method).in_(f.methods))
+        if f.created_by is not None:
+            conditions.append(Payment.created_by == f.created_by)
+        conditions.extend(_amount_bounds(Payment.amount, f.min_amount, f.max_amount))
+        if f.edited:
+            # Tarixsiz qator — SQL NULL; JSON `null` / bo'sh ro'yxat ham tahrir emas
+            conditions.append(Payment.method_changes.isnot(None))
+            conditions.append(
+                cast(Payment.method_changes, String).notin_(("null", "[]"))
+            )
+        if kinds and purpose.FILTER_RESERVATION not in kinds:
+            if not f.needs_purpose:
+                # Bron tomonida faqat "Qaytarim" qolgan (yoki hech narsa)
+                conditions.append(
+                    Payment.amount < 0 if purpose.KIND_REFUND in kinds else false()
+                )
+            elif purpose.KIND_REFUND not in kinds:
+                # Qaytarim faqat "Qaytarim" ga mos — oldindan chiqariladi
+                conditions.append(Payment.amount >= 0)
+        if not want_reservations:
+            conditions.append(false())
         res = res.where(*conditions)
 
-        if include_shop:
+        # Kerak bo'lmagan tarmoq UNION ga qo'shilmaydi; ikkalasi ham kerak
+        # bo'lmasa — bo'sh natija (bron tarmog'i `false` sharti bilan)
+        arms = [res] if want_reservations else []
+        if want_shop:
             # Do'kon to'lovining kuni — `paid_at` ning MAHALLIY sanasi
             # (sessiya vaqt zonasiga bog'liq bo'lmasin: UTC + siljish)
             local_day = cast(
@@ -752,6 +994,8 @@ class FinanceService:
                 ShopSalePayment.payment_method.label("method"),
                 ShopSalePayment.amount.label("amount"),
                 ShopSalePayment.paid_at.label("created_at"),
+                (Room.room_number if need_people else cast(null(), String)).label("room"),
+                (_person_name(User) if need_staff else cast(null(), String)).label("staff"),
             ).select_from(ShopSalePayment)
             shop_conditions = []
             if hotel_id is not None:
@@ -763,13 +1007,16 @@ class FinanceService:
                 shop_conditions.append(ShopSalePayment.paid_at >= day_start)
             if day_end:
                 shop_conditions.append(ShopSalePayment.paid_at < day_end)
-            if like:
+            if need_people:
                 shop = (
                     shop.join(ShopSale, ShopSale.id == ShopSalePayment.sale_id)
                     .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
                     .outerjoin(Room, Room.id == Reservation.room_id)
                     .outerjoin(Guest, Guest.id == Reservation.guest_id)
                 )
+            if need_staff:
+                shop = shop.outerjoin(User, User.id == ShopSalePayment.created_by)
+            if like:
                 shop_conditions.append(
                     or_(
                         ShopSale.items.any(ShopSaleItem.product_name.ilike(like)),
@@ -780,10 +1027,19 @@ class FinanceService:
                         (Guest.first_name + " " + Guest.last_name).ilike(like),
                     )
                 )
-            shop = shop.where(*shop_conditions)
-            feed = union_all(res, shop).subquery("feed")
-        else:
-            feed = res.subquery("feed")
+            if f.methods:
+                shop_conditions.append(
+                    func.upper(ShopSalePayment.payment_method).in_(f.methods)
+                )
+            if f.created_by is not None:
+                shop_conditions.append(ShopSalePayment.created_by == f.created_by)
+            shop_conditions.extend(
+                _amount_bounds(ShopSalePayment.amount, f.min_amount, f.max_amount)
+            )
+            arms.append(shop.where(*shop_conditions))
+        if not arms:
+            arms = [res]
+        feed = (union_all(*arms) if len(arms) > 1 else arms[0]).subquery("feed")
 
         sorts = {
             "payment_number": feed.c.number,
@@ -791,14 +1047,22 @@ class FinanceService:
             "payment_method": feed.c.method,
             "amount": feed.c.amount,
             "created_at": feed.c.created_at,
+            "room_number": feed.c.room,
+            "created_by_name": feed.c.staff,
         }
-        ids_stmt = select(feed.c.id, feed.c.source).order_by(
-            _ordering(sorts, sort_by, sort_dir, feed.c.created_at),
+        order = _ordering(sorts, sort_by, sort_dir, feed.c.created_at)
+        if sort_by in ("room_number", "created_by_name"):
+            # Xonasiz (bronsiz do'kon savdosi) qatorlar har doim oxirida
+            order = order.nulls_last()
+        ids_stmt = select(feed.c.id, feed.c.source, feed.c.amount).order_by(
+            order,
             # Ikkinchi/uchinchi mezon — sahifalar orasida qator takrorlanmasin
             feed.c.created_at.desc(),
             feed.c.id,
         )
-        count_stmt = select(func.count()).select_from(feed)
+        count_stmt = select(
+            func.count(), func.coalesce(func.sum(feed.c.amount), 0)
+        ).select_from(feed)
         return ids_stmt, count_stmt
 
     async def payments_feed(
@@ -813,22 +1077,54 @@ class FinanceService:
         sort_by: str | None = None,
         sort_dir: str | None = None,
         include_shop: bool = False,
-    ) -> tuple[list[dict], int]:
+        filters: PaymentFeedFilters | None = None,
+    ) -> tuple[list[dict], int, float]:
         """To'lovlar ro'yxati — har qator NIMA UCHUN olingani bilan.
 
         Bron to'lovi: xona raqami, mehmon, bron raqami, haqlar taqsimoti
         (xona / jarima / xizmat — `payment_purpose`), qarz to'lovi belgisi,
         pulni qabul qilgan xodim. Do'kon to'lovi (`include_shop`): mahsulotlar
         va bo'lsa bron. Javob `PaymentResponse` bilan mos — eski maydonlar
-        avvalgidek, yangilari qo'shimcha. Qaytaradi: (qatorlar, jami soni).
+        avvalgidek, yangilari qo'shimcha.
+
+        Qaytaradi: (sahifa qatorlari, filtrdan o'tgan jami soni, jami summa).
         """
+        f = filters or PaymentFeedFilters()
         ids_stmt, count_stmt = self._feed_statements(
-            hotel_id, date_from, date_to, search, sort_by, sort_dir, include_shop
+            hotel_id, date_from, date_to, search, sort_by, sort_dir, include_shop, f
         )
-        total = int((await self.session.execute(count_stmt)).scalar() or 0)
-        if limit is not None:
-            ids_stmt = ids_stmt.offset(skip).limit(limit)
-        page = (await self.session.execute(ids_stmt)).all()
+        if f.needs_purpose:
+            # Haq turi bazada yozilmaydi — tartiblangan ro'yxat to'liq olinadi,
+            # bron to'lovlari ekrandagi belgilar qoidasi bilan saralanadi va
+            # sahifa shu yerda kesiladi. Jami soni va summasi ham shu ro'yxatdan
+            ordered = (await self.session.execute(ids_stmt)).all()
+            info = await self._purpose_info(
+                [r.id for r in ordered if r.source == purpose.SOURCE_RESERVATION]
+            )
+            kept = []
+            for r in ordered:
+                if r.source == purpose.SOURCE_RESERVATION:
+                    found = info.get(r.id)
+                    if found is None or not purpose.matches_kinds(
+                        f.kinds,
+                        source=r.source,
+                        amount=float(r.amount or 0),
+                        parts=found[0],
+                        after_checkout=found[1],
+                    ):
+                        continue
+                kept.append(r)
+            total = len(kept)
+            amount_total = round(sum(float(r.amount or 0) for r in kept), 2)
+            # `limit` berilmasa avvalgidek hammasi (offset ham qo'llanmaydi)
+            page = kept[skip:skip + limit] if limit is not None else kept
+        else:
+            count, amount_sum = (await self.session.execute(count_stmt)).one()
+            total = int(count or 0)
+            amount_total = round(float(amount_sum or 0), 2)
+            if limit is not None:
+                ids_stmt = ids_stmt.offset(skip).limit(limit)
+            page = (await self.session.execute(ids_stmt)).all()
 
         rows: dict[tuple, dict] = {}
         rows.update(
@@ -841,8 +1137,171 @@ class FinanceService:
                 [r.id for r in page if r.source == purpose.SOURCE_SHOP]
             )
         )
-        ordered = [rows[(r.source, r.id)] for r in page if (r.source, r.id) in rows]
-        return ordered, total
+        ordered_rows = [rows[(r.source, r.id)] for r in page if (r.source, r.id) in rows]
+        return ordered_rows, total, amount_total
+
+    async def payment_staff(
+        self,
+        hotel_id: UUID | None,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        include_shop: bool = False,
+    ) -> list[dict]:
+        """Davrda pul qabul qilgan xodimlar — To'lovlar filtri ro'yxati.
+
+        Har xodim: id, ismi, nechta to'lov va qancha summa (bron + so'ralsa
+        do'kon). Faqat shu davrda to'lov olganlar — ro'yxat qisqa qoladi.
+        """
+        branch_id = scoped_branch_id(self.session, hotel_id)
+        conditions = self._payment_conditions(hotel_id, date_from, date_to, None)
+        if branch_id is not None:
+            conditions.append(Payment.branch_id == branch_id)
+        arms = [
+            select(
+                Payment.created_by.label("uid"), Payment.amount.label("amount")
+            ).where(*conditions)
+        ]
+        if include_shop:
+            shop_conditions = []
+            if hotel_id is not None:
+                shop_conditions.append(ShopSalePayment.hotel_id == hotel_id)
+            if branch_id is not None:
+                shop_conditions.append(ShopSalePayment.branch_id == branch_id)
+            day_start, day_end = local_day_bounds(date_from, date_to)
+            if day_start:
+                shop_conditions.append(ShopSalePayment.paid_at >= day_start)
+            if day_end:
+                shop_conditions.append(ShopSalePayment.paid_at < day_end)
+            arms.append(
+                select(
+                    ShopSalePayment.created_by.label("uid"),
+                    ShopSalePayment.amount.label("amount"),
+                ).where(*shop_conditions)
+            )
+        taken = (union_all(*arms) if len(arms) > 1 else arms[0]).subquery("taken")
+        stmt = (
+            select(
+                taken.c.uid,
+                func.count(),
+                func.coalesce(func.sum(taken.c.amount), 0),
+                User.first_name,
+                User.last_name,
+            )
+            .select_from(taken)
+            .outerjoin(User, User.id == taken.c.uid)
+            .where(taken.c.uid.isnot(None))
+            .group_by(taken.c.uid, User.first_name, User.last_name)
+        )
+        staff = [
+            {
+                "id": uid,
+                "name": f"{first or ''} {last or ''}".strip() or None,
+                "count": int(count or 0),
+                "total": round(float(amount or 0), 2),
+            }
+            for uid, count, amount, first, last in (await self.session.execute(stmt)).all()
+        ]
+        return sorted(staff, key=lambda s: ((s["name"] or "").lower(), str(s["id"])))
+
+    async def _allocations(self, invoice_ids) -> dict:
+        """Hisob-fakturalar to'lovlarining haqlar taqsimoti:
+        `{to'lov id: [{kind, amount, label}]}` (`payment_purpose.allocate`).
+
+        Fakturaning BARCHA qatorlari va to'lovlari olinadi — sahifadagi
+        to'lov o'rtada bo'lishi mumkin, tarix to'liq kerak. Jadvaldagi
+        belgilar ham, "Turi" filtri ham shu bitta hisobdan.
+        """
+        ids = list(invoice_ids)
+        charges: dict = {}
+        paid: dict = {}
+        discounts: dict = {}
+        for chunk in _chunks(ids):
+            for inv_id, discount in (
+                await self.session.execute(
+                    select(Invoice.id, Invoice.discount_amount).where(Invoice.id.in_(chunk))
+                )
+            ).all():
+                discounts[inv_id] = float(discount or 0)
+            for line in (
+                await self.session.execute(
+                    select(InvoiceLineItem).where(InvoiceLineItem.invoice_id.in_(chunk))
+                )
+            ).scalars():
+                charges.setdefault(line.invoice_id, []).append(
+                    purpose.Charge(
+                        kind=purpose.line_kind(line.line_type),
+                        amount=float(line.total_price or 0),
+                        at=line.created_at,
+                        label=line.description,
+                    )
+                )
+            # Qisman tahrirda ajralgan qator asl to'lov VAQTINI oladi — ikkalasi
+            # bir xil daqiqada turadi. Taqsimot har so'rovda bir xil chiqishi
+            # uchun tartib aniq: vaqt, keyin asl to'lov (`rank` 0), keyin undan
+            # ajralgan qism (`rank` 1); qolgani id bo'yicha.
+            for pid, inv_id, amount, at, changes in (
+                await self.session.execute(
+                    select(
+                        Payment.id,
+                        Payment.invoice_id,
+                        Payment.amount,
+                        Payment.created_at,
+                        Payment.method_changes,
+                    )
+                    .where(Payment.invoice_id.in_(chunk))
+                    .order_by(Payment.created_at, Payment.id)
+                )
+            ).all():
+                paid.setdefault(inv_id, []).append(
+                    purpose.Paid(
+                        id=pid,
+                        amount=float(amount or 0),
+                        at=at,
+                        rank=1 if is_split_row(changes) else 0,
+                    )
+                )
+
+        allocations: dict = {}
+        for inv_id in ids:
+            allocations.update(
+                purpose.allocate(
+                    charges.get(inv_id, []),
+                    paid.get(inv_id, []),
+                    discounts.get(inv_id, 0.0),
+                )
+            )
+        return allocations
+
+    async def _purpose_info(self, payment_ids: list) -> dict:
+        """Bron to'lovlari: `{id: (haqlar taqsimoti, qarz to'lovimi)}` —
+        "Turi" filtri uchun, jadvaldagi belgilar bilan bir xil qoida."""
+        info: dict = {}
+        for chunk in _chunks(list(payment_ids)):
+            rows = (
+                await self.session.execute(
+                    select(
+                        Payment.id,
+                        Payment.invoice_id,
+                        Payment.created_at,
+                        Reservation.status,
+                        Reservation.check_out_date,
+                        Reservation.check_out_datetime,
+                    )
+                    .join(Invoice, Invoice.id == Payment.invoice_id)
+                    .outerjoin(Reservation, Reservation.id == Invoice.reservation_id)
+                    .where(Payment.id.in_(chunk))
+                )
+            ).all()
+            allocations = await self._allocations({r.invoice_id for r in rows})
+            for r in rows:
+                info[r.id] = (
+                    allocations.get(r.id, []),
+                    purpose.is_after_checkout(
+                        r.created_at, r.status, r.check_out_date, r.check_out_datetime
+                    ),
+                )
+        return info
 
     @staticmethod
     def _full_name(user) -> str | None:
@@ -864,61 +1323,7 @@ class FinanceService:
             .where(Payment.id.in_(ids))
         )
         loaded = (await self.session.execute(stmt)).all()
-        invoice_ids = {inv.id for _, inv, *_ in loaded}
-
-        # Haqlar taqsimoti uchun fakturaning BARCHA qatorlari va to'lovlari
-        # (sahifadagi to'lov o'rtada bo'lishi mumkin — tarix to'liq kerak)
-        charges: dict = {}
-        for line in (
-            await self.session.execute(
-                select(InvoiceLineItem).where(InvoiceLineItem.invoice_id.in_(invoice_ids))
-            )
-        ).scalars():
-            charges.setdefault(line.invoice_id, []).append(
-                purpose.Charge(
-                    kind=purpose.line_kind(line.line_type),
-                    amount=float(line.total_price or 0),
-                    at=line.created_at,
-                    label=line.description,
-                )
-            )
-        # Qisman tahrirda ajralgan qator asl to'lov VAQTINI oladi — ikkalasi
-        # bir xil daqiqada turadi. Taqsimot har so'rovda bir xil chiqishi
-        # uchun tartib aniq: vaqt, keyin asl to'lov (`rank` 0), keyin undan
-        # ajralgan qism (`rank` 1); qolgani id bo'yicha.
-        paid: dict = {}
-        for pid, inv_id, amount, at, changes in (
-            await self.session.execute(
-                select(
-                    Payment.id,
-                    Payment.invoice_id,
-                    Payment.amount,
-                    Payment.created_at,
-                    Payment.method_changes,
-                )
-                .where(Payment.invoice_id.in_(invoice_ids))
-                .order_by(Payment.created_at, Payment.id)
-            )
-        ).all():
-            paid.setdefault(inv_id, []).append(
-                purpose.Paid(
-                    id=pid,
-                    amount=float(amount or 0),
-                    at=at,
-                    rank=1 if is_split_row(changes) else 0,
-                )
-            )
-
-        allocations: dict = {}
-        for inv_id in invoice_ids:
-            invoice = next(inv for _, inv, *_ in loaded if inv.id == inv_id)
-            allocations.update(
-                purpose.allocate(
-                    charges.get(inv_id, []),
-                    paid.get(inv_id, []),
-                    float(invoice.discount_amount or 0),
-                )
-            )
+        allocations = await self._allocations({inv.id for _, inv, *_ in loaded})
 
         result: dict[tuple, dict] = {}
         for payment, invoice, reservation, room_number, guest, user in loaded:
@@ -936,6 +1341,7 @@ class FinanceService:
                         reservation.check_out_date if reservation else None,
                         reservation.check_out_datetime if reservation else None,
                     ),
+                    "created_by": payment.created_by,
                     "created_by_name": self._full_name(user),
                     "reservation_id": reservation.id if reservation else None,
                     "reservation_number": reservation.reservation_number if reservation else None,
@@ -1001,6 +1407,7 @@ class FinanceService:
                     }
                 ],
                 "after_checkout": False,
+                "created_by": sp.created_by,
                 "created_by_name": self._full_name(user),
                 "reservation_id": reservation.id if reservation else None,
                 "reservation_number": reservation.reservation_number if reservation else None,

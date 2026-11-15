@@ -16,7 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,7 @@ from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.application.services.shop_payments import apply_payment, remaining_of
+from app.application.services.finance_service import method_codes
 from app.infrastructure.database.models.shop import (
     ShopSalePayment,
     ShopBatch,
@@ -496,13 +497,32 @@ async def add_batch(
 # -------------------------------------------------------------- sales --
 
 
+#: Savdoning to'lanmagan qoldig'i (`_paid_of` bilan bir xil: ustun bo'sh
+#: eski yozuvda — holatdan), manfiy emas
+_SALE_PAID = case(
+    (ShopSale.paid_amount.is_(None), case((ShopSale.status == "PAID", ShopSale.total_amount), else_=0)),
+    else_=ShopSale.paid_amount,
+)
+_SALE_REMAINING = case(
+    (ShopSale.total_amount - _SALE_PAID > 0, ShopSale.total_amount - _SALE_PAID),
+    else_=0,
+)
+
 #: Do'kon savdosini saralash mumkin bo'lgan ustunlar — ro'yxat yopiq.
 SALE_SORTS = {
     "created_at": ShopSale.created_at,
     "paid_at": ShopSale.paid_at,
     "total_amount": ShopSale.total_amount,
     "status": ShopSale.status,
+    "remaining": _SALE_REMAINING,
+    "payment_method": ShopSale.payment_method,
+    "reservation_number": Reservation.reservation_number,
+    "created_by_name": func.trim(
+        func.coalesce(User.first_name, "") + " " + func.coalesce(User.last_name, "")
+    ),
 }
+#: Bo'sh qiymatli ustunlar (bronsiz savdo) — har doim oxirida
+_NULLS_LAST_SORTS = ("reservation_number", "payment_method", "paid_at")
 
 
 @router.get("/sales")
@@ -521,9 +541,20 @@ async def list_sales(
     skip: int = Query(default=0, ge=0),
     hotel_id: UUID | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=1000),
+    # --- Filtrlar (Moliya → Do'kon). Berilmasa avvalgidek -------------
+    #: To'lov turi, vergul bilan: CASH, CARD, ONLINE, BANK_TRANSFER — bo'lib
+    #: to'langan savdo bo'laklaridan biri shu turda bo'lsa ham chiqadi
+    methods: str | None = Query(default=None, max_length=200),
+    #: "reservation" — bronga yozilgan, "direct" — bronsiz (naqd sotuv)
+    linked: Literal["reservation", "direct"] | None = Query(default=None),
+    #: Savdo summasi oralig'i
+    min_amount: float | None = Query(default=None, ge=0),
+    max_amount: float | None = Query(default=None, ge=0),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Do'kon savdolari. Sarlavhalarda: jami soni, summasi (`X-Total-Amount`)
+    va to'lanmagan qoldiq (`X-Total-Remaining`) — butun natija bo'yicha."""
     h_id = _get_hotel_id(current_user, hotel_id)
 
     date_col = ShopSale.paid_at if date_by == "paid" else ShopSale.created_at
@@ -551,23 +582,52 @@ async def list_sales(
                 ShopSale.items.any(ShopSaleItem.product_name.ilike(like)),
             )
         )
-
-    # Jami soni sahifalagich uchun — javob turi o'zgarmaydi
-    response.headers["X-Total-Count"] = str(
-        (
-            await session.execute(
-                select(func.count(func.distinct(ShopSale.id)))
-                .select_from(ShopSale)
-                .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
-                .outerjoin(Guest, Guest.id == Reservation.guest_id)
-                .outerjoin(Room, Room.id == Reservation.room_id)
-                .where(*conditions)
+    codes = method_codes(methods)
+    if codes:
+        conditions.append(
+            or_(
+                func.upper(ShopSale.payment_method).in_(codes),
+                ShopSale.id.in_(
+                    select(ShopSalePayment.sale_id).where(
+                        func.upper(ShopSalePayment.payment_method).in_(codes)
+                    )
+                ),
             )
-        ).scalar()
-        or 0
-    )
+        )
+    if linked == "reservation":
+        conditions.append(ShopSale.reservation_id.isnot(None))
+    elif linked == "direct":
+        conditions.append(ShopSale.reservation_id.is_(None))
+    if min_amount is not None:
+        conditions.append(ShopSale.total_amount >= min_amount)
+    if max_amount is not None:
+        conditions.append(ShopSale.total_amount <= max_amount)
+
+    # Jami soni sahifalagich uchun — javob turi o'zgarmaydi. Bron/mehmon/
+    # xona ko'pdan-birga ulanadi (qator ko'paymaydi), shuning uchun
+    # summalar ham to'g'ri
+    count, amount_total, remaining_total = (
+        await session.execute(
+            select(
+                func.count(func.distinct(ShopSale.id)),
+                func.coalesce(func.sum(ShopSale.total_amount), 0),
+                func.coalesce(func.sum(_SALE_REMAINING), 0),
+            )
+            .select_from(ShopSale)
+            .outerjoin(Reservation, Reservation.id == ShopSale.reservation_id)
+            .outerjoin(Guest, Guest.id == Reservation.guest_id)
+            .outerjoin(Room, Room.id == Reservation.room_id)
+            .where(*conditions)
+        )
+    ).one()
+    response.headers["X-Total-Count"] = str(int(count or 0))
+    response.headers["X-Total-Amount"] = str(round(float(amount_total or 0), 2))
+    response.headers["X-Total-Remaining"] = str(round(float(remaining_total or 0), 2))
 
     column = SALE_SORTS.get(sort_by or "", ShopSale.created_at)
+    order = column.asc() if (sort_dir or "desc").lower() == "asc" else column.desc()
+    if sort_by in _NULLS_LAST_SORTS:
+        order = order.nulls_last()
     stmt = (
         select(ShopSale, User, Reservation, Guest, Room.room_number)
         .join(User, User.id == ShopSale.created_by)
@@ -577,10 +637,7 @@ async def list_sales(
         .options(selectinload(ShopSale.items))
         .where(*conditions)
         # `ShopSale.id` — sahifalar orasida qator takrorlanib ketmasligi uchun
-        .order_by(
-            column.asc() if (sort_dir or "desc").lower() == "asc" else column.desc(),
-            ShopSale.id,
-        )
+        .order_by(order, ShopSale.id)
         .offset(skip)
         .limit(limit)
     )

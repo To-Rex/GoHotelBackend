@@ -188,3 +188,74 @@ def is_after_checkout(
     if end is None:
         return False
     return local_date_of(created_at) > end
+
+
+# --------------------------------------------------------- filtr --
+#
+# Moliya → To'lovlar ro'yxatidagi "Turi" filtri. Qator ekrandagi
+# belgilari bo'yicha tanlanadi — filtr va belgi BITTA qoidadan
+# (`allocate`, `is_after_checkout`), shuning uchun "Jarima" tanlanganda
+# aynan "Jarima" belgili qatorlar qoladi.
+
+#: Barcha bron to'lovlari (manba bo'yicha)
+FILTER_RESERVATION = SOURCE_RESERVATION
+#: Do'kon to'lovlari
+FILTER_SHOP = SOURCE_SHOP
+#: Qarz to'lovi — mehmon chiqib ketgandan keyin olingan (`after_checkout`)
+FILTER_DEBT = "DEBT"
+
+FILTER_KINDS = frozenset(
+    {
+        FILTER_RESERVATION,
+        FILTER_SHOP,
+        FILTER_DEBT,
+        KIND_ROOM,
+        KIND_PENALTY,
+        KIND_SERVICE,
+        KIND_EXTRA,
+        KIND_REFUND,
+        KIND_OTHER,
+    }
+)
+
+#: Taqsimotni hisoblashni talab qiladigan turlar: ular bazada yozilmaydi,
+#: SQL bilan ajratib bo'lmaydi (manba va qaytarim — SQL da)
+PURPOSE_FILTERS = frozenset(
+    {FILTER_DEBT, KIND_ROOM, KIND_PENALTY, KIND_SERVICE, KIND_EXTRA, KIND_OTHER}
+)
+
+
+def parse_filter_kinds(raw: str | None) -> frozenset[str]:
+    """`"SHOP,PENALTY"` → {SHOP, PENALTY}. Notanish qiymat tashlab yuboriladi."""
+    values = {(v or "").strip().upper() for v in (raw or "").split(",")}
+    return frozenset(v for v in values if v in FILTER_KINDS)
+
+
+def matches_kinds(
+    kinds: frozenset[str] | set[str],
+    *,
+    source: str,
+    amount: float,
+    parts: list[dict] | None,
+    after_checkout: bool,
+) -> bool:
+    """Qator tanlangan turlardan BIRORTASIGA mos keladimi (tanlov — "yoki").
+
+    Ekrandagi belgilar bilan bir xil: qaytarim faqat "Qaytarim"; qarz
+    to'lovi "Qarz to'lovi" bilan birga o'zi yopgan haqlar (xona, jarima)
+    bo'yicha ham topiladi.
+    """
+    if not kinds:
+        return True
+    if source == SOURCE_SHOP:
+        return FILTER_SHOP in kinds
+    if FILTER_RESERVATION in kinds:
+        return True
+    if float(amount or 0) < 0:
+        return KIND_REFUND in kinds
+    if after_checkout and FILTER_DEBT in kinds:
+        return True
+    return any(
+        part.get("kind") in kinds and float(part.get("amount") or 0) > 0
+        for part in parts or []
+    )

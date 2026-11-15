@@ -14,7 +14,13 @@ from app.core.exceptions import ForbiddenException, NotFoundException, Validatio
 from app.infrastructure.database.models.invoice import Invoice
 from app.infrastructure.database.models.payment import Payment
 from app.application.services import sms_service
-from app.application.services.finance_service import FinanceService
+from app.application.services.finance_service import (
+    FinanceService,
+    InvoiceFilters,
+    PaymentFeedFilters,
+    method_codes,
+)
+from app.application.services.payment_purpose import parse_filter_kinds
 from app.application.dto.finance import (
     PaymentCreateRequest,
     InvoiceResponse,
@@ -36,6 +42,11 @@ router = APIRouter(dependencies=[Depends(require_active_hotel)])
 #: Brauzer buni faqat CORS `expose_headers` ro'yxatida bo'lsa o'qiy oladi —
 #: `app/main.py` da qo'shilgan.
 TOTAL_COUNT_HEADER = "X-Total-Count"
+#: Filtrdan o'tgan qatorlar summasi ("Topildi: 12 ta, 1 250 000 So'm") —
+#: sahifa emas, BUTUN natija bo'yicha. Hisob-fakturalarda — umumiy summa
+TOTAL_AMOUNT_HEADER = "X-Total-Amount"
+#: Hisob-fakturalar: filtrdan o'tganlarning qoldiq (qarz) yig'indisi
+TOTAL_REMAINING_HEADER = "X-Total-Remaining"
 
 
 def _get_hotel_id(current_user: dict) -> UUID | None:
@@ -222,28 +233,51 @@ async def list_invoices(
     sort_dir: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
+    # Qo'shimcha filtrlar (Moliya → Hisob-fakturalar) — berilmasa avvalgidek
+    debt_only: bool = Query(default=False),
+    discount_only: bool = Query(default=False),
+    min_amount: float | None = Query(default=None, ge=0),
+    max_amount: float | None = Query(default=None, ge=0),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Hisob-fakturalar. Qidiruv: hujjat raqami, bron raqami, mehmon ismi,
+    xona. Har qatorda bron raqami, mehmon va xona ham (eski maydonlar
+    avvalgidek). Sarlavhalarda: jami soni, umumiy summa va qoldiq."""
     if current_user["user_type"] == "SUPER_ADMIN":
         h_id = hotel_id or current_user.get("hotel_id")
     else:
         h_id = _get_hotel_id(current_user)
     service = FinanceService(session)
+    filters = InvoiceFilters(
+        debt_only=debt_only,
+        discount_only=discount_only,
+        min_amount=min_amount,
+        max_amount=max_amount,
+    )
     # Jami soni sarlavhada: javob turi (`list[InvoiceResponse]`) o'zgarmaydi,
     # ya'ni bu endpointdan foydalanadigan eski ekranlar hech narsa sezmaydi
-    response.headers[TOTAL_COUNT_HEADER] = str(
-        await service.count_invoices(
-            h_id, status=status, date_from=date_from, date_to=date_to,
-            search=search,
-        )
+    totals = await service.invoice_totals(
+        h_id, status=status, date_from=date_from, date_to=date_to,
+        search=search, filters=filters,
     )
-    return await service.get_invoices(
+    response.headers[TOTAL_COUNT_HEADER] = str(totals["count"])
+    response.headers[TOTAL_AMOUNT_HEADER] = str(totals["total"])
+    response.headers[TOTAL_REMAINING_HEADER] = str(totals["remaining"])
+    invoices = await service.get_invoices(
         h_id, skip=skip, limit=limit, status=status,
         date_from=date_from, date_to=date_to,
-        search=search, sort_by=sort_by, sort_dir=sort_dir,
+        search=search, sort_by=sort_by, sort_dir=sort_dir, filters=filters,
     )
+    people = await service.invoice_people(invoices)
+    return [
+        {
+            **InvoiceResponse.model_validate(inv).model_dump(),
+            **people.get(inv.reservation_id, {}),
+        }
+        for inv in invoices
+    ]
 
 
 @router.post("/invoices")
@@ -392,6 +426,20 @@ async def list_payments(
     # Do'kon to'lovlari ham ro'yxatda (Moliya → To'lovlar). Standart — yo'q:
     # eski ekranlar (bosh sahifa) faqat bron to'lovlarini yig'adi
     include_shop: bool = Query(default=False),
+    # --- Filtrlar (Moliya → To'lovlar). Berilmasa avvalgidek ----------
+    #: "Turi", vergul bilan: RESERVATION, SHOP, ROOM, PENALTY, SERVICE,
+    #: DEBT (qarz to'lovi), EXTRA (ortiqcha), REFUND — birortasiga mos
+    kinds: str | None = Query(default=None, max_length=200),
+    #: To'lov turi, vergul bilan: CASH, CARD, ONLINE, BANK_TRANSFER
+    #: (eski kodlar o'z turiga tushadi)
+    methods: str | None = Query(default=None, max_length=200),
+    #: Pulni qabul qilgan xodim
+    created_by: UUID | None = Query(default=None),
+    #: Summa oralig'i (modul bo'yicha — qaytarim ham)
+    min_amount: float | None = Query(default=None, ge=0),
+    max_amount: float | None = Query(default=None, ge=0),
+    #: Faqat turi tahrirlangan to'lovlar
+    edited: bool = Query(default=False),
     hotel_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -408,13 +456,44 @@ async def list_payments(
     service = FinanceService(session)
     if invoice_id is not None:
         return await service.get_payments(h_id, invoice_id=invoice_id)
-    rows, total = await service.payments_feed(
+    filters = PaymentFeedFilters(
+        kinds=parse_filter_kinds(kinds),
+        methods=method_codes(methods),
+        created_by=created_by,
+        min_amount=min_amount,
+        max_amount=max_amount,
+        edited=edited,
+    )
+    rows, total, amount_total = await service.payments_feed(
         h_id, date_from=date_from, date_to=date_to,
         skip=skip, limit=limit, search=search,
         sort_by=sort_by, sort_dir=sort_dir, include_shop=include_shop,
+        filters=filters,
     )
     response.headers[TOTAL_COUNT_HEADER] = str(total)
+    response.headers[TOTAL_AMOUNT_HEADER] = str(amount_total)
     return rows
+
+
+@router.get("/payments/staff")
+async def list_payment_staff(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    include_shop: bool = Query(default=False),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Davrda pul qabul qilgan xodimlar (To'lovlar filtri uchun):
+    `[{id, name, count, total}]` — ism bo'yicha. Ruxsat — to'lovlar
+    ro'yxati bilan bir xil (u yerda ham xodim ismi ko'rinadi)."""
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    return await FinanceService(session).payment_staff(
+        h_id, date_from=date_from, date_to=date_to, include_shop=include_shop
+    )
 
 
 class PaymentMethodUpdateRequest(BaseModel):

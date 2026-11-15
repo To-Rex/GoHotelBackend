@@ -79,7 +79,8 @@ app.add_middleware(
     # qaytaradi. `allow_headers` so'rov sarlavhalariga tegishli — javob
     # sarlavhasini brauzerga ko'rsatish uchun uni ALOHIDA ochish kerak,
     # aks holda mijoz kodi uni umuman ko'rmaydi.
-    expose_headers=["X-Total-Count"],
+    # Sahifalagich soni va filtr natijasi summalari (Moliya jadvallari)
+    expose_headers=["X-Total-Count", "X-Total-Amount", "X-Total-Remaining"],
 )
 
 # So'rovlar jurnali — panel uchun oxirgi 500 ta so'rov XOTIRADA turadi

@@ -17,6 +17,8 @@ from app.presentation.api.v1 import shop as shop_api
 
 HOTEL = uuid.uuid4()
 USER = {"id": str(uuid.uuid4()), "user_type": "ADMIN", "hotel_id": HOTEL}
+#: Moliya filtrlari — berilmasa avvalgidek (endpoint to'g'ridan-to'g'ri chaqiriladi)
+NO_FILTERS = dict(methods=None, linked=None, min_amount=None, max_amount=None)
 
 
 def sale(reservation_id=None, status="PENDING"):
@@ -38,6 +40,10 @@ class Rows:
 
     def scalar(self):
         return self._scalar
+
+    def one(self):
+        # Sanoq so'rovi: (soni, summa, qoldiq)
+        return (self._scalar, 0, 0)
 
 
 class Db:
@@ -66,7 +72,7 @@ def test_charged_sale_shows_who_it_was_sold_to():
     out = asyncio.run(shop_api.list_sales(
         response=Response(), date_from=None, date_to=None, status=None, date_by="created",
         search=None, sort_by=None, sort_dir=None, skip=0, hotel_id=None, limit=50,
-        session=db, current_user=USER,
+        **NO_FILTERS, session=db, current_user=USER,
     ))
     charged, plain = out
     assert charged["guest_name"] == "Gulamboy Sadaddinov"
@@ -85,7 +91,7 @@ def test_search_by_guest_name_and_room():
     asyncio.run(shop_api.list_sales(
         response=Response(), date_from=None, date_to=None, status=None, date_by="created",
         search="Gulamboy", sort_by=None, sort_dir=None, skip=0, hotel_id=None, limit=50,
-        session=db, current_user=USER,
+        **NO_FILTERS, session=db, current_user=USER,
     ))
     count_sql, main_sql = db.sql
     for sql in (count_sql, main_sql):
