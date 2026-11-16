@@ -171,6 +171,31 @@ def is_configured() -> bool:
     return _init() is not None
 
 
+#: iOS ilovasiga qo'shilgan budilnik ovozi (28 s). iOS xabar ovozini
+#: 30 soniyadan ortiq chalmaydi va Androiddagidek "yopilmaguncha
+#: jiringlash" imkonini bermaydi; eng yaqin o'rinbosar shu.
+IOS_TASK_ALARM_SOUND = "task_alarm.caf"
+
+
+def _aps(title: str, body: str | None, kind: str | None):
+    """iOS (APNs) uchun xabar: alert + tovush.
+
+    Yangi vazifa (`kind=task_alarm`) uzun budilnik ovozi bilan keladi va
+    `time-sensitive` darajasida yuboriladi: telefon "Diqqatni jamlash"
+    (Focus) rejimida bo'lsa ham xabar ko'rinadi va ovoz chalinadi.
+    Android bu qismni o'qimaydi, unga ta'sir yo'q.
+    """
+    from firebase_admin import messaging
+
+    is_task_alarm = kind == "task_alarm"
+    return messaging.Aps(
+        alert=messaging.ApsAlert(title=title, body=body or ""),
+        sound=IOS_TASK_ALARM_SOUND if is_task_alarm else "default",
+        content_available=True,
+        custom_data={"interruption-level": "time-sensitive"} if is_task_alarm else None,
+    )
+
+
 def _send_sync(
     tokens: list[str],
     title: str,
@@ -223,13 +248,7 @@ def _send_sync(
     )
     apns_cfg = messaging.APNSConfig(
         headers={"apns-priority": "10"},
-        payload=messaging.APNSPayload(
-            aps=messaging.Aps(
-                alert=messaging.ApsAlert(title=title, body=body or ""),
-                sound="default",
-                content_available=True,
-            )
-        ),
+        payload=messaging.APNSPayload(aps=_aps(title, body, str_data.get("kind"))),
     )
 
     # Yangi (send_each_for_multicast) va eski SDK versiyalarini ham qo'llab-quvvatlaymiz
