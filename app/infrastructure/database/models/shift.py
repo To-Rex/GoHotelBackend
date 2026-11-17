@@ -89,6 +89,16 @@ class ShiftSession(BranchScoped, FullMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Kunlik kesim bo'yicha topshirish: sessiya "hozir" emas, tanlangan kesim
+    #: momentida yopiladi (`ended_at` = kesim), kesimdan keyingi tushum esa
+    #: davom etayotgan sessiyada qoladi. `handed_at` — pul HAQIQATDA
+    #: topshirilgan vaqt. NULL — oddiy topshirish (`ended_at` ning o'zi).
+    handed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Kesim bo'yicha topshirishda kassada QOLDIRILGAN pul. Kesimdan keyingi
+    #: naqd xarajat o'sha kunning pulidan to'langan bo'lsa, shu qism jismonan
+    #: kassada yo'q — u topshirilmaydi (`expected_cash` dan ayirilgan) va
+    #: davom etayotgan sessiyaning boshlang'ich kassasi bo'ladi.
+    carried_cash: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Tuzatishlar tarixi (audit): [{old/new qiymatlar, kim, qachon, izoh}, ...]
     corrections: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)

@@ -86,7 +86,7 @@ def session_obj(user=DILNOZA, *, start=T0, end=None, opening=0):
         status="CLOSED" if end else "ACTIVE", started_at=start, ended_at=end,
         opening_cash=Decimal(str(opening)), expected_cash=None, counted_cash=None,
         cash_diff=None, accepted_by=None, accepted_at=None, force_closed=False,
-        pending_approval=None,
+        pending_approval=None, handed_at=None, carried_cash=None,
         corrections=None, notes=None, closed_by=None, continue_after_end=False,
     )
 
@@ -234,7 +234,18 @@ def test_expected_cash_endpoint_keeps_methods_as_list():
     s = session_obj(start=T0)
     svc = ShiftService.__new__(ShiftService)
     svc.session = Db(sessions=[s], payments=[("ONLINE", 45000)])
+
+    # Kunlik kesim variantlari bu testning mavzusi emas (test_shift_day_cut)
+    async def get_settings(hotel_id):
+        return {"mode": "cash", "day_close": "00:00"}
+
+    async def cut_plans(session, day_close, now):
+        return []
+
+    svc.get_settings = get_settings
+    svc.cut_plans = cut_plans
     out = asyncio.run(svc.my_expected_cash(HOTEL, {"id": str(DILNOZA)}))
+    assert out["cuts"] == []
     assert isinstance(out["methods"], list)
     assert out["methods"][0]["income"] == 45000.0
     assert out["non_cash_income"] == 45000.0

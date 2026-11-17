@@ -2308,6 +2308,32 @@ The cash drawer is cash-only: the expected amount, the count and the handover ch
 
 ---
 
+### Shifts — handover by daily cut (kassani kunlik kesim bo'yicha topshirish)
+
+A cashier may hand over the drawer **up to a daily cut** instead of "everything until now". The daily cut is the branch setting `shift.day_close` (`"HH:MM"`, hotel local time). Every cut moment that falls inside the open session splits it into cut days (e.g. cut `00:05` → `00:05 … 00:05`).
+
+`GET /shifts/expected-cash` additionally returns `cuts` — the available options, **oldest first** (empty when the session was opened after the last cut):
+
+```json
+{
+  "expected_cash": 2800000.0,
+  "cuts": [
+    {"cut_at": "2026-11-15T19:05:00+00:00", "from_at": "2026-11-15T04:12:00+00:00", "day": "2026-11-15",
+     "day_cash": 1200000.0, "opening_cash": 100000.0, "payments_cash": 1200000.0, "shop_cash": 0.0,
+     "expenses_cash": 0.0, "expected_cash": 1300000.0, "after_cash": 1500000.0,
+     "carried_cash": 0.0, "due_cash": 1300000.0, "methods": [], "non_cash_income": 0.0}
+  ]
+}
+```
+
+- Handover is **sequential**: an option means "all days up to and including this cut". `day_cash` is that single day's net cash; every other amount is cumulative from the session start. `day` is the business day the cut closes (a night cut closes the previous calendar day).
+- `due_cash = expected_cash − carried_cash` is the amount to hand over. `carried_cash` is non-zero only when cash expenses after the cut exceed cash income after it: that money was physically spent from the earlier days' cash, so it is not handed over (and not recorded as a shortage) — it becomes the opening cash of the continuing session.
+- `POST /shifts/close-cash` accepts optional `cut_at` (one of `cuts[].cut_at`). The session is closed **at the cut moment** (`ended_at = cut_at`, `handed_at` = actual handover time, `expected_cash = due_cash`), and the cashier continues in a new ACTIVE session that starts at the cut (so later takings stay in it) with `opening_cash = carried_cash`. Unknown `cut_at` → 422 `INVALID_CUT`. Without `cut_at` nothing changes: everything until now is handed over and the new session starts at 0.
+- With `shift.handover_approval` on, the cut session waits for approval as usual; the continuing session is created on approval (or when the manager force-closes it with `hand_over: false`) and still starts at the cut.
+- Session objects (`/shifts/history`, close reports) and `/shifts/handovers` items carry `handed_at` and `carried_cash` (both `null` for ordinary handovers). `POST /shifts/end` is unaffected — ending a shift always passes the whole drawer to the next employee.
+
+---
+
 ### Reports
 
 **GET /reports/my-summary**

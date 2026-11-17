@@ -125,6 +125,8 @@ def make_session(
         closed_by=None,
         continue_after_end=continue_after_end,
         pending_approval=pending_approval,
+        handed_at=None,
+        carried_cash=None,
     )
 
 

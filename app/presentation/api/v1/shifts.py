@@ -4,7 +4,7 @@ Kassali rejim mehmonxona sozlamalarida yoqiladi (faqat ADMIN). Xodimlar
 smenani ochadi, kassani topshiradi (ko'r sanash), smenani tugallaydi;
 keyingi xodim parol bilan qabul qiladi; admin/menejer majburiy yopadi.
 """
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -45,6 +45,18 @@ class OpenShiftRequest(BaseModel):
 class CashCountRequest(BaseModel):
     counted_cash: float = Field(..., ge=0)
     notes: str | None = Field(default=None, max_length=1000)
+
+
+class CloseCashRequest(CashCountRequest):
+    """Kassani topshirish.
+
+    `cut_at` — KUNLIK KESIM bo'yicha topshirish: `GET /shifts/expected-cash`
+    javobidagi `cuts[].cut_at` qiymatlaridan biri. Faqat shu kesimgacha
+    bo'lgan kassa topshiriladi, kesimdan keyingi tushum yangi sessiyada
+    qoladi. Yuborilmasa — avvalgidek, hozirgacha bo'lgan hamma pul.
+    """
+
+    cut_at: datetime | None = None
 
 
 class AcceptShiftRequest(BaseModel):
@@ -109,7 +121,11 @@ async def expected_cash(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Faol sessiya kassasida bo'lishi kerak bo'lgan summa (tarkibi bilan)."""
+    """Faol sessiya kassasida bo'lishi kerak bo'lgan summa (tarkibi bilan).
+
+    `cuts` — kunlik kesim bo'yicha topshirish variantlari (eskidan yangiga):
+    har biri shu kesimgacha topshirilsa qancha pul topshirilishini
+    ko'rsatadi. Sessiya oxirgi kesimdan keyin ochilgan bo'lsa — bo'sh."""
     return await ShiftService(session).my_expected_cash(
         _hotel_id(current_user), current_user
     )
@@ -148,12 +164,16 @@ async def continue_shift(
 
 @router.post("/close-cash")
 async def close_cash(
-    data: CashCountRequest,
+    data: CloseCashRequest,
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     return await ShiftService(session).close_cash(
-        _hotel_id(current_user), current_user, data.counted_cash, data.notes
+        _hotel_id(current_user),
+        current_user,
+        data.counted_cash,
+        data.notes,
+        data.cut_at,
     )
 
 

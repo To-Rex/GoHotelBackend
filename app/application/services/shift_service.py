@@ -10,6 +10,8 @@ Qoidalar (jahon amaliyoti: Opera PMS / r_keeper uslubida):
      admin/menejer majburiy yopadi.
   5. Rejim va kunlik kesim vaqti mehmonxona sozlamalarida (branches.settings).
 """
+import logging
+from bisect import bisect_left
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -23,6 +25,7 @@ from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
     UnauthorizedException,
+    ValidationException,
 )
 from app.infrastructure.auth.password import verify_password
 from app.infrastructure.database.models.expense import Expense
@@ -31,6 +34,8 @@ from app.infrastructure.database.models.payment import Payment
 from app.infrastructure.database.models.shift import ShiftSession
 from app.infrastructure.database.models.shop import ShopSalePayment
 from app.infrastructure.database.models.user import User
+
+logger = logging.getLogger(__name__)
 
 # branches.settings JSONB ichidagi kalit va standart qiymatlar
 SHIFT_SETTINGS_KEY = "shift"
@@ -160,6 +165,181 @@ def local_day_bounds(day_from: date | None, day_to: date | None) -> tuple[dateti
     return start, end
 
 
+# ---------------------------------------------------------------- kunlik kesim
+#
+# Kassani KUNLIK KESIM bo'yicha topshirish. Sessiya bir necha kun ochiq
+# tursa, uning oynasiga bir necha kesim momenti tushadi (masalan har kuni
+# 00:05). Ular sessiyani "kesim kunlari"ga bo'ladi:
+#
+#     boshlanish ──▶ 1-kesim ──▶ 2-kesim ──▶ hozir
+#        1-kun         2-kun      kesimdan keyin (hali tugamagan kun)
+#
+# Xodim qaysi kesimgacha topshirishini tanlaydi — KETMA-KET: tanlangan
+# kesimgacha bo'lgan barcha kunlar bitta topshirish bo'ladi (eng eskisidan
+# boshlab). Sessiya o'sha kesim momentida yopiladi, kesimdan keyingi tushum
+# esa shu momentdan boshlanadigan yangi sessiyada qoladi. Kesim tanlanmasa —
+# avvalgidek, hozirgacha bo'lgan hamma pul topshiriladi.
+
+#: Bir sessiyada ko'rsatiladigan kesimlar soni chegarasi (eng oxirgilari).
+#: Undan eski kunlar birinchi variant ichiga qo'shilib ketadi — topshirish
+#: ketma-ket bo'lgani uchun hech narsa yo'qolmaydi.
+MAX_CUT_OPTIONS = 62
+
+#: Yopilgan qism va davom etayotgan sessiya chegarasi ustma-ust tushmasligi
+#: uchun: yangi sessiya kesimdan bir mikrosekund keyin boshlanadi. Aks holda
+#: aynan kesim momentidagi to'lov ikkala sessiyada ham sanalardi.
+_CUT_GAP = timedelta(microseconds=1)
+
+
+def _tz_offset() -> timedelta:
+    return timedelta(minutes=app_settings.APP_TZ_OFFSET_MINUTES)
+
+
+def _as_utc(moment: datetime) -> datetime:
+    """Vaqt zonasi yo'q qiymat UTC deb olinadi (baza UTC da saqlaydi)."""
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def parse_day_close(value: str | None) -> time:
+    """`HH:MM` → vaqt. Buzuq qiymat — standart (00:00)."""
+    try:
+        hours, minutes = (value or "").split(":")
+        return time(int(hours), int(minutes))
+    except (ValueError, TypeError):
+        return time(0, 0)
+
+
+def cut_boundaries(
+    started_at: datetime | None, now: datetime, day_close: str | None
+) -> list[datetime]:
+    """Sessiya oynasiga tushgan kunlik kesim momentlari (UTC), eskidan yangiga.
+
+    Kesim — mehmonxonaning MAHALLIY vaqti bo'yicha har kuni `day_close` da
+    (APP_TZ_OFFSET_MINUTES). Faqat sessiya boshlanganidan KEYIN kelgan va
+    allaqachon o'tgan kesimlar qaytadi: `started_at < kesim <= now`.
+    """
+    if not started_at:
+        return []
+    offset = _tz_offset()
+    at = parse_day_close(day_close)
+    # Mahalliy "devor soati" — hisob qulay bo'lishi uchun UTC belgisi bilan
+    local_start = _as_utc(started_at) + offset
+    local_now = _as_utc(now) + offset
+    candidate = datetime.combine(local_start.date(), at, tzinfo=timezone.utc)
+    if candidate <= local_start:
+        candidate += timedelta(days=1)
+    result: list[datetime] = []
+    while candidate <= local_now:
+        result.append(candidate - offset)
+        candidate += timedelta(days=1)
+    return result
+
+
+def cut_business_day(boundary: datetime) -> date:
+    """Kesim momenti YOPGAN ish kuni (mahalliy sana).
+
+    Tungi kesim (00:05) KECHAGI kunni yopadi, kechki kesim (23:00) esa shu
+    kunning o'zini. Chegara — tush: kesim 12:00 gacha bo'lsa avvalgi kun.
+    """
+    local = _as_utc(boundary) + _tz_offset()
+    if local.time() <= time(12, 0):
+        return (local - timedelta(days=1)).date()
+    return local.date()
+
+
+def _new_method_bucket() -> dict[str, Decimal]:
+    return {"payments": Decimal("0"), "shop": Decimal("0"), "expenses": Decimal("0")}
+
+
+def _cash_net(methods: dict[str, dict[str, Decimal]]) -> Decimal:
+    """Naqd pulning sof harakati: tushum (to'lov + do'kon) − xarajat."""
+    cash = methods.get("CASH")
+    if not cash:
+        return Decimal("0")
+    return cash["payments"] + cash["shop"] - cash["expenses"]
+
+
+def plan_cuts(
+    opening: Decimal,
+    boundaries: list[datetime],
+    rows: list[tuple[str, str | None, Decimal, datetime]],
+    started_at: datetime,
+) -> list[dict]:
+    """Har bir kesim uchun: shu kesimgacha topshirilsa nima bo'ladi.
+
+    `rows` — sessiya oynasidagi pul harakatlari: (tur, usul, summa, vaqt),
+    tur — "payments" | "shop" | "expenses". Hisob bazasiz, sof funksiya.
+
+    Har kesim uchun:
+      expected — kesim momentida kassada bo'lishi kerak bo'lgan pul
+                 (boshlang'ich + kesimgacha naqd tushum − naqd xarajat);
+      carried  — kassada QOLADIGAN qism. Kesimdan keyin naqd xarajat
+                 tushumdan ko'p bo'lsa, u o'sha kunlarning pulidan
+                 to'langan — bu pul jismonan kassada yo'q, uni topshirib
+                 bo'lmaydi. U yangi sessiyaning boshlang'ich kassasi bo'ladi
+                 (o'sha xarajatlar ham yangi sessiyada), kamomad yozilmaydi;
+      due      — topshiriladigan summa: expected − carried.
+
+    Aynan kesim momentidagi harakat AVVALGI kunga tegishli (yopilgan qism
+    `<= kesim` bilan hisoblanadi, yangi sessiya esa bir mikrosekund keyin
+    boshlanadi).
+    """
+    if not boundaries:
+        return []
+    segments: list[dict[str, dict[str, Decimal]]] = [
+        {} for _ in range(len(boundaries) + 1)
+    ]
+    for kind, method, amount, at in rows:
+        index = bisect_left(boundaries, _as_utc(at))
+        key = _method_key(method)
+        bucket = segments[index].get(key)
+        if bucket is None:
+            bucket = _new_method_bucket()
+            segments[index][key] = bucket
+        bucket[kind] += _dec(amount)
+
+    nets = [_cash_net(segment) for segment in segments]
+    total_net = sum(nets, Decimal("0"))
+
+    plans: list[dict] = []
+    cumulative: dict[str, dict[str, Decimal]] = {}
+    net_so_far = Decimal("0")
+    for index, boundary in enumerate(boundaries):
+        for key, values in segments[index].items():
+            bucket = cumulative.get(key)
+            if bucket is None:
+                bucket = _new_method_bucket()
+                cumulative[key] = bucket
+            for field, value in values.items():
+                bucket[field] += value
+        net_so_far += nets[index]
+        expected = opening + net_so_far
+        after_net = total_net - net_so_far
+        carried = min(max(-after_net, Decimal("0")), max(expected, Decimal("0")))
+        cash = cumulative.get("CASH") or _new_method_bucket()
+        plans.append(
+            {
+                "cut_at": boundary,
+                "from_at": started_at if index == 0 else boundaries[index - 1],
+                "day": cut_business_day(boundary),
+                "day_cash": nets[index],
+                "opening_cash": opening,
+                "payments_cash": cash["payments"],
+                "shop_cash": cash["shop"],
+                "expenses_cash": cash["expenses"],
+                "expected_cash": expected,
+                "after_cash": after_net,
+                "carried_cash": carried,
+                "due_cash": expected - carried,
+                # Nusxa: keyingi kesimlar shu lug'atni to'ldirishda davom etadi
+                "methods": {key: dict(values) for key, values in cumulative.items()},
+            }
+        )
+    return plans
+
+
 class ShiftService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -225,9 +405,16 @@ class ShiftService:
             # Tasdiq rejimida kassa topshirilgan sessiya: "close_cash"
             # (smena tugallash tasdiqsiz — None)
             "pending_approval": s.pending_approval,
+            # Kunlik kesim bo'yicha topshirilgan: pul haqiqatda topshirilgan
+            # vaqt (sessiya `ended_at` da — kesim momentida yopilgan)
+            "handed_at": s.handed_at.isoformat() if s.handed_at else None,
             "notes": s.notes,
         }
         if include_cash:
+            # Kesim bo'yicha topshirishda kassada qoldirilgan summa
+            data["carried_cash"] = (
+                float(s.carried_cash) if s.carried_cash is not None else None
+            )
             data["expected_cash"] = float(s.expected_cash) if s.expected_cash is not None else None
             data["counted_cash"] = float(s.counted_cash) if s.counted_cash is not None else None
             data["cash_diff"] = float(s.cash_diff) if s.cash_diff is not None else None
@@ -586,6 +773,89 @@ class ShiftService:
     async def compute_expected_cash(self, s: ShiftSession) -> Decimal:
         return (await self.cash_breakdown(s))["expected_cash"]
 
+    # ------------------------------------------------------------ kunlik kesim
+
+    async def _cash_rows(
+        self, s: ShiftSession, end: datetime
+    ) -> list[tuple[str, str | None, Decimal, datetime]]:
+        """Sessiya egasining `started_at … end` oynasidagi pul harakatlari:
+        (tur, usul, summa, vaqt). `cash_breakdown` bilan AYNAN bir manba va
+        bir xil shartlar — faqat guruhlanmagan, kunlarga bo'lish uchun."""
+        start = s.started_at
+        rows: list[tuple[str, str | None, Decimal, datetime]] = []
+
+        pay = await self.session.execute(
+            select(Payment.payment_method, Payment.amount, Payment.created_at).where(
+                Payment.hotel_id == s.hotel_id,
+                Payment.created_by == s.user_id,
+                Payment.created_at >= start,
+                Payment.created_at <= end,
+            )
+        )
+        rows.extend(("payments", method, amount, at) for method, amount, at in pay.all())
+
+        shop = await self.session.execute(
+            select(
+                ShopSalePayment.payment_method,
+                ShopSalePayment.amount,
+                ShopSalePayment.paid_at,
+            ).where(
+                ShopSalePayment.hotel_id == s.hotel_id,
+                ShopSalePayment.created_by == s.user_id,
+                ShopSalePayment.paid_at >= start,
+                ShopSalePayment.paid_at <= end,
+            )
+        )
+        rows.extend(("shop", method, amount, at) for method, amount, at in shop.all())
+
+        exp = await self.session.execute(
+            select(Expense.payment_method, Expense.amount, Expense.created_at).where(
+                Expense.hotel_id == s.hotel_id,
+                Expense.created_by == s.user_id,
+                Expense.created_at >= start,
+                Expense.created_at <= end,
+            )
+        )
+        rows.extend(("expenses", method, amount, at) for method, amount, at in exp.all())
+        return rows
+
+    async def cut_plans(self, s: ShiftSession, day_close: str | None, now: datetime) -> list[dict]:
+        """Sessiyani qaysi kunlik kesimgacha topshirish mumkinligi va har
+        biri uchun summalar (`plan_cuts`). Kesim tushmagan sessiyada — bo'sh
+        (baza so'rovisiz)."""
+        boundaries = cut_boundaries(s.started_at, now, day_close)[-MAX_CUT_OPTIONS:]
+        if not boundaries:
+            return []
+        rows = await self._cash_rows(s, now)
+        return plan_cuts(_dec(s.opening_cash), boundaries, rows, s.started_at)
+
+    @staticmethod
+    def _serialize_cut(plan: dict) -> dict:
+        """Kesim variantini frontend uchun tayyorlaydi."""
+        methods = plan["methods"]
+        return {
+            "cut_at": plan["cut_at"].isoformat(),
+            "from_at": plan["from_at"].isoformat(),
+            "day": plan["day"].isoformat(),
+            "day_cash": float(plan["day_cash"]),
+            "opening_cash": float(plan["opening_cash"]),
+            "payments_cash": float(plan["payments_cash"]),
+            "shop_cash": float(plan["shop_cash"]),
+            "expenses_cash": float(plan["expenses_cash"]),
+            "expected_cash": float(plan["expected_cash"]),
+            "after_cash": float(plan["after_cash"]),
+            "carried_cash": float(plan["carried_cash"]),
+            "due_cash": float(plan["due_cash"]),
+            "methods": _method_rows(methods),
+            "non_cash_income": float(
+                sum(
+                    values["payments"] + values["shop"]
+                    for method, values in methods.items()
+                    if method != "CASH"
+                )
+            ),
+        }
+
     async def cash_overview(self, hotel_id: UUID, current: dict) -> dict:
         """Admin/menejer uchun: HOZIR kassalarda qancha pul bo'lishi kerak.
 
@@ -630,6 +900,11 @@ class ShiftService:
         total = Decimal("0")
         for s, u in rows:
             breakdown = await self.cash_breakdown(s)
+            if s.handed_at is not None and s.expected_cash is not None:
+                # Kunlik kesim bo'yicha topshirilgan (tasdiq kutmoqda):
+                # topshirilishi kerak summa — kassada qoldirilgan qismsiz.
+                # Sanalgan summa ham shu bilan solishtiriladi.
+                breakdown["expected_cash"] = _dec(s.expected_cash)
             item = self._serialize(s, u)
             item.update(
                 {key: float(value) for key, value in breakdown.items() if key != "methods"}
@@ -657,17 +932,41 @@ class ShiftService:
         user_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         s = await self._my_active(hotel_id, user_id)
         breakdown = await self.cash_breakdown(s)
+        # Kunlik kesim bo'yicha topshirish variantlari (eskidan yangiga).
+        # Sessiya oxirgi kesimdan keyin ochilgan bo'lsa — bo'sh ro'yxat va
+        # dialog avvalgidek faqat "hamma pul"ni taklif qiladi.
+        settings = await self.get_settings(hotel_id)
+        plans = await self.cut_plans(s, settings["day_close"], datetime.now(timezone.utc))
         return {
             # `methods` — ro'yxat: float() qilinmaydi, o'z holicha qaytadi
             **{k: float(v) for k, v in breakdown.items() if k != "methods"},
             "methods": breakdown["methods"],
+            "cuts": [self._serialize_cut(plan) for plan in plans],
         }
 
     async def _close_with_count(
-        self, s: ShiftSession, counted_cash: float, notes: str | None, closed_by: UUID
+        self,
+        s: ShiftSession,
+        counted_cash: float,
+        notes: str | None,
+        closed_by: UUID,
+        cut: dict | None = None,
     ) -> None:
-        s.ended_at = datetime.now(timezone.utc)
-        expected = await self.compute_expected_cash(s)
+        """Sessiya kassasini yopadi: kutilgan, sanalgan va farq yoziladi.
+
+        `cut` (`plan_cuts` varianti) berilsa — KUNLIK KESIM bo'yicha: sessiya
+        hozir emas, kesim momentida yopiladi; topshirilishi kutilgan summa —
+        `due_cash` (kassada qoldirilgan qism ayirilgan).
+        """
+        now = datetime.now(timezone.utc)
+        if cut is None:
+            s.ended_at = now
+            expected = await self.compute_expected_cash(s)
+        else:
+            s.ended_at = cut["cut_at"]
+            s.handed_at = now
+            s.carried_cash = cut["carried_cash"]
+            expected = cut["due_cash"]
         s.expected_cash = expected
         s.counted_cash = _dec(counted_cash)
         s.cash_diff = _dec(counted_cash) - expected
@@ -675,21 +974,71 @@ class ShiftService:
         if notes:
             s.notes = notes
 
+    async def _resolve_cut(self, s: ShiftSession, day_close: str | None, cut_at: datetime) -> dict:
+        """Klient tanlagan kesim momentini tekshiradi va uning hisobini
+        qaytaradi. Kesim faqat serverning o'zi hisoblagan variantlardan biri
+        bo'lishi mumkin — ixtiyoriy vaqt bo'yicha kassani bo'lib bo'lmaydi."""
+        wanted = _as_utc(cut_at)
+        plans = await self.cut_plans(s, day_close, datetime.now(timezone.utc))
+        for plan in plans:
+            if abs((plan["cut_at"] - wanted).total_seconds()) < 1:
+                return plan
+        raise ValidationException(
+            "Tanlangan kunlik kesim topilmadi — oynani yopib, qayta oching",
+            "INVALID_CUT",
+        )
+
+    def _continuation(self, s: ShiftSession) -> ShiftSession:
+        """Kassir ishda davom etadi — yopilgan sessiyadan keyingi yangi sessiya.
+
+        Oddiy topshirishda u HOZIRDAN va 0 so'mdan boshlanadi. Kunlik kesim
+        bo'yicha topshirishda esa KESIM MOMENTIDAN boshlanadi — kesimdan
+        keyin qabul qilingan pul shu sessiyaning hisobida bo'lishi uchun —
+        va kassada qoldirilgan summa uning boshlang'ich kassasi bo'ladi.
+        """
+        by_cut = s.handed_at is not None and s.ended_at is not None
+        new_s = ShiftSession(
+            hotel_id=s.hotel_id,
+            branch_id=s.branch_id,
+            user_id=s.user_id,
+            status="ACTIVE",
+            started_at=(s.ended_at + _CUT_GAP) if by_cut else datetime.now(timezone.utc),
+            opening_cash=_dec(s.carried_cash) if by_cut else Decimal("0"),
+            continue_after_end=s.continue_after_end,
+        )
+        self.session.add(new_s)
+        return new_s
+
     async def close_cash(
-        self, hotel_id: UUID, current: dict, counted_cash: float, notes: str | None = None
+        self,
+        hotel_id: UUID,
+        current: dict,
+        counted_cash: float,
+        notes: str | None = None,
+        cut_at: datetime | None = None,
     ) -> dict:
         """Kassani topshirish: sessiya yopiladi, xodim ishda davom etsa yangi
         sessiya 0 dan ochiladi (kunlik kesimda ham shu ishlatiladi).
 
+        `cut_at` — KUNLIK KESIM bo'yicha topshirish (`expected-cash`
+        javobidagi `cuts[].cut_at`): faqat shu kesimgacha bo'lgan kassa
+        topshiriladi, kesimdan keyingi tushum esa kesim momentidan
+        boshlanadigan yangi sessiyada qoladi. Berilmasa — avvalgidek,
+        hozirgacha bo'lgan hamma pul.
+
         "Kassani topshirishda admin tasdig'i" sozlamasi YOQILGAN bo'lsa —
         sessiya yopilmaydi: TASDIQ kutadi (`pending_approval="close_cash"`);
-        faqat admin/menejer tasdiqlagach yopilib, yangi kassa 0 dan ochiladi.
+        faqat admin/menejer tasdiqlagach yopilib, yangi kassa ochiladi.
         """
         user_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         s = await self._my_active(hotel_id, user_id)
-        continue_flag = s.continue_after_end
         settings = await self.get_settings(hotel_id)
-        await self._close_with_count(s, counted_cash, notes, user_id)
+        cut = (
+            await self._resolve_cut(s, settings["day_close"], cut_at)
+            if cut_at is not None
+            else None
+        )
+        await self._close_with_count(s, counted_cash, notes, user_id, cut)
 
         if settings.get("handover_approval"):
             # Tasdiq rejimi: hozircha yopilmaydi — admin/menejer tasdig'i
@@ -713,17 +1062,9 @@ class ShiftService:
         # esa odatda qo'shishni yangilashdan oldin yuboradi.
         await self.session.flush()
 
-        # Yangi sessiya — xodim ishlashda davom etadi, kassa 0 dan
-        new_s = ShiftSession(
-            hotel_id=s.hotel_id,
-            branch_id=s.branch_id,
-            user_id=user_id,
-            status="ACTIVE",
-            started_at=datetime.now(timezone.utc),
-            opening_cash=Decimal("0"),
-            continue_after_end=continue_flag,
-        )
-        self.session.add(new_s)
+        # Yangi sessiya — xodim ishlashda davom etadi: oddiy topshirishda
+        # kassa 0 dan, kesim bo'yicha topshirishda kesim momentidan
+        new_s = self._continuation(s)
         await self.session.flush()
         breakdown = await self.cash_breakdown(s)
         report = self._serialize(s, include_cash=True)
@@ -737,8 +1078,13 @@ class ShiftService:
         """Tasdiq so'rovining matni: kim, qancha sanadi."""
         user = await self.session.get(User, user_id)
         name = f"{user.first_name} {user.last_name}".strip() if user else "Xodim"
+        period = ""
+        if s.handed_at is not None and s.ended_at is not None:
+            # Kunlik kesim bo'yicha: qaysi kesimgacha topshirilgani ko'rinsin
+            local = _as_utc(s.ended_at) + _tz_offset()
+            period = f" ({local:%d.%m %H:%M} kesimigacha)"
         return (
-            f"{name}: {float(counted_cash or 0):,.0f} So'm sanaldi — "
+            f"{name}: {float(counted_cash or 0):,.0f} So'm sanaldi{period} — "
             "tasdiqlangach sessiya yopiladi"
         )
 
@@ -856,17 +1202,9 @@ class ShiftService:
         s.notes = f"{s.notes}\n{note}" if s.notes else note
         await self.session.flush()
 
-        # Kassir ishda davom etgan edi — yangi sessiya 0 dan ochiladi
-        new_s = ShiftSession(
-            hotel_id=s.hotel_id,
-            branch_id=s.branch_id,
-            user_id=s.user_id,
-            status="ACTIVE",
-            started_at=datetime.now(timezone.utc),
-            opening_cash=Decimal("0"),
-            continue_after_end=s.continue_after_end,
-        )
-        self.session.add(new_s)
+        # Kassir ishda davom etgan edi — yangi sessiya ochiladi: oddiy
+        # topshirishda 0 dan, kesim bo'yicha topshirishda kesim momentidan
+        new_s = self._continuation(s)
         await self.session.flush()
 
         # Kassirga xabar (push) — xatosi tasdiqni buzmaydi
@@ -1014,6 +1352,15 @@ class ShiftService:
             raise NotFoundException("Sessiya topilmadi", "SHIFT_NOT_FOUND")
 
         closer_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
+        # Kunlik kesim bo'yicha topshirilgan va tasdiq kutayotgan kassa:
+        # kassirning kesimdan keyingi tushumi hali hech qaysi sessiyada emas
+        # (yangi sessiya tasdiqda ochiladi). Rahbar tasdiqlash o'rniga pulni
+        # olib majburiy yopsa, o'sha tushum egasiz qolmasligi kerak.
+        cut_awaiting_approval = (
+            s.status == "PENDING_HANDOVER"
+            and s.pending_approval == "close_cash"
+            and s.handed_at is not None
+        )
         s.ended_at = s.ended_at or datetime.now(timezone.utc)
         if s.expected_cash is None:
             s.expected_cash = await self.compute_expected_cash(s)
@@ -1036,7 +1383,14 @@ class ShiftService:
         if notes:
             s.notes += f": {notes}"
         await self.session.flush()
-        return self._serialize(s, include_cash=True)
+        report = self._serialize(s, include_cash=True)
+        if cut_awaiting_approval and not hand_over:
+            # Tasdiq bilan bir xil natija: kassir kesim momentidan boshlab
+            # yangi sessiyada davom etadi
+            new_s = self._continuation(s)
+            await self.session.flush()
+            report["new_session"] = self._serialize(new_s)
+        return report
 
     async def correct_session(
         self,
@@ -1199,6 +1553,10 @@ class ShiftService:
                 "started_at": s.started_at.isoformat() if s.started_at else None,
                 "ended_at": s.ended_at.isoformat() if s.ended_at else None,
                 "accepted_at": s.accepted_at.isoformat() if s.accepted_at else None,
+                # Kunlik kesim bo'yicha topshirilgan: `ended_at` — kesim
+                # momenti, `handed_at` — pul haqiqatda topshirilgan vaqt
+                "handed_at": s.handed_at.isoformat() if s.handed_at else None,
+                "carried_cash": float(s.carried_cash) if s.carried_cash is not None else None,
                 "opening_cash": float(s.opening_cash or 0),
                 "expected_cash": float(s.expected_cash) if s.expected_cash is not None else None,
                 "counted_cash": amount,

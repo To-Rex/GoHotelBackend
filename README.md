@@ -811,6 +811,25 @@ migratsiyasida tozalanadi, tasdiqlansa ham sessiya yopilmaydi).
 "Kassani tasdiqlash" tugmasi; mobil: Jamoa → Smenalar. Migratsiya
 `f0e1d2c3b4a5`, test: `pytest tests/test_shift_approval.py`.
 
+**Kassani kunlik kesim bo'yicha topshirish.** Kassir hamma pulni emas,
+tanlangan KUNLIK KESIMgacha bo'lgan kunlarni topshirishi mumkin (kesim —
+`shift.day_close`, masalan 00:05 bo'lsa kun 00:05 dan 00:05 gacha).
+`GET /shifts/expected-cash` javobidagi `cuts` — sessiya oynasiga tushgan
+kesimlar, eskidan yangiga; topshirish KETMA-KET: variant "shu kesimgacha
+bo'lgan hamma kunlar"ni bildiradi (`due_cash` — topshiriladigan summa).
+`POST /shifts/close-cash` ga `cut_at` yuborilsa sessiya HOZIR emas, kesim
+momentida yopiladi (`ended_at` = kesim, `handed_at` = haqiqiy topshirish
+vaqti), kassir esa kesimdan boshlanadigan yangi sessiyada davom etadi —
+kesimdan keyingi tushum o'sha sessiyada qoladi. Kesimdan keyingi naqd
+xarajat tushumdan ko'p bo'lsa, u avvalgi kunlarning pulidan to'langan:
+shu qism (`carried_cash`) topshirilmaydi, kamomad ham yozilmaydi — yangi
+sessiyaning boshlang'ich kassasi bo'ladi. Tasdiq rejimida kesim bo'yicha
+topshirilgan kassa ham tasdiq kutadi; davomi tasdiqda (yoki rahbar pulni
+olib majburiy yopganda) ochiladi. `cut_at` yuborilmasa — avvalgidek,
+hozirgacha bo'lgan hamma pul; smena tugallash (`/shifts/end`) o'zgarmagan.
+Hisob: `plan_cuts` (sof funksiya). Migratsiya `a9c1e3f5b7d2`, test:
+`pytest tests/test_shift_day_cut.py`.
+
 **Naqdsiz to'lovlar ham smena ko'rsatkichi bo'lib qaytadi (veb).** Ilgari
 smena hisobi faqat naqd bilan ishlardi — karta/online/o'tkazma summalari
 sessiyaga bog'lanmasdan "yo'qolib" qolardi. Endi har bir sessiya javobida
