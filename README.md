@@ -853,6 +853,37 @@ qiymat o'zgarmaydi). Yoqilganda xodim tanlamaydi:
   `/shifts/settings` javobida `handover_closed_days`.
 Migratsiya yo'q (sozlama JSONB da). Test: `pytest tests/test_shift_closed_days.py`.
 
+**Kassani topshirish tartibi — uch holat (sozlama).** `PUT /shifts/settings`
+ga `handover_scope`: `"free"` (standart) | `"closed_days"` | `"prev_shifts"`
+(saqlanadi: `branches.settings["shift"]["handover_scope"]`). Yuqoridagi
+`handover_closed_days` — shuning eski, ikki holatli ko'rinishi
+(`handover_scope == "closed_days"`): javobda qoladi va eski klientdan qabul
+qilinadi; eski klient uni o'chirib saqlasa, o'zi bilmaydigan
+`"prev_shifts"` rejimi yo'qolmaydi.
+
+`"prev_shifts"` — **faqat oldingi smenalar**: xodim faqat oldingi
+smenalardan qolgan pulni (sessiyaning boshlang'ich kassasi — qabul qilingan
+smenaning sanalgan summasi) topshiradi; o'z smenasidagi tushum kassada
+qoladi, smena tugagach keyingi xodimga o'tadi va uni o'sha topshiradi.
+- `GET /shifts/expected-cash` — `handover_scope` va (shu rejimda)
+  `prev_shifts`: `cuts[]` elementi bilan bir xil shakl, "kesim" — sessiya
+  boshlanishi (`cut_at`), `due_cash` — topshiriladigan summa, `carried_cash`
+  — xodimning o'z smenasidagi xarajatga ketgan qism (topshirilmaydi,
+  kamomad ham emas), `received_from` — kassa kimdan qabul qilingani.
+- `POST /shifts/close-cash` — `cut_at` MAJBURIY va `prev_shifts.cut_at`
+  bo'lishi shart. Sessiya o'zi BOSHLANGAN momentda yopiladi (`ended_at` =
+  `started_at`, javobda `prev_shift_cash: true`), xodim o'sha momentdan
+  boshlanadigan yangi sessiyada davom etadi (boshlang'ich = `carried_cash`).
+  Kesimsiz yoki kunlik kesim bilan so'rov — 422 `PREV_SHIFTS_ONLY`;
+  topshiradigan pul bo'lmasa (`due_cash` ≤ 0) — 422 `NO_PREV_SHIFT_CASH`.
+  Tasdiq rejimi avvalgidek ishlaydi.
+- `POST /shifts/end` — o'zgarmagan: kassa butunligicha keyingi xodimga
+  o'tadi (u endi oldingi smena puli sifatida topshira oladi).
+- Kunlik kesim majburiyati bu rejimda qo'llanmaydi: `/shifts/state`
+  javobida `day_close_required` doim `false` (sozlamadagi qiymat
+  saqlanadi) — xodim o'z smenasidagi pulni topshira olmagani uchun.
+Migratsiya yo'q. Test: `pytest tests/test_shift_prev_shifts.py`.
+
 **Naqdsiz to'lovlar ham smena ko'rsatkichi bo'lib qaytadi (veb).** Ilgari
 smena hisobi faqat naqd bilan ishlardi — karta/online/o'tkazma summalari
 sessiyaga bog'lanmasdan "yo'qolib" qolardi. Endi har bir sessiya javobida

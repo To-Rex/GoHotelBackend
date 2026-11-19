@@ -40,6 +40,13 @@ class ShiftSettingsRequest(BaseModel):
     # yopgan kunlarning hammasi birga, bugungi tushum — keyingi kesimdan
     # keyin. Yuborilmasa (None) — saqlangan qiymat o'zgartirilmaydi.
     handover_closed_days: bool | None = None
+    # Kassani topshirish tartibi (uch holatli; yuqoridagi bayroq — uning
+    # eski ko'rinishi): "free" — erkin; "closed_days" — faqat yopilgan
+    # kunlar; "prev_shifts" — faqat oldingi smenalardan qolgan pul.
+    # Yuborilmasa (None) — saqlangan qiymat o'zgartirilmaydi.
+    handover_scope: str | None = Field(
+        default=None, pattern=r"^(free|closed_days|prev_shifts)$"
+    )
 
 
 class OpenShiftRequest(BaseModel):
@@ -59,9 +66,12 @@ class CloseCashRequest(CashCountRequest):
     bo'lgan kassa topshiriladi, kesimdan keyingi tushum yangi sessiyada
     qoladi. Yuborilmasa — avvalgidek, hozirgacha bo'lgan hamma pul.
 
-    "Faqat yopilgan kunlar" sozlamasi yoqilgan bo'lsa — `cut_at` MAJBURIY va
-    oxirgi kesim bo'lishi shart (`cuts` ning oxirgisi): yopilgan kunlarning
-    hammasi birga topshiriladi, bugungi tushum esa topshirilmaydi.
+    Topshirish tartibi cheklangan bo'lsa (`handover_scope` sozlamasi) —
+    `cut_at` MAJBURIY:
+      "closed_days" — oxirgi kesim (`cuts` ning oxirgisi): yopilgan kunlarning
+        hammasi birga, bugungi tushum topshirilmaydi;
+      "prev_shifts" — `prev_shifts.cut_at` (sessiya boshlanishi): faqat
+        oldingi smenalardan qolgan pul, xodimning o'z tushumi topshirilmaydi.
     """
 
     cut_at: datetime | None = None
@@ -114,6 +124,7 @@ async def save_settings(
         data.day_close_required,
         data.handover_approval,
         data.handover_closed_days,
+        data.handover_scope,
     )
 
 
@@ -136,9 +147,12 @@ async def expected_cash(
     har biri shu kesimgacha topshirilsa qancha pul topshirilishini
     ko'rsatadi. Sessiya oxirgi kesimdan keyin ochilgan bo'lsa — bo'sh.
 
-    `closed_days_only` — "faqat yopilgan kunlar" rejimi: tanlov yo'q, faqat
-    oxirgi kesimgacha topshiriladi (`cuts` bo'sh bo'lsa — hali topshirib
-    bo'lmaydi). `next_cut_at` — keyingi kunlik kesim momenti."""
+    `handover_scope` — topshirish tartibi (sozlama). "closed_days" da
+    (`closed_days_only`) tanlov yo'q: faqat oxirgi kesimgacha topshiriladi
+    (`cuts` bo'sh bo'lsa — hali topshirib bo'lmaydi). "prev_shifts" da
+    `prev_shifts` keladi — oldingi smenalardan qolgan pul (`due_cash`; 0
+    bo'lsa topshiradigan narsa yo'q) va kimdan qabul qilingani.
+    `next_cut_at` — keyingi kunlik kesim momenti."""
     return await ShiftService(session).my_expected_cash(
         _hotel_id(current_user), current_user
     )

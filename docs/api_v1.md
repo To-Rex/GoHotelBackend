@@ -2341,6 +2341,17 @@ A cashier may hand over the drawer **up to a daily cut** instead of "everything 
 - `POST /shifts/end` closes the shift **at the daily cut**. If the session contains a cut, the closed days are closed as their own session at the cut moment (`kept_in_drawer: true`, `ended_at` = cut, `handed_at` = now, `carried_cash` = cash in the drawer at the cut, no `expected_cash`/`counted_cash` — nothing was counted or taken out), and the session awaiting acceptance is the part after the cut (`started_at` = cut, `opening_cash` = that `carried_cash`). The whole drawer is counted once and passes to the next employee; any difference is recorded on the awaiting session. The response is that awaiting session plus `closed_days` (the part closed at the cut). Without a cut in the session the shift ends as usual. No approval is requested, as before.
 - A `kept_in_drawer` session is not a money movement: it is excluded from `/shifts/handovers`, and `PUT /shifts/{id}/correct` on it → 409 `SHIFT_NOT_COUNTED`. It stays in `/shifts/history` with `kept_in_drawer: true`.
 
+#### Handover mode: three options (branch setting)
+
+`PUT /shifts/settings` accepts `handover_scope`: `"free"` (default), `"closed_days"` or `"prev_shifts"`; omit it to keep the stored value. `GET /shifts/settings`, `GET /shifts/state` and `GET /shifts/expected-cash` return it. `handover_closed_days` above is the legacy two-state form of the same setting (`handover_scope == "closed_days"`): it is still returned and still accepted from older clients, and an older client saving it as `false` does not clear a `"prev_shifts"` mode it does not know about.
+
+**`"prev_shifts"` — previous shifts only.** The cashier hands over only the cash left from previous shifts — the session's opening cash, i.e. the counted amount of the shift they accepted. Their own shift's takings stay in the drawer, pass to the next employee when the shift ends, and are handed over by that employee.
+
+- `GET /shifts/expected-cash` additionally returns `prev_shifts` — the same shape as a `cuts[]` item where the "cut" is the session start: `cut_at` (send it back on handover), `expected_cash` (cash in the drawer at shift start), `after_cash` (the cashier's own net cash since then), `carried_cash` (the part spent on the cashier's own shift expenses — not handed over, not a shortage), `due_cash` (amount to hand over; `0` means nothing to hand over) and `received_from` (`{user_name, accepted_at, counted_cash}` of the accepted shift, or `null`).
+- `POST /shifts/close-cash` requires `cut_at` equal to `prev_shifts.cut_at`. The session is closed **at its own start** (`ended_at = started_at`, `handed_at` = now, `expected_cash = due_cash`; session objects and `/shifts/handovers` items carry `prev_shift_cash: true`) and the cashier continues in a new ACTIVE session that starts at the same moment with `opening_cash = carried_cash`, so all of their own takings stay in it. A request without `cut_at` or with a daily cut → 422 `PREV_SHIFTS_ONLY`; `due_cash ≤ 0` → 422 `NO_PREV_SHIFT_CASH`. With `handover_approval` on, the session waits for approval as usual and the continuing session is created on approval.
+- `POST /shifts/end` is unchanged: the whole drawer passes to the next employee, who can then hand it over as previous-shift cash.
+- The daily-cut obligation does not apply in this mode: `GET /shifts/state` reports `day_close_required: false` (the stored setting is kept), because the cashier cannot hand over their own shift's cash at the cut.
+
 ---
 
 ### Reports
