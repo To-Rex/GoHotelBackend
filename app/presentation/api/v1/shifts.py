@@ -36,6 +36,10 @@ class ShiftSettingsRequest(BaseModel):
     # Kassani topshirishda admin/menejer tasdig'i talab qilinsinmi.
     # Yuborilmasa (None) — saqlangan qiymat o'zgartirilmaydi.
     handover_approval: bool | None = None
+    # Kassa faqat YOPILGAN KUNLAR bo'yicha topshirilsinmi: kunlik kesim
+    # yopgan kunlarning hammasi birga, bugungi tushum — keyingi kesimdan
+    # keyin. Yuborilmasa (None) — saqlangan qiymat o'zgartirilmaydi.
+    handover_closed_days: bool | None = None
 
 
 class OpenShiftRequest(BaseModel):
@@ -54,6 +58,10 @@ class CloseCashRequest(CashCountRequest):
     javobidagi `cuts[].cut_at` qiymatlaridan biri. Faqat shu kesimgacha
     bo'lgan kassa topshiriladi, kesimdan keyingi tushum yangi sessiyada
     qoladi. Yuborilmasa — avvalgidek, hozirgacha bo'lgan hamma pul.
+
+    "Faqat yopilgan kunlar" sozlamasi yoqilgan bo'lsa — `cut_at` MAJBURIY va
+    oxirgi kesim bo'lishi shart (`cuts` ning oxirgisi): yopilgan kunlarning
+    hammasi birga topshiriladi, bugungi tushum esa topshirilmaydi.
     """
 
     cut_at: datetime | None = None
@@ -105,6 +113,7 @@ async def save_settings(
         data.day_close,
         data.day_close_required,
         data.handover_approval,
+        data.handover_closed_days,
     )
 
 
@@ -125,7 +134,11 @@ async def expected_cash(
 
     `cuts` — kunlik kesim bo'yicha topshirish variantlari (eskidan yangiga):
     har biri shu kesimgacha topshirilsa qancha pul topshirilishini
-    ko'rsatadi. Sessiya oxirgi kesimdan keyin ochilgan bo'lsa — bo'sh."""
+    ko'rsatadi. Sessiya oxirgi kesimdan keyin ochilgan bo'lsa — bo'sh.
+
+    `closed_days_only` — "faqat yopilgan kunlar" rejimi: tanlov yo'q, faqat
+    oxirgi kesimgacha topshiriladi (`cuts` bo'sh bo'lsa — hali topshirib
+    bo'lmaydi). `next_cut_at` — keyingi kunlik kesim momenti."""
     return await ShiftService(session).my_expected_cash(
         _hotel_id(current_user), current_user
     )

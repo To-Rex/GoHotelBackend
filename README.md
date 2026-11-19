@@ -830,6 +830,29 @@ hozirgacha bo'lgan hamma pul; smena tugallash (`/shifts/end`) o'zgarmagan.
 Hisob: `plan_cuts` (sof funksiya). Migratsiya `a9c1e3f5b7d2`, test:
 `pytest tests/test_shift_day_cut.py`.
 
+**Kassa faqat yopilgan kunlar bo'yicha (sozlama).** `PUT /shifts/settings`
+ga `handover_closed_days: true` (standart **o'chiq**; saqlanadi:
+`branches.settings["shift"]["handover_closed_days"]`, yuborilmasa saqlangan
+qiymat o'zgarmaydi). Yoqilganda xodim tanlamaydi:
+- `POST /shifts/close-cash` — `cut_at` MAJBURIY va OXIRGI kesim bo'lishi
+  shart: kunlik kesim yopgan kunlarning hammasi birga topshiriladi. Kesimsiz
+  ("hamma pul") yoki eski kesim bilan so'rov — 422 `CLOSED_DAYS_ONLY`;
+  sessiyaga kesim tushmagan bo'lsa (kassada faqat bugungi pul) — 422
+  `NO_CLOSED_DAY`. Bugungi tushum keyingi kesimdan keyin topshiriladi.
+- `POST /shifts/end` — smena KUNLIK KESIMDA yopiladi: sessiyaga kesim
+  tushgan bo'lsa, yopilgan kunlar kesim momentida alohida sessiya bo'lib
+  yopiladi (`kept_in_drawer: true` — pul sanalmagan va kassadan chiqmagan,
+  `carried_cash` — kesim momentidagi kassa), qabul kutadigan sessiya esa
+  kesimdan keyingi qism (boshlang'ich kassasi = `carried_cash`). Kassadagi
+  pul bir marta sanaladi va butunligicha keyingi xodimga o'tadi; farq
+  qabul kutadigan sessiyada. Javobda `closed_days` — kesimda yopilgan qism.
+  `kept_in_drawer` sessiya pul harakati emas — `/shifts/handovers` da
+  ko'rinmaydi, summasini tuzatib bo'lmaydi (409 `SHIFT_NOT_COUNTED`).
+- `GET /shifts/expected-cash` — `closed_days_only` (rejim belgisi) va
+  `next_cut_at` (keyingi kunlik kesim momenti); `/shifts/state` va
+  `/shifts/settings` javobida `handover_closed_days`.
+Migratsiya yo'q (sozlama JSONB da). Test: `pytest tests/test_shift_closed_days.py`.
+
 **Naqdsiz to'lovlar ham smena ko'rsatkichi bo'lib qaytadi (veb).** Ilgari
 smena hisobi faqat naqd bilan ishlardi — karta/online/o'tkazma summalari
 sessiyaga bog'lanmasdan "yo'qolib" qolardi. Endi har bir sessiya javobida

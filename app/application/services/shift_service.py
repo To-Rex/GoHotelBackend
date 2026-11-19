@@ -16,7 +16,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings as app_settings
@@ -47,11 +47,18 @@ SHIFT_SETTINGS_KEY = "shift"
 #   False — oddiy oqim (keyingi xodim parol bilan qabul qiladi) o'zgarmaydi
 #   True  — topshirilgan kassa TASDIQ kutadi; faqat admin/menejer
 #           tasdiqlagach sessiya yopiladi va yangi kassa 0 dan ochiladi
+# handover_closed_days — "Kassa faqat YOPILGAN KUNLAR bo'yicha topshirilsin":
+#   False — erkin (avvalgidek): xodim qaysi kesimgacha topshirishni o'zi
+#           tanlaydi va bugungi (kesimdan keyingi) pulni ham topshira oladi
+#   True  — faqat kunlik kesim yopgan kunlar topshiriladi, hammasi BIRGA;
+#           bugungi tushum keyingi kesimdan keyingina topshiriladi. Smena
+#           tugallanganda ham sessiya kesim momentida yopiladi
 SHIFT_DEFAULTS = {
     "mode": "simple",
     "day_close": "00:00",
     "day_close_required": True,
     "handover_approval": False,
+    "handover_closed_days": False,
 }
 
 
@@ -62,6 +69,7 @@ def resolve_shift_settings(hotel_settings: dict | None) -> dict:
     day_close = raw.get("day_close")
     required = raw.get("day_close_required")
     approval = raw.get("handover_approval")
+    closed_days = raw.get("handover_closed_days")
     return {
         "mode": mode if mode in ("simple", "cash") else SHIFT_DEFAULTS["mode"],
         "day_close": day_close if isinstance(day_close, str) and len(day_close) == 5 else SHIFT_DEFAULTS["day_close"],
@@ -70,6 +78,11 @@ def resolve_shift_settings(hotel_settings: dict | None) -> dict:
         ),
         "handover_approval": (
             approval if isinstance(approval, bool) else SHIFT_DEFAULTS["handover_approval"]
+        ),
+        "handover_closed_days": (
+            closed_days
+            if isinstance(closed_days, bool)
+            else SHIFT_DEFAULTS["handover_closed_days"]
         ),
     }
 
@@ -147,6 +160,16 @@ def handover_kind(s) -> str:
     if s.force_closed:
         return "FORCE_TAKEN"
     return "CASH_OUT"
+
+
+def kept_in_drawer(s) -> bool:
+    """Smena tugallanishida KUNLIK KESIMDA yopilgan qism ("faqat yopilgan
+    kunlar" rejimi): pul sanalmagan va kassadan chiqmagan — kesim momentidagi
+    kassa (`carried_cash`) butunligicha keyingi sessiyaga o'tgan.
+
+    Belgisi: kesim bo'yicha yopilgan (`handed_at`), lekin sanalgan summa yo'q.
+    Kesim bo'yicha kassa TOPSHIRILGANDA sanalgan summa doim yoziladi."""
+    return s.status == "CLOSED" and s.handed_at is not None and s.counted_cash is None
 
 
 def local_day_bounds(day_from: date | None, day_to: date | None) -> tuple[datetime | None, datetime | None]:
@@ -235,6 +258,21 @@ def cut_boundaries(
         result.append(candidate - offset)
         candidate += timedelta(days=1)
     return result
+
+
+def next_cut_boundary(now: datetime, day_close: str | None) -> datetime:
+    """Hozirdan KEYINGI birinchi kunlik kesim momenti (UTC).
+
+    "Faqat yopilgan kunlar" rejimida bugungi tushum shu momentdan keyin
+    topshiriladi — xodimga aynan qachonligi ko'rsatiladi."""
+    offset = _tz_offset()
+    local_now = _as_utc(now) + offset
+    candidate = datetime.combine(
+        local_now.date(), parse_day_close(day_close), tzinfo=timezone.utc
+    )
+    if candidate <= local_now:
+        candidate += timedelta(days=1)
+    return candidate - offset
 
 
 def cut_business_day(boundary: datetime) -> date:
@@ -366,6 +404,7 @@ class ShiftService:
         day_close: str,
         day_close_required: bool = True,
         handover_approval: bool | None = None,
+        handover_closed_days: bool | None = None,
     ) -> dict:
         hotel = await self._get_hotel(hotel_id)
         # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
@@ -380,6 +419,11 @@ class ShiftService:
                 handover_approval
                 if handover_approval is not None
                 else current["handover_approval"]
+            ),
+            "handover_closed_days": (
+                handover_closed_days
+                if handover_closed_days is not None
+                else current["handover_closed_days"]
             ),
         }
         hotel.settings = new_settings
@@ -408,6 +452,9 @@ class ShiftService:
             # Kunlik kesim bo'yicha topshirilgan: pul haqiqatda topshirilgan
             # vaqt (sessiya `ended_at` da — kesim momentida yopilgan)
             "handed_at": s.handed_at.isoformat() if s.handed_at else None,
+            # Smena tugallanishida kunlik kesimda yopilgan qism: pul
+            # sanalmagan, kassada qolib keyingi sessiyaga o'tgan
+            "kept_in_drawer": kept_in_drawer(s),
             "notes": s.notes,
         }
         if include_cash:
@@ -936,12 +983,18 @@ class ShiftService:
         # Sessiya oxirgi kesimdan keyin ochilgan bo'lsa — bo'sh ro'yxat va
         # dialog avvalgidek faqat "hamma pul"ni taklif qiladi.
         settings = await self.get_settings(hotel_id)
-        plans = await self.cut_plans(s, settings["day_close"], datetime.now(timezone.utc))
+        now = datetime.now(timezone.utc)
+        plans = await self.cut_plans(s, settings["day_close"], now)
         return {
             # `methods` — ro'yxat: float() qilinmaydi, o'z holicha qaytadi
             **{k: float(v) for k, v in breakdown.items() if k != "methods"},
             "methods": breakdown["methods"],
             "cuts": [self._serialize_cut(plan) for plan in plans],
+            # "Faqat yopilgan kunlar" rejimi: tanlov yo'q — oxirgi kesimgacha
+            # bo'lgan hamma kunlar birga topshiriladi; `cuts` bo'sh bo'lsa
+            # hali topshiradigan narsa yo'q (bugungi kun `next_cut_at` da yopiladi)
+            "closed_days_only": bool(settings.get("handover_closed_days")),
+            "next_cut_at": next_cut_boundary(now, settings["day_close"]).isoformat(),
         }
 
     async def _close_with_count(
@@ -988,6 +1041,71 @@ class ShiftService:
             "INVALID_CUT",
         )
 
+    async def _closed_days_cut(
+        self, s: ShiftSession, day_close: str | None, cut_at: datetime | None
+    ) -> dict:
+        """"Faqat yopilgan kunlar" rejimi: topshiriladigan yagona variant —
+        OXIRGI kunlik kesim (unga qadar bo'lgan hamma kunlar birga).
+
+        Bugungi (kesimdan keyingi) pulni ham, eski kunlarning bir qisminigina
+        ham topshirib bo'lmaydi. Klient aynan shu kesimni yuborishi shart:
+        eski oynada xodim boshqa davr summasini ko'rib sanagan bo'lishi
+        mumkin — davrni jimgina almashtirsak, yolg'on kamomad/ortiqcha
+        yozilardi."""
+        plans = await self.cut_plans(s, day_close, datetime.now(timezone.utc))
+        if not plans:
+            raise ValidationException(
+                "Hali yopilgan kun yo'q — bugungi kassa kunlik kesimdan "
+                f"({day_close}) keyin topshiriladi",
+                "NO_CLOSED_DAY",
+            )
+        latest = plans[-1]
+        if cut_at is None or abs((latest["cut_at"] - _as_utc(cut_at)).total_seconds()) >= 1:
+            raise ValidationException(
+                "Kassa faqat yopilgan kunlar bo'yicha, hammasi birga topshiriladi "
+                "— oynani yopib, qayta oching",
+                "CLOSED_DAYS_ONLY",
+            )
+        return latest
+
+    async def _close_days_at_cut(
+        self, s: ShiftSession, cut: dict, closed_by: UUID
+    ) -> ShiftSession:
+        """Smena tugallanishida sessiyani KUNLIK KESIM momentida yopadi va
+        kesimdan keyingi qism uchun davom sessiyasini qaytaradi.
+
+        "Faqat yopilgan kunlar" rejimida sessiya kesimdan oshib o'tmaydi:
+        yopilgan kunlar alohida sessiya bo'lib qoladi, bugungi (kesimdan
+        keyingi) tushum esa alohida — u kassa bilan birga keyingi xodimga
+        o'tadi va kunlik kesimdan keyin topshiriladi.
+
+        Bu yerda kassadan PUL CHIQMAYDI va pul SANALMAYDI — hammasi kassada
+        qoladi. Shuning uchun yopilgan qismda kutilgan/sanalgan summa
+        yozilmaydi (`kept_in_drawer`), faqat kesim momentidagi kassa
+        (`carried_cash`) — u davom sessiyasining boshlang'ich kassasi
+        bo'ladi. Pul bir marta — davom sessiyasi yopilganda sanaladi, farq
+        ham o'sha yerda; pul harakati hisobotida bu qism ko'rinmaydi.
+        """
+        s.ended_at = cut["cut_at"]
+        s.handed_at = datetime.now(timezone.utc)
+        s.carried_cash = cut["expected_cash"]
+        s.expected_cash = None
+        s.counted_cash = None
+        s.cash_diff = None
+        s.closed_by = closed_by
+        s.status = "CLOSED"
+        note = (
+            "Smena tugallanganda kunlik kesim bo'yicha yopildi — "
+            "pul kassada qoldi va keyingi sessiyaga o'tdi"
+        )
+        s.notes = f"{s.notes}\n{note}" if s.notes else note
+        # Yopilish davom sessiyasidan OLDIN yozilishi shart ("bir xodim —
+        # bitta ochiq sessiya" cheklovi bazada indeks bilan qo'riqlanadi)
+        await self.session.flush()
+        rest = self._continuation(s)
+        await self.session.flush()
+        return rest
+
     def _continuation(self, s: ShiftSession) -> ShiftSession:
         """Kassir ishda davom etadi — yopilgan sessiyadan keyingi yangi sessiya.
 
@@ -1026,6 +1144,10 @@ class ShiftService:
         boshlanadigan yangi sessiyada qoladi. Berilmasa — avvalgidek,
         hozirgacha bo'lgan hamma pul.
 
+        "Faqat yopilgan kunlar" sozlamasi YOQILGAN bo'lsa — tanlov yo'q:
+        `cut_at` oxirgi kesim bo'lishi shart (yopilgan kunlarning hammasi
+        birga), bugungi tushum topshirilmaydi (`_closed_days_cut`).
+
         "Kassani topshirishda admin tasdig'i" sozlamasi YOQILGAN bo'lsa —
         sessiya yopilmaydi: TASDIQ kutadi (`pending_approval="close_cash"`);
         faqat admin/menejer tasdiqlagach yopilib, yangi kassa ochiladi.
@@ -1033,11 +1155,15 @@ class ShiftService:
         user_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         s = await self._my_active(hotel_id, user_id)
         settings = await self.get_settings(hotel_id)
-        cut = (
-            await self._resolve_cut(s, settings["day_close"], cut_at)
-            if cut_at is not None
-            else None
-        )
+        if settings.get("handover_closed_days"):
+            # Faqat yopilgan kunlar: oxirgi kesimgacha, hammasi birga
+            cut = await self._closed_days_cut(s, settings["day_close"], cut_at)
+        else:
+            cut = (
+                await self._resolve_cut(s, settings["day_close"], cut_at)
+                if cut_at is not None
+                else None
+            )
         await self._close_with_count(s, counted_cash, notes, user_id, cut)
 
         if settings.get("handover_approval"):
@@ -1241,9 +1367,28 @@ class ShiftService:
         qabul qiladi (to'rt ko'z tamoyili). Ilgari bu yerda ham tasdiq
         so'ralar edi va tasdiqlangach sessiya butunlay yopilib, keyingi
         xodim kassani 0 dan boshlardi — sanalgan pul hisobdan chiqib ketardi.
+
+        "Faqat yopilgan kunlar" rejimida sessiya kunlik kesimdan oshib
+        o'tmaydi: kesim tushgan bo'lsa, yopilgan kunlar kesim momentida
+        alohida yopiladi (`_close_days_at_cut`, javobda `closed_days`) va
+        qabul kutadigan sessiya — kesimdan keyingi qism.
         """
         user_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         s = await self._my_active(hotel_id, user_id)
+        settings = await self.get_settings(hotel_id)
+        closed_days: ShiftSession | None = None
+        if settings.get("handover_closed_days"):
+            # Faqat yopilgan kunlar: smena KUNLIK KESIMDA yopiladi. Sessiyaga
+            # kesim tushgan bo'lsa, yopilgan kunlar kesim momentida alohida
+            # yopiladi; topshiriladigan sessiya — kesimdan keyingi qism.
+            # Kassadagi pul butunligicha keyingi xodimga o'tadi (bir marta
+            # sanaladi), kassadan chiqish esa faqat kesimdan keyin bo'ladi.
+            plans = await self.cut_plans(
+                s, settings["day_close"], datetime.now(timezone.utc)
+            )
+            if plans:
+                closed_days = s
+                s = await self._close_days_at_cut(s, plans[-1], user_id)
         await self._close_with_count(s, counted_cash, notes, user_id)
         s.status = "PENDING_HANDOVER"
         await self.session.flush()
@@ -1251,6 +1396,9 @@ class ShiftService:
         report = self._serialize(s, include_cash=True)
         report["methods"] = breakdown["methods"]
         report["non_cash_income"] = breakdown["non_cash_income"]
+        if closed_days is not None:
+            # Kesim momentida yopilgan qism — hisobotda qaysi kunlar ekani ko'rinadi
+            report["closed_days"] = self._serialize(closed_days, include_cash=True)
         return report
 
     async def accept_shift(self, hotel_id: UUID, current: dict, password: str) -> dict:
@@ -1417,6 +1565,14 @@ class ShiftService:
             raise ConflictException(
                 "Faqat yopilgan sessiyani tuzatish mumkin", "SHIFT_NOT_CLOSED"
             )
+        if kept_in_drawer(s):
+            # Kunlik kesimda yopilgan qism: pul sanalmagan (kassada qolgan) —
+            # tuzatiladigan summa yo'q, farq keyingi sessiyada yozilgan
+            raise ConflictException(
+                "Bu sessiyada pul sanalmagan — kassa keyingi sessiyaga o'tgan. "
+                "Summani o'sha sessiyada tuzating",
+                "SHIFT_NOT_COUNTED",
+            )
 
         corrector_id = UUID(current["id"]) if isinstance(current["id"], str) else current["id"]
         corrector = await self.session.get(User, corrector_id)
@@ -1479,6 +1635,13 @@ class ShiftService:
                 ShiftSession.hotel_id == hotel_id,
                 ShiftSession.status.in_(["CLOSED", "PENDING_HANDOVER"]),
                 ShiftSession.ended_at.is_not(None),
+                # Smena tugallanishida kunlik kesimda yopilgan qism
+                # (`kept_in_drawer`) — pul harakati emas: hech narsa
+                # topshirilmagan, kassa keyingi sessiyaga o'tgan
+                or_(
+                    ShiftSession.handed_at.is_(None),
+                    ShiftSession.counted_cash.is_not(None),
+                ),
             )
         )
         start, end = local_day_bounds(date_from, date_to)
