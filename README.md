@@ -610,6 +610,22 @@ ekan savdo `PENDING` (qarz), to'liq to'langanda `PAID`.
 Kod: `app/application/services/shop_payments.py`, test:
 `pytest tests/test_shop_partial_payments.py`.
 
+### Moliya: to'lovlar va hisob-fakturalar statistikasi
+
+`GET /finance/payments/stats` va `GET /finance/invoices/stats`
+(`finance_stats_service.py`) — Moliya → To'lovlar / Hisob-fakturalar
+bo'limlarining statistikasi. Parametrlar ro'yxatniki bilan AYNAN bir xil
+(davr, qidiruv, filtrlar): statistikadagi soni va summa ro'yxat
+sarlavhalaridagi jami bilan teng. To'lovlar: jami (qaytarim ayirilgan),
+kirim, qaytarim, o'rtacha, eng katta to'lov, to'lov turlari (eski kodlar
+o'z turiga), nima uchun (jadval belgilari bilan bir xil FIFO taqsimot),
+qarz to'lovlari, tahrirlanganlar, xodimlar va kunlar kesimi.
+Hisob-fakturalar: soni, summa, to'langan, qarz (bekor qilingan /
+qaytarilgan hujjat qarz emas), chegirma, yig'ilish foizi, holatlar,
+qatorlar tarkibi, qarz yoshi va eng katta qarzlar. To'lovlar oqimi
+`FinanceService._feed_query` ga ajratildi — ro'yxat va statistika bitta
+so'rov quruvchidan. Test: `pytest tests/test_finance_stats.py`.
+
 ### Do'kon: foyda va zarar
 
 `GET /shop/profit?date_from&date_to` — Moliya → Do'kon statistikasi

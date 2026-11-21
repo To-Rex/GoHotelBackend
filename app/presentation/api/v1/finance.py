@@ -280,6 +280,45 @@ async def list_invoices(
     ]
 
 
+@router.get("/invoices/stats")
+async def invoices_stats(
+    status: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    search: str | None = Query(default=None),
+    debt_only: bool = Query(default=False),
+    discount_only: bool = Query(default=False),
+    min_amount: float | None = Query(default=None, ge=0),
+    max_amount: float | None = Query(default=None, ge=0),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Hisob-fakturalar statistikasi — ro'yxat bilan BIR XIL shartlar (davr,
+    holat, qidiruv, filtrlar): soni, summa, to'langan, qoldiq, chegirma,
+    yig'ilish foizi, holatlar va qatorlar tarkibi, qarz yoshi, eng katta
+    qarzlar. Tafsilot: `finance_stats_service`."""
+    from app.application.services.finance_stats_service import FinanceStatsService
+
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    return await FinanceStatsService(session).invoices_stats(
+        h_id,
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        filters=InvoiceFilters(
+            debt_only=debt_only,
+            discount_only=discount_only,
+            min_amount=min_amount,
+            max_amount=max_amount,
+        ),
+    )
+
+
 @router.post("/invoices")
 async def create_invoice(
     data: dict,
@@ -473,6 +512,49 @@ async def list_payments(
     response.headers[TOTAL_COUNT_HEADER] = str(total)
     response.headers[TOTAL_AMOUNT_HEADER] = str(amount_total)
     return rows
+
+
+@router.get("/payments/stats")
+async def payments_stats(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    search: str | None = Query(default=None),
+    include_shop: bool = Query(default=False),
+    kinds: str | None = Query(default=None, max_length=200),
+    methods: str | None = Query(default=None, max_length=200),
+    created_by: UUID | None = Query(default=None),
+    min_amount: float | None = Query(default=None, ge=0),
+    max_amount: float | None = Query(default=None, ge=0),
+    edited: bool = Query(default=False),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """To'lovlar statistikasi — ro'yxat (`GET /finance/payments`) bilan BIR
+    XIL shartlar: jami, kirim va qaytarim, o'rtacha va eng katta to'lov,
+    to'lov turlari, nima uchun (xona, jarima, xizmat, do'kon ...), qarz
+    to'lovlari, xodimlar va kunlar kesimi, tahrirlanganlar soni."""
+    from app.application.services.finance_stats_service import FinanceStatsService
+
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+    return await FinanceStatsService(session).payments_stats(
+        h_id,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        include_shop=include_shop,
+        filters=PaymentFeedFilters(
+            kinds=parse_filter_kinds(kinds),
+            methods=method_codes(methods),
+            created_by=created_by,
+            min_amount=min_amount,
+            max_amount=max_amount,
+            edited=edited,
+        ),
+    )
 
 
 @router.get("/payments/staff")

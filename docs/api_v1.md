@@ -1979,6 +1979,18 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 
 ---
 
+**GET /finance/payments/stats**
+
+- Auth: as `GET /finance/payments`; `?hotel_id=` for SUPER_ADMIN.
+- Query: the SAME as the payments list — `date_from`, `date_to`, `search`, `include_shop`, `kinds`, `methods`, `created_by`, `min_amount`, `max_amount`, `edited` — so the numbers always describe exactly the rows the list shows (`count` / `total` equal the list's `X-Total-Count` / `X-Total-Amount`).
+- Description: Statistics of the Finance → Payments section: `total` (refunds subtracted), `income` / `income_count`, `refunds` / `refund_count`, `average` (of incoming payments), `largest` (`amount`, `number`, `source`, `date`); `methods` (canonical CASH / CARD / ONLINE / BANK_TRANSFER, legacy codes folded in, MIXED/OTHER); `purposes` — what the money was for by the same FIFO allocation as the row badges (ROOM, PENALTY, SERVICE, OTHER, EXTRA, SHOP, REFUND negative); `sources` (RESERVATION / SHOP); `debt` — payments taken after the guest checked out; `edited` — payments whose method was edited; `staff` (top 10 by amount, `staff_total`); `days` — per payment day `{date, amount, count}`.
+
+**GET /finance/invoices/stats**
+
+- Auth: as `GET /finance/invoices`. Declared before `/finance/invoices/{invoice_id}`.
+- Query: the SAME as the invoices list — `status`, `date_from`, `date_to`, `search`, `debt_only`, `discount_only`, `min_amount`, `max_amount` (`count` / `total` equal the list headers).
+- Description: `count`, `total`, `paid`, `remaining` and `debt_count` (VOID / CANCELLED / REFUNDED are not debt), `discount` / `discount_count`, `average`, `collection_rate` (% paid of active invoices; null if none); `statuses` `[{status, count, total, remaining}]`; `lines` — line items by `line_type` (cancelled invoices excluded); `aging` — open debt by days since `invoice_date`: `0_7`, `8_30`, `31_90`, `90_plus`; `top_debts` — 5 largest balances with guest, room and reservation number.
+
 **GET /shop/profit**
 
 - Auth: ADMIN / SUPER_ADMIN, `finance.view`, or shop management codes (`service.manage`, `service.create`, `service.update`, `hotel_service.manage`); others → 403 `SHOP_PROFIT_FORBIDDEN` (cost prices are internal). `?hotel_id=` for SUPER_ADMIN.

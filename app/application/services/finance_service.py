@@ -882,7 +882,48 @@ class FinanceService:
         filters: PaymentFeedFilters | None = None,
     ):
         """Moliya → To'lovlar oqimi: sahifa uchun (id, manba, summa) ro'yxati
-        va jami (soni, summasi) — ikkalasi BIR XIL shartlardan.
+        va jami (soni, summasi) — ikkalasi BIR XIL shartlardan (`_feed_query`)."""
+        feed = self._feed_query(
+            hotel_id, date_from, date_to, search, sort_by, include_shop, filters
+        )
+        sorts = {
+            "payment_number": feed.c.number,
+            "payment_date": feed.c.pay_date,
+            "payment_method": feed.c.method,
+            "amount": feed.c.amount,
+            "created_at": feed.c.created_at,
+            "room_number": feed.c.room,
+            "created_by_name": feed.c.staff,
+        }
+        order = _ordering(sorts, sort_by, sort_dir, feed.c.created_at)
+        if sort_by in ("room_number", "created_by_name"):
+            # Xonasiz (bronsiz do'kon savdosi) qatorlar har doim oxirida
+            order = order.nulls_last()
+        ids_stmt = select(feed.c.id, feed.c.source, feed.c.amount).order_by(
+            order,
+            # Ikkinchi/uchinchi mezon — sahifalar orasida qator takrorlanmasin
+            feed.c.created_at.desc(),
+            feed.c.id,
+        )
+        count_stmt = select(
+            func.count(), func.coalesce(func.sum(feed.c.amount), 0)
+        ).select_from(feed)
+        return ids_stmt, count_stmt
+
+    def _feed_query(
+        self,
+        hotel_id: UUID | None,
+        date_from: date | None,
+        date_to: date | None,
+        search: str | None,
+        sort_by: str | None,
+        include_shop: bool,
+        filters: PaymentFeedFilters | None = None,
+    ):
+        """To'lovlar oqimining o'zi (UNION subquery): id, manba, raqam, kun,
+        to'lov turi, summa, vaqt, xona, xodim ismi va pulni qabul qilgan
+        xodim (`uid`). Ro'yxat (`_feed_statements`) va statistika
+        (`finance_stats_service`) BIR XIL shartlardan foydalanadi.
 
         Bron to'lovlari (`payments`) va, so'ralsa, do'kon to'lovlari
         (`shop_sale_payments`) bitta UNION ostida saralanadi va
@@ -923,6 +964,7 @@ class FinanceService:
             Payment.created_at.label("created_at"),
             (Room.room_number if need_people else cast(null(), String)).label("room"),
             (_person_name(User) if need_staff else cast(null(), String)).label("staff"),
+            Payment.created_by.label("uid"),
         ).select_from(Payment)
         conditions = self._payment_conditions(hotel_id, date_from, date_to, None)
         if branch_id is not None:
@@ -996,6 +1038,7 @@ class FinanceService:
                 ShopSalePayment.paid_at.label("created_at"),
                 (Room.room_number if need_people else cast(null(), String)).label("room"),
                 (_person_name(User) if need_staff else cast(null(), String)).label("staff"),
+                ShopSalePayment.created_by.label("uid"),
             ).select_from(ShopSalePayment)
             shop_conditions = []
             if hotel_id is not None:
@@ -1039,31 +1082,7 @@ class FinanceService:
             arms.append(shop.where(*shop_conditions))
         if not arms:
             arms = [res]
-        feed = (union_all(*arms) if len(arms) > 1 else arms[0]).subquery("feed")
-
-        sorts = {
-            "payment_number": feed.c.number,
-            "payment_date": feed.c.pay_date,
-            "payment_method": feed.c.method,
-            "amount": feed.c.amount,
-            "created_at": feed.c.created_at,
-            "room_number": feed.c.room,
-            "created_by_name": feed.c.staff,
-        }
-        order = _ordering(sorts, sort_by, sort_dir, feed.c.created_at)
-        if sort_by in ("room_number", "created_by_name"):
-            # Xonasiz (bronsiz do'kon savdosi) qatorlar har doim oxirida
-            order = order.nulls_last()
-        ids_stmt = select(feed.c.id, feed.c.source, feed.c.amount).order_by(
-            order,
-            # Ikkinchi/uchinchi mezon — sahifalar orasida qator takrorlanmasin
-            feed.c.created_at.desc(),
-            feed.c.id,
-        )
-        count_stmt = select(
-            func.count(), func.coalesce(func.sum(feed.c.amount), 0)
-        ).select_from(feed)
-        return ids_stmt, count_stmt
+        return (union_all(*arms) if len(arms) > 1 else arms[0]).subquery("feed")
 
     async def payments_feed(
         self,
