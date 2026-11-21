@@ -13,7 +13,15 @@ Qoidalar:
   sotilgan mahsulot tannarxi o'z partiyasidan, spisaniye/kamomad tannarxda
   (shop_profit_service). Tannarxi kiritilmagan partiyaga tannarx keyin ham
   kiritiladi (`PUT /shop/batches/{id}`, boshqaruv huquqi bilan).
+- Narxlarni o'zgartirish: partiyaning SOTUV narxi va OLISH narxi (tannarx)
+  kirimdan keyin ham tuzatiladi — bitta partiya (`PUT /shop/batches/{id}`)
+  yoki mahsulotning bir nechta partiyasi birga (`PUT /shop/products/{id}/
+  batches`). Sotuv narxi KEYINGI sotuvlarga ta'sir qiladi (o'tgan chek
+  qatorlari o'z narxini saqlaydi); tannarx foyda hisobini o'tgan sotuvlar
+  uchun ham aniqlashtiradi. Miqdor va qoldiq o'zgarmaydi. Har o'zgarish
+  audit jurnalida (kim, qachon, nimadan nimaga).
 """
+import logging
 from datetime import date, datetime, timezone
 from typing import Literal
 from uuid import UUID
@@ -37,6 +45,7 @@ from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.application.services.shop_payments import apply_payment, remaining_of
+from app.application.services.audit_service import AuditService
 from app.application.services.shop_profit_service import ShopProfitService
 from app.application.services.finance_service import method_codes
 from app.infrastructure.database.models.shop import (
@@ -53,6 +62,7 @@ from app.presentation.api.v1._deps import require_active_hotel, require_open_shi
 from app.application.services.branch_settings import settings_owner
 
 router = APIRouter(dependencies=[Depends(require_active_hotel)])
+logger = logging.getLogger(__name__)
 
 # Mahsulot/partiya boshqaruviga ruxsat beruvchi kodlar — frontenddagi
 # /services boshqaruvi doirasi bilan bir xil
@@ -128,9 +138,75 @@ class BatchCreateRequest(BaseModel):
 
 
 class BatchCostRequest(BaseModel):
-    """Partiya tannarxini kiritish/tuzatish (null — tannarxni olib tashlash)."""
+    """Partiya narxlarini tuzatish — faqat YUBORILGAN maydonlar o'zgaradi.
+
+    `cost_price`: olish narxi (null — olib tashlash); `sale_price`: sotuv
+    narxi (0 dan katta). Eski mijoz faqat `cost_price` yuboradi — avvalgidek.
+    """
 
     cost_price: float | None = Field(default=None, ge=0, le=1_000_000_000)
+    sale_price: float | None = Field(default=None, gt=0, le=1_000_000_000)
+
+
+class BatchPriceItem(BatchCostRequest):
+    batch_id: UUID
+
+
+class BatchPricesRequest(BaseModel):
+    """Mahsulotning bir nechta partiyasi narxini birga o'zgartirish."""
+
+    items: list[BatchPriceItem] = Field(..., min_length=1, max_length=200)
+    #: O'zgarish sababi — audit jurnalida (ixtiyoriy)
+    note: str | None = Field(default=None, max_length=300)
+
+
+def _money(v) -> float | None:
+    return round(float(v), 2) if v is not None else None
+
+
+def _apply_prices(batch: ShopBatch, data: BatchCostRequest) -> dict:
+    """Yuborilgan narxlarni partiyaga yozadi; o'zgarganlarini qaytaradi:
+    {"sale_price": {"old", "new"}, "cost_price": {"old", "new"}}."""
+    sent = data.model_fields_set
+    changes: dict = {}
+    if "sale_price" in sent:
+        if data.sale_price is None:
+            raise ValidationException("Sotuv narxi 0 dan katta bo'lishi kerak", "SHOP_SALE_PRICE_REQUIRED")
+        new = _money(data.sale_price)
+        old = _money(batch.sale_price)
+        if new != old:
+            batch.sale_price = new
+            changes["sale_price"] = {"old": old, "new": new}
+    if "cost_price" in sent:
+        new = _money(data.cost_price)
+        old = _money(batch.cost_price)
+        if new != old:
+            batch.cost_price = new
+            changes["cost_price"] = {"old": old, "new": new}
+    return changes
+
+
+async def _audit_prices(
+    session: AsyncSession, hotel_id: UUID, product: ShopProduct | None, batch_changes: list[dict],
+    current_user: dict, note: str | None = None,
+) -> None:
+    """Narx o'zgarishi audit jurnaliga — o'z savepointida (xatosi
+    o'zgarishni buzmaydi)."""
+    if not batch_changes:
+        return
+    try:
+        async with session.begin_nested():
+            await AuditService(session).log_action(
+                hotel_id=hotel_id,
+                user_id=UUID(str(current_user["id"])) if current_user.get("id") else None,
+                action="UPDATE",
+                entity_type="shop_batch_prices",
+                entity_id=product.id if product is not None else UUID(batch_changes[0]["batch_id"]),
+                old_values={"product": product.name if product is not None else None},
+                new_values={"batches": batch_changes, "note": note},
+            )
+    except Exception:
+        logger.exception("Do'kon narxi audit yozuvi saqlanmadi")
 
 
 class SaleItemRequest(BaseModel):
@@ -534,20 +610,64 @@ async def update_batch_cost(
     session: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Partiya TANNARXINI kiritish yoki tuzatish (faqat boshqaruv huquqi).
+    """Partiya TANNARXI (olish narxi) va/yoki SOTUV NARXINI tuzatish
+    (faqat boshqaruv huquqi). Faqat yuborilgan maydon o'zgaradi.
 
     Kirimda tannarx ixtiyoriy — ko'p partiyalar usiz kiritilgan. Foyda
     hisoboti sotuvni o'z partiyasi tannarxi bilan hisoblaydi, shuning uchun
     tannarx keyin kiritilsa o'tgan sotuvlar foydasi ham aniqlashadi. Sotuv
-    narxi, miqdor va qoldiq o'zgarmaydi."""
+    narxi keyingi sotuvlarga ta'sir qiladi. Miqdor va qoldiq o'zgarmaydi."""
     _ensure_manage(current_user)
     h_id = _get_hotel_id(current_user, hotel_id)
     batch = await session.get(ShopBatch, batch_id)
     if not batch or batch.hotel_id != h_id:
         raise NotFoundException("Batch not found", "SHOP_BATCH_NOT_FOUND")
-    batch.cost_price = data.cost_price
+    changes = _apply_prices(batch, data)
     await session.flush()
+    if changes:
+        product = await session.get(ShopProduct, batch.product_id)
+        await _audit_prices(
+            session, h_id, product, [{"batch_id": str(batch.id), **changes}], current_user
+        )
     return _batch_dict(batch)
+
+
+@router.put("/products/{product_id}/batches")
+async def update_batch_prices(
+    product_id: UUID = Path(),
+    data: BatchPricesRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Mahsulot partiyalarining sotuv va olish narxlarini BIRGA o'zgartirish
+    (bitta tranzaksiya; faqat boshqaruv huquqi). Har qatorda faqat
+    yuborilgan maydon o'zgaradi. Javob — yangilangan mahsulot (partiyalari
+    va joriy narxi bilan), `changed` — nechta partiya o'zgargani."""
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    product = await session.get(
+        ShopProduct, product_id, options=[selectinload(ShopProduct.batches)]
+    )
+    if not product or product.hotel_id != h_id:
+        raise NotFoundException("Product not found", "SHOP_PRODUCT_NOT_FOUND")
+    by_id = {b.id: b for b in product.batches}
+    seen: set = set()
+    batch_changes: list[dict] = []
+    for item in data.items:
+        batch = by_id.get(item.batch_id)
+        if batch is None:
+            raise NotFoundException("Batch not found", "SHOP_BATCH_NOT_FOUND")
+        if item.batch_id in seen:
+            raise ValidationException("Bir partiya ikki marta berilgan", "SHOP_BATCH_DUPLICATE")
+        seen.add(item.batch_id)
+        changes = _apply_prices(batch, item)
+        if changes:
+            batch_changes.append({"batch_id": str(batch.id), **changes})
+    await session.flush()
+    await _audit_prices(session, h_id, product, batch_changes, current_user, data.note)
+    await session.refresh(product, ["batches"])
+    return {**_product_dict(product, product.batches), "changed": len(batch_changes)}
 
 
 # ------------------------------------------------------------ foyda --

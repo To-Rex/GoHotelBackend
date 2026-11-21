@@ -2020,9 +2020,16 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 **PUT /shop/batches/{batch_id}**
 
 - Auth: shop management (ADMIN / SUPER_ADMIN or the management codes above); 403 otherwise.
-- Body: `{"cost_price": 2500}` (`null` removes it; ≥ 0).
-- Description: Sets or corrects a batch's purchase (cost) price — receiving without a cost was always allowed. Profit of past sales from this batch is recalculated at once (the report reads the live batch cost). Sale price, quantity and stock do not change.
+- Body: only the fields to change — `{"cost_price": 2500}` (`null` removes it; ≥ 0) and/or `{"sale_price": 12000}` (> 0; explicit `null` → 422 `SHOP_SALE_PRICE_REQUIRED`). Old clients that send only `cost_price` keep working; the sale price is untouched.
+- Description: Corrects a batch's purchase (cost) and/or sale price after receiving. A new sale price applies to the NEXT sales from this batch (past receipt lines keep their own unit price); a cost change recalculates profit of past sales at once (the report reads the live batch cost). Quantity and stock do not change. Each change is written to the audit log (`entity_type: "shop_batch_prices"`, old → new).
 - Response 200: the batch `{"id", "quantity", "remaining", "cost_price", "sale_price", "created_at"}`; 404 `SHOP_BATCH_NOT_FOUND`.
+
+**PUT /shop/products/{product_id}/batches**
+
+- Auth: shop management.
+- Body: `{"items": [{"batch_id", "sale_price"?, "cost_price"?}], "note"?}` — 1–200 rows, same per-field rules as above; a batch of another product → 404 `SHOP_BATCH_NOT_FOUND`, the same batch twice → 422 `SHOP_BATCH_DUPLICATE`.
+- Description: Changes the prices of several batches of one product in one transaction (the web "Narx va olish narxi" dialog). Unchanged values are skipped; one audit record lists every changed batch with old → new and the optional `note`.
+- Response 200: the product (as in `GET /shop/products`, with `current_price` and batches) plus `changed` — how many batches changed.
 
 ---
 

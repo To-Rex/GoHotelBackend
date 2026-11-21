@@ -645,6 +645,20 @@ o'rtacha tannarxda (taxminiy). Tannarx keyin kiritiladi:
 sotuvlar foydasi ham darhol aniqlashadi. Test:
 `pytest tests/test_shop_profit.py`.
 
+### Do'kon: narx va olish narxini o'zgartirish
+
+Narx PARTIYADA (kirimda) saqlanadi — sotuv FIFO bo'yicha eng eski
+qoldiqli partiya narxida. Kirimdan keyin ham tuzatiladi: bitta partiya
+`PUT /shop/batches/{id}` (`sale_price` va/yoki `cost_price` — faqat
+yuborilgani o'zgaradi; eski mijoz faqat `cost_price` yuboradi) yoki
+mahsulotning bir nechta partiyasi birga `PUT /shop/products/{id}/batches`
+`{"items": [...], "note"}` (bitta tranzaksiya). Faqat do'kon
+boshqaruvchisi. Sotuv narxi KEYINGI sotuvlarga ta'sir qiladi — o'tgan chek
+qatorlari o'z narxida; olish narxi foyda hisobini o'tgan sotuvlar uchun
+ham o'zgartiradi. Miqdor va qoldiq o'zgarmaydi. Har o'zgarish audit
+jurnalida (`shop_batch_prices`, nimadan nimaga). Test:
+`pytest tests/test_shop_prices.py`.
+
 ### To'lovlar ro'yxati — har to'lov NIMA UCHUN (xona, jarima, qarz, do'kon)
 
 `GET /finance/payments` (sahifalangan, `invoice_id` siz) har qatorni to'lov
