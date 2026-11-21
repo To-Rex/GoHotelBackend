@@ -933,6 +933,21 @@ faqat naqd bo'lak chiqadi); ro'yxatlar bo'laklarni bitta xarajat qilib
 ko'rsatadi, `/finance/summary`, `/finance/by-staff` va `/reports/my` dagi
 xarajat SONI guruh bo'yicha. Bo'lak o'chirilsa butun xarajat o'chadi.
 
+Xarajatni tahrirlash: `PUT /expenses/{id}` — FAQAT administrator, super
+admin va mehmonxona tanlagan sozlovchi (`can_edit_expenses`; xarajatni
+o'chira oladigan xodim ham tahrirlay olmaydi). Faqat yuborilgan maydonlar
+o'zgaradi: nom, summa, toifa, to'lov turi yoki bo'laklari, sana, izoh;
+`note` — tahrir sababi. Bo'lingan xarajat istalgan bo'lagi orqali
+BUTUNLIGICHA tahrirlanadi (summa o'zgarsa bo'laklar shart — 422
+`PARTS_REQUIRED`), oddiy xarajat bo'linishi, bo'lingani bitta turga
+qaytishi mumkin. Kim kiritgani va QACHON kiritilgani (`created_by`,
+`created_at`) o'zgarmaydi: xarajat o'z smenasida va o'z xodimining
+hisobotida qoladi, yangi bo'lak ham asl vaqtni oladi. Har tahrir
+`expenses.edit_history` (JSONB, migratsiya `b2d4f6a8c0e1`; kim, qachon,
+vazifasi, nimadan nimaga, izoh — oxirgi 50 tasi) va audit jurnaliga
+yoziladi; audit xatosi tahrirni buzmaydi (alohida savepoint). O'zgarish
+bo'lmasa — 422 `EXPENSE_UNCHANGED`.
+
 ### Mijozga SMS (Xabarchi)
 
 Mijozga SMS [Xabarchi](https://github.com/To-Rex/Xabarchi-Backend) orqali

@@ -1,4 +1,4 @@
-"""Xarajat yozish va o'chirish — shu jumladan QISMAN (aralash) to'lov.
+"""Xarajat yozish, tahrirlash va o'chirish — shu jumladan QISMAN (aralash) to'lov.
 
 Bitta xarajat bir necha to'lov turi bilan to'lanishi mumkin: 100 000 so'm
 kommunal to'lovning 60 000 i naqd, 40 000 i online. Bu holda har bo'lak
@@ -15,17 +15,34 @@ bo'yicha), soni hisobotlarda bitta deb sanaladi.
 Bo'laklar yig'indisi xarajat summasiga teng bo'lishi shart; bitta to'lov
 turi bir marta; bo'sh (0) bo'laklar tashlanadi; bittagina bo'lak qolsa —
 oddiy xarajat.
+
+TAHRIRLASH (`ExpenseService.update`) — faqat administrator, super admin va
+mehmonxona tanlagan sozlovchi (u mehmonxonada ADMIN bo'lib ishlaydi,
+configurator_access). Nom, summa, toifa, to'lov turi (yoki bo'laklari),
+sana va izoh o'zgaradi. Xarajat QACHON va KIM tomonidan kiritilgani
+(`created_at`, `created_by`) o'zgarmaydi: xarajat o'z smenasida, o'z
+xodimining hisobotida qoladi — bugungi smenaga o'tib ketmaydi. Har tahrir
+`edit_history` ga (kim, qachon, qaysi vazifada, nimadan nimaga, izoh) va
+audit jurnaliga yoziladi.
 """
 from __future__ import annotations
 
+import logging
 import uuid
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.audit_service import AuditService
+from app.application.services.configurator_access import actual_user_type
 from app.application.services.expense_category_service import ExpenseCategoryService
-from app.core.exceptions import NotFoundException, ValidationException
+from app.core.exceptions import (
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
 from app.infrastructure.database.models.expense import Expense
 from app.infrastructure.database.models.user import User
 from app.shared.utils import hotel_today
@@ -34,6 +51,76 @@ from app.shared.utils import hotel_today
 MAX_PARTS = 4
 #: Tiyin aniqligi — float yig'indidagi mayda farq xato emas
 TOLERANCE = 0.005
+
+logger = logging.getLogger(__name__)
+
+#: Xarajatni tahrirlay oladigan turlar (so'rovdagi `user_type`). Mehmonxona
+#: tanlagan sozlovchi shu yerda "ADMIN" bo'lib keladi (effective_user_type).
+EDIT_USER_TYPES = ("ADMIN", "SUPER_ADMIN")
+EDIT_FORBIDDEN_CODE = "EXPENSE_EDIT_FORBIDDEN"
+#: Bitta xarajat tarixida ko'pi bilan shuncha oxirgi tahrir saqlanadi
+#: (audit jurnalida hammasi qoladi)
+MAX_HISTORY = 50
+#: Tarixda solishtiriladigan maydonlar (ekrandagi tartibda)
+EDIT_FIELDS = ("amount", "payment", "category", "title", "expense_date", "notes")
+
+
+def can_edit_expenses(current_user: dict | None) -> bool:
+    """Xarajatni tahrirlay oladimi: administrator, super admin, sozlovchi."""
+    return bool(current_user) and current_user.get("user_type") in EDIT_USER_TYPES
+
+
+def _clean_text(value) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _layout(parts: list[tuple[str, float]]) -> list[dict]:
+    """To'lov tarkibi — katta summadan kichikka (solishtirish va tarix uchun)."""
+    ordered = sorted(parts, key=lambda p: (-p[1], p[0]))
+    return [{"payment_method": m, "amount": round(float(a), 2)} for m, a in ordered]
+
+
+def _snapshot(
+    *, title: str, category: str | None, parts: list[tuple[str, float]],
+    expense_date, notes: str | None,
+) -> dict:
+    return {
+        "title": title,
+        "amount": round(sum(a for _m, a in parts), 2),
+        "category": category,
+        "payment": _layout(parts),
+        "expense_date": str(expense_date),
+        "notes": notes,
+    }
+
+
+def _rows_snapshot(rows: list[Expense]) -> dict:
+    main = rows[0]
+    return _snapshot(
+        title=main.title,
+        category=main.category,
+        parts=[((r.payment_method or "").strip().upper(), float(r.amount)) for r in rows],
+        expense_date=main.expense_date,
+        notes=main.notes,
+    )
+
+
+def diff_snapshots(before: dict, after: dict) -> dict:
+    """O'zgargan maydonlar: {maydon: {"old": ..., "new": ...}}."""
+    changes: dict = {}
+    for field in EDIT_FIELDS:
+        old, new = before.get(field), after.get(field)
+        if field == "amount":
+            same = abs(float(old or 0) - float(new or 0)) <= TOLERANCE
+        elif field == "payment" and len(old or []) == 1 and len(new or []) == 1:
+            # Bitta turdagi xarajat: summa "amount" da — bu yerda faqat tur
+            same = old[0]["payment_method"] == new[0]["payment_method"]
+        else:
+            same = old == new
+        if not same:
+            changes[field] = {"old": old, "new": new}
+    return changes
 
 
 def normalize_parts(total: float, parts: list[dict] | None) -> list[tuple[str, float]]:
@@ -89,6 +176,8 @@ def expense_dict(e: Expense, creator: User | None) -> dict:
         "created_at": e.created_at.isoformat() if e.created_at else None,
         # Qisman to'lov bo'laklarini bog'laydigan kalit (oddiy xarajatda bo'sh)
         "split_group": str(e.split_group) if e.split_group else None,
+        # Tahrirlar tarixi (eng eskisi birinchi); bo'sh ro'yxat — tahrirlanmagan
+        "edit_history": list(e.edit_history) if isinstance(e.edit_history, list) else [],
     }
 
 
@@ -146,6 +235,191 @@ class ExpenseService:
             payload["parts"] = [expense_dict(r, creator) for r in rows]
         return payload
 
+    async def _group_rows(self, hotel_id: UUID | None, expense_id: UUID) -> list[Expense]:
+        """Xarajat va (bo'lingan bo'lsa) uning barcha bo'laklari."""
+        expense = await self.session.get(Expense, expense_id)
+        if not expense or (hotel_id is not None and expense.hotel_id != hotel_id):
+            raise NotFoundException("Expense not found", "EXPENSE_NOT_FOUND")
+        if expense.split_group is None:
+            return [expense]
+        rows = (
+            await self.session.execute(
+                select(Expense).where(
+                    Expense.hotel_id == expense.hotel_id,
+                    Expense.split_group == expense.split_group,
+                )
+            )
+        ).scalars().all()
+        # So'ralgan qator birinchi — javobning `id` si o'sha bo'lsin
+        return [expense, *[r for r in rows if r.id != expense.id]]
+
+    async def update(
+        self, hotel_id: UUID | None, expense_id: UUID, data: dict, current_user: dict
+    ) -> dict:
+        """Xarajatni tahrirlaydi (faqat administrator, super admin, sozlovchi).
+
+        `data` — faqat yuborilgan maydonlar (`exclude_unset`): title, amount,
+        category, payment_method yoki payments, expense_date, notes va
+        tahrir izohi `note`. Yuborilmagan maydon o'zgarmaydi.
+
+        Bo'lingan xarajat BUTUNLIGICHA tahrirlanadi (bo'lakning o'zi emas):
+        summa o'zgarsa bo'laklar ham berilishi shart, yig'indisi yangi
+        summaga teng. Oddiy xarajat bo'linishi va bo'lingani bitta turga
+        qaytishi mumkin. Qatorlar imkon qadar saqlanadi (o'sha to'lov turi —
+        o'sha qator); yangi bo'lak asl xarajatning `created_at` va
+        `created_by` ini oladi: smena kassasi va shaxsiy hisobot xarajatni
+        o'z paytida ko'radi.
+
+        Javob: asosiy qator (`create` bilan bir xil shakl), bo'lingan
+        bo'lsa `parts`, va `edit` — shu tahrir yozuvi.
+        """
+        if not can_edit_expenses(current_user):
+            raise ForbiddenException(
+                "Xarajatni faqat administrator, super admin yoki sozlovchi tahrirlay oladi",
+                EDIT_FORBIDDEN_CODE,
+            )
+        rows = await self._group_rows(hotel_id, expense_id)
+        main = rows[0]
+        before = _rows_snapshot(rows)
+        old_parts = [((r.payment_method or "").strip().upper(), round(float(r.amount), 2)) for r in rows]
+
+        # --- yangi qiymatlar (yuborilmagani — avvalgisi) ---
+        title = main.title
+        if "title" in data:
+            title = _clean_text(data.get("title"))
+            if not title:
+                raise ValidationException("Xarajat nomi bo'sh bo'lmasligi kerak", "TITLE_REQUIRED")
+            title = title[:255]
+
+        total = before["amount"]
+        if data.get("amount") is not None:
+            total = round(float(data["amount"]), 2)
+            if total <= 0:
+                raise ValidationException("Summa 0 dan katta bo'lishi kerak", "AMOUNT_INVALID")
+
+        category = main.category
+        if "category" in data:
+            category = await ExpenseCategoryService(self.session).resolve_name(
+                main.hotel_id, data.get("category")
+            )
+
+        expense_date = main.expense_date
+        if data.get("expense_date") is not None:
+            expense_date = data["expense_date"]
+
+        notes = main.notes
+        if "notes" in data:
+            notes = _clean_text(data.get("notes"))
+
+        # To'lov tarkibi: bo'laklar > bitta tur > avvalgisi
+        parts = normalize_parts(total, data.get("payments")) if data.get("payments") else []
+        if not parts:
+            method = _clean_text(data.get("payment_method"))
+            if method:
+                parts = [(method.upper(), total)]
+            elif len(old_parts) == 1:
+                parts = [(old_parts[0][0], total)]
+            elif abs(sum(a for _m, a in old_parts) - total) <= TOLERANCE:
+                parts = old_parts
+            else:
+                raise ValidationException(
+                    "Bo'lingan xarajat summasi o'zgarsa, to'lov bo'laklarini ham ko'rsating",
+                    "PARTS_REQUIRED",
+                )
+
+        after = _snapshot(
+            title=title, category=category, parts=parts, expense_date=expense_date, notes=notes
+        )
+        changes = diff_snapshots(before, after)
+        if not changes:
+            raise ValidationException("Hech narsa o'zgarmadi", "EXPENSE_UNCHANGED")
+
+        # --- tarix yozuvi ---
+        actor_id = current_user.get("id")
+        by_name: str | None = None
+        if actor_id:
+            actor = await self.session.get(User, UUID(str(actor_id)))
+            if actor is not None:
+                by_name = f"{actor.first_name} {actor.last_name}".strip() or None
+        edited_at = datetime.now(timezone.utc)
+        entry = {
+            "at": edited_at.isoformat(),
+            "by": str(actor_id) if actor_id else None,
+            "by_name": by_name,
+            # Haqiqiy vazifa: ADMIN / SUPER_ADMIN / CONFIGURATOR
+            "by_role": actual_user_type(current_user) or current_user.get("user_type"),
+            "note": _clean_text(data.get("note")),
+            "changes": changes,
+        }
+        history = [
+            *(main.edit_history if isinstance(main.edit_history, list) else []),
+            entry,
+        ][-MAX_HISTORY:]
+
+        # --- qatorlarni moslash: o'sha to'lov turi — o'sha qator ---
+        pool = list(rows)
+        plan: list[list] = []
+        for method, amount in parts:
+            row = next(
+                (r for r in pool if (r.payment_method or "").strip().upper() == method), None
+            )
+            if row is not None:
+                pool.remove(row)
+            plan.append([method, amount, row])
+        for item in plan:
+            if item[2] is None and pool:
+                item[2] = pool.pop(0)
+        for leftover in pool:
+            await self.session.delete(leftover)
+
+        origin_created_at = min(
+            (r.created_at for r in rows if r.created_at is not None), default=None
+        )
+        group = (main.split_group or uuid.uuid4()) if len(plan) > 1 else None
+        result: list[Expense] = []
+        for method, amount, row in plan:
+            if row is None:
+                row = Expense(
+                    hotel_id=main.hotel_id,
+                    branch_id=main.branch_id,
+                    created_by=main.created_by,
+                    created_at=origin_created_at or edited_at,
+                )
+                self.session.add(row)
+            row.title = title
+            row.category = category
+            row.amount = amount
+            row.payment_method = method
+            row.expense_date = expense_date
+            row.notes = notes
+            row.split_group = group
+            # JSONB — YANGI ro'yxat (SQLAlchemy o'zgarishni sezishi uchun)
+            row.edit_history = list(history)
+            result.append(row)
+        await self.session.flush()
+
+        # Audit jurnali — o'z savepointida: xatosi tahrirni hech qachon buzmaydi
+        try:
+            async with self.session.begin_nested():
+                await AuditService(self.session).log_action(
+                    hotel_id=main.hotel_id,
+                    user_id=UUID(str(actor_id)) if actor_id else None,
+                    action="UPDATE",
+                    entity_type="expense",
+                    entity_id=result[0].id,
+                    old_values=before,
+                    new_values={**after, "note": entry["note"], "changes": list(changes)},
+                )
+        except Exception:
+            logger.exception("Xarajat tahriri audit yozuvi saqlanmadi (expense=%s)", main.id)
+
+        creator = await self.session.get(User, main.created_by)
+        payload = expense_dict(result[0], creator)
+        if len(result) > 1:
+            payload["parts"] = [expense_dict(r, creator) for r in result]
+        payload["edit"] = entry
+        return payload
+
     async def delete(self, hotel_id: UUID | None, expense_id: UUID) -> int:
         """Xarajatni o'chiradi. Qisman to'lov bo'lagi bo'lsa — BUTUN xarajat
         (barcha bo'laklari): yarim xarajat qolib ketmasligi kerak.
@@ -171,4 +445,12 @@ class ExpenseService:
         return len(rows)
 
 
-__all__ = ["ExpenseService", "expense_dict", "normalize_parts", "MAX_PARTS", "delete"]
+__all__ = [
+    "ExpenseService",
+    "expense_dict",
+    "normalize_parts",
+    "can_edit_expenses",
+    "diff_snapshots",
+    "MAX_PARTS",
+    "delete",
+]

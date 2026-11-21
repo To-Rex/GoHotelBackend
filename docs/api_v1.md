@@ -1907,7 +1907,7 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 
 - Auth: required (all signed-in staff); `?hotel_id=` for SUPER_ADMIN
 - Query: `?date_from=&date_to=&skip=0&limit=500` (limit ≤ 1000)
-- Response 200: list of expenses — `{"id", "hotel_id", "branch_id", "title", "category", "amount", "payment_method", "expense_date", "notes", "created_by", "created_by_name", "created_at", "split_group"}`, newest first. Rows with the same non-null `split_group` are the parts of one split-payment expense (see POST).
+- Response 200: list of expenses — `{"id", "hotel_id", "branch_id", "title", "category", "amount", "payment_method", "expense_date", "notes", "created_by", "created_by_name", "created_at", "split_group", "edit_history"}`, newest first. Rows with the same non-null `split_group` are the parts of one split-payment expense (see POST). `edit_history` is the list of edits, oldest first (empty — never edited; see PUT).
 
 ---
 
@@ -1920,6 +1920,15 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 - Response 200: the expense object (first part for a split) — fields as in the list plus `split_group` (null for an ordinary expense); for a split also `parts`: the list of all part rows.
 
 ---
+
+**PUT /expenses/{expense_id}**
+
+- Auth: ADMIN / SUPER_ADMIN, or a configurator who selected the hotel (it works there as ADMIN). Nobody else — not even `expense.delete` holders (403 `EXPENSE_EDIT_FORBIDDEN`).
+- Body: only the fields to change — `{"title", "amount", "category", "payment_method", "payments", "expense_date", "notes", "note"}`; `note` is the reason for the edit (shown in the history). `category: null` / `notes: null` clear the value.
+- Payment layout: `payments` (two or more parts adding up to `amount`, same rules as POST) or `payment_method` (one method; a split expense goes back to a single row). Without either the layout stays; a split expense whose `amount` changes needs `payments` (422 `PARTS_REQUIRED`).
+- Description: Edits the whole expense — any part id of a split expense edits all parts. `created_by` and `created_at` never change, so the expense stays in the shift and the personal report of the employee who entered it; a new part row also gets the original time and author. Rows are kept per method where possible. Each edit is appended to `edit_history` on every part (`{"at", "by", "by_name", "by_role", "note", "changes": {"amount"|"payment"|"category"|"title"|"expense_date"|"notes": {"old", "new"}}}`, last 50 kept) and written to the audit log (`entity_type: "expense"`).
+- Response 200: as POST (first row = the requested id, `parts` for a split) plus `edit` — this edit's history entry.
+- Errors: 404 `EXPENSE_NOT_FOUND`, 422 `EXPENSE_UNCHANGED` (nothing changed), `TITLE_REQUIRED`, `AMOUNT_INVALID`, `PARTS_REQUIRED`, `PARTS_SUM_MISMATCH`, `PARTS_DUPLICATE_METHOD`
 
 **DELETE /expenses/{expense_id}**
 

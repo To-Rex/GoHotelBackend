@@ -4,8 +4,17 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    Date,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.models.base import Base
@@ -51,6 +60,13 @@ class Expense(BranchScoped, FullMixin, Base):
     #: qatorlar bo'yicha ishlayveradi — har bo'lakning o'z to'lov turi bor.
     split_group: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), nullable=True, index=True
+    )
+    #: Tahrirlar tarixi (administrator, super admin, sozlovchi): har yozuvda
+    #: kim, qachon, qaysi vazifada, nimadan nimaga va izoh
+    #: (expense_service.ExpenseService.update). Bo'lingan xarajatda barcha
+    #: bo'laklarda bir xil ro'yxat. Bo'sh — hech qachon tahrirlanmagan.
+    edit_history: Mapped[Optional[list]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
     )
 
     created_by_user: Mapped["User"] = relationship("User", foreign_keys=[created_by])

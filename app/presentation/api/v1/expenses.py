@@ -5,6 +5,10 @@ xarajatda kim kiritgani created_by sifatida majburiy saqlanadi va ro'yxatda
 ism-familiya bilan qaytariladi — javobgarlik saqlanadi). O'chirish esa faqat
 expense.delete ruxsati bilan (ADMIN/SUPER_ADMIN avtomatik).
 
+Tahrirlash (`PUT /expenses/{id}`) — FAQAT administrator, super admin va
+sozlovchi (expense_service.can_edit_expenses). Kim kiritgani va qachon
+kiritilgani o'zgarmaydi; har tahrir `edit_history` da va audit jurnalida.
+
 Toifalar (`/expenses/categories`): mehmonxonaning tanlash ro'yxati — nom,
 belgi, rang, tartib. O'qish hammaga; qo'shish, qayta nomlash, arxivlash
 ADMIN/SUPER_ADMIN va expense.delete ruxsati borlarga
@@ -23,7 +27,11 @@ from app.application.services.expense_category_service import (
     ExpenseCategoryService,
     can_manage_categories,
 )
-from app.application.services.expense_service import ExpenseService, expense_dict
+from app.application.services.expense_service import (
+    ExpenseService,
+    can_edit_expenses,
+    expense_dict,
+)
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
 from app.infrastructure.database.models.expense import Expense
@@ -70,6 +78,24 @@ class ExpenseCreateRequest(BaseModel):
     expense_date: date | None = None
     notes: str | None = None
     branch_id: UUID | None = None
+
+
+class ExpenseUpdateRequest(BaseModel):
+    """Xarajatni tahrirlash — faqat YUBORILGAN maydonlar o'zgaradi.
+
+    To'lov tarkibi: `payments` (2+ bo'lak, yig'indisi `amount` ga teng)
+    yoki `payment_method` (bitta tur). Ikkalasi ham bo'lmasa avvalgi tarkib
+    qoladi (bo'lingan xarajat summasi o'zgarsa — bo'laklar shart)."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    amount: float | None = Field(default=None, gt=0)
+    category: str | None = Field(default=None, max_length=50)
+    payment_method: PaymentMethodCode | None = None
+    payments: list[ExpensePartRequest] | None = Field(default=None, max_length=4)
+    expense_date: date | None = None
+    notes: str | None = None
+    #: Tahrir sababi — tarixda ko'rinadi (ixtiyoriy)
+    note: str | None = Field(default=None, max_length=500)
 
 
 class ExpenseCategoryCreateRequest(BaseModel):
@@ -231,6 +257,34 @@ async def create_expense(
         raise ForbiddenException("Hotel context required")
 
     return await ExpenseService(session).create(h_id, data.model_dump(), current_user)
+
+
+@router.put("/{expense_id}")
+async def update_expense(
+    data: ExpenseUpdateRequest,
+    expense_id: UUID = Path(),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Xarajatni tahrirlash — faqat administrator, super admin va sozlovchi.
+
+    Bo'lingan xarajatning istalgan bo'lagi id si bilan BUTUN xarajat
+    tahrirlanadi. Javob `create` bilan bir xil shaklda, qo'shimcha `edit`
+    — shu tahrir yozuvi (kim, qachon, nimadan nimaga)."""
+    if not can_edit_expenses(current_user):
+        raise ForbiddenException(
+            "Xarajatni faqat administrator, super admin yoki sozlovchi tahrirlay oladi",
+            "EXPENSE_EDIT_FORBIDDEN",
+        )
+    if current_user["user_type"] == "SUPER_ADMIN":
+        h_id = hotel_id or current_user.get("hotel_id")
+    else:
+        h_id = _get_hotel_id(current_user)
+
+    return await ExpenseService(session).update(
+        h_id, expense_id, data.model_dump(exclude_unset=True), current_user
+    )
 
 
 @router.delete("/{expense_id}")
