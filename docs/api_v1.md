@@ -1979,6 +1979,41 @@ Expense categories are stored on the expense **by name** (`category`): reports g
 
 ---
 
+**GET /shop/profit**
+
+- Auth: ADMIN / SUPER_ADMIN, `finance.view`, or shop management codes (`service.manage`, `service.create`, `service.update`, `hotel_service.manage`); others → 403 `SHOP_PROFIT_FORBIDDEN` (cost prices are internal). `?hotel_id=` for SUPER_ADMIN.
+- Query: `?date_from=2026-11-01&date_to=2026-11-30` (optional; local days of the SALE — receipt `created_at`; 422 `DATE_RANGE_INVALID` if inverted). Booking-charged (unpaid) sales are included — the goods have left the shelf; `sales.unpaid` is their unpaid part. `/finance/summary` shop revenue is by payment day, so the two numbers can differ.
+- Description: Shop profit and loss for the period.
+  - Cost of a sold line = `quantity × cost_price` of the batch it was taken from (FIFO). A batch without `cost_price` uses the product's average known cost (`cost.estimated`, product `cost_status: "estimated"`); with no known cost at all the line is left out of profit and reported in `uncovered` (`cost_status: "unknown"|"partial"`).
+  - `gross_profit` = covered revenue − cost; `margin` in % of covered revenue. Lines sold below their batch cost → `below_cost`.
+  - Losses at cost: `writeoff` (kind WRITEOFF), `shortage` (INVENTORY shortage); `surplus` (INVENTORY surplus) is a gain. New write-offs store their batches in `shop_writeoffs.batches` (migration `c4e6a8b0d2f3`); older rows use the product's average cost (`estimated: true`), unknown cost → `unknown_qty`.
+  - `net_profit` = gross − writeoff − shortage + surplus. `products` — per product (sold qty, revenue, cost, profit, margin, losses, net, `cost_status`), most profitable first. `missing_cost_batches` — batches without a cost that are in stock or were sold in the period (max 300). `stock` — current stock value at cost and at sale price (not period-bound). `can_edit_cost` — whether the caller may use PUT below.
+- Response 200 (shortened):
+
+```json
+{"sales": {"count": 5, "items_qty": 50, "revenue": 481000.0, "unpaid": 0.0},
+ "revenue_covered": 451000.0, "cost": {"total": 274000.0, "estimated": 24000.0},
+ "gross_profit": 177000.0, "margin": 39.25,
+ "uncovered": {"revenue": 30000.0, "qty": 6, "products": 1},
+ "below_cost": {"qty": 4, "loss": 2000.0, "products": 1},
+ "writeoff": {"count": 1, "qty": 2, "cost": 14000.0, "sale_value": 24000.0, "estimated": false, "unknown_qty": 0},
+ "shortage": {"count": 1, "qty": 3, "cost": 12000.0, ...}, "surplus": {"count": 1, "qty": 2, "cost": 18000.0, ...},
+ "losses": 26000.0, "net_profit": 169000.0,
+ "stock": {"qty": 135, "cost_value": 466000.0, "sale_value": 1153500.0, "unknown_cost_qty": 64, "potential_profit": 247500.0},
+ "products": [{"product_id": "...", "name": "Coca-Cola 0.5", "sold_qty": 28, "revenue": 284000.0, "cost": 168000.0, "profit": 116000.0, "margin": 40.85, "losses": 0.0, "net": 116000.0, "cost_status": "estimated", ...}],
+ "missing_cost_batches": [{"batch_id": "...", "product_name": "Choy (paket)", "quantity": 50, "remaining": 44, "sold_in_period": 6, "sale_price": 5000.0, "created_at": "..."}],
+ "can_edit_cost": true}
+```
+
+**PUT /shop/batches/{batch_id}**
+
+- Auth: shop management (ADMIN / SUPER_ADMIN or the management codes above); 403 otherwise.
+- Body: `{"cost_price": 2500}` (`null` removes it; ≥ 0).
+- Description: Sets or corrects a batch's purchase (cost) price — receiving without a cost was always allowed. Profit of past sales from this batch is recalculated at once (the report reads the live batch cost). Sale price, quantity and stock do not change.
+- Response 200: the batch `{"id", "quantity", "remaining", "cost_price", "sale_price", "created_at"}`; 404 `SHOP_BATCH_NOT_FOUND`.
+
+---
+
 **GET /finance/penalties**
 
 - Auth: required (`?hotel_id=` for SUPER_ADMIN)

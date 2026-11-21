@@ -610,6 +610,25 @@ ekan savdo `PENDING` (qarz), to'liq to'langanda `PAID`.
 Kod: `app/application/services/shop_payments.py`, test:
 `pytest tests/test_shop_partial_payments.py`.
 
+### Do'kon: foyda va zarar
+
+`GET /shop/profit?date_from&date_to` — Moliya → Do'kon statistikasi
+(`shop_profit_service.py`). Davr — SOTUV sanasi (bronga yozilgani ham;
+to'lanmagan qismi `sales.unpaid`). Sotilgan qator tannarxi — o'z
+partiyasining `cost_price` i (FIFO); partiyada tannarx yo'q bo'lsa
+mahsulotning o'rtacha tannarxi (taxminiy), umuman yo'q bo'lsa sotuv
+foydaga kirmaydi (`uncovered`). Yalpi foyda, marja, tannarxidan arzon
+sotuv, spisaniye va inventarizatsiya kamomadi (zarar, tannarxda),
+ortiqcha (foyda), sof foyda, mahsulotlar kesimi, tannarxi yo'q partiyalar
+va ombordagi qoldiq qiymati. Ko'radi: administrator, `finance.view` yoki
+do'kon boshqaruvchisi (403 `SHOP_PROFIT_FORBIDDEN`). Spisaniye va
+inventarizatsiya endi qaysi partiyadan qancha chiqqanini saqlaydi
+(`shop_writeoffs.batches`, migratsiya `c4e6a8b0d2f3`); eski yozuvlar
+o'rtacha tannarxda (taxminiy). Tannarx keyin kiritiladi:
+`PUT /shop/batches/{id}` `{"cost_price"}` (faqat boshqaruvchi) — o'tgan
+sotuvlar foydasi ham darhol aniqlashadi. Test:
+`pytest tests/test_shop_profit.py`.
+
 ### To'lovlar ro'yxati — har to'lov NIMA UCHUN (xona, jarima, qarz, do'kon)
 
 `GET /finance/payments` (sahifalangan, `invoice_id` siz) har qatorni to'lov

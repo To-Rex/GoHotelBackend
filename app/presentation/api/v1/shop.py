@@ -9,6 +9,10 @@ Qoidalar:
   mahsulot ikki partiyaga bo'linsa chekda ikki qator (har xil narx) bo'ladi.
 - Sotuv bronga biriktirilsa PENDING (to'lov keyin, odatda chiqishda) bo'ladi;
   oddiy sotuv darhol PAID.
+- Foyda va zarar (`GET /shop/profit`) — Moliya → Do'kon statistikasi:
+  sotilgan mahsulot tannarxi o'z partiyasidan, spisaniye/kamomad tannarxda
+  (shop_profit_service). Tannarxi kiritilmagan partiyaga tannarx keyin ham
+  kiritiladi (`PUT /shop/batches/{id}`, boshqaruv huquqi bilan).
 """
 from datetime import date, datetime, timezone
 from typing import Literal
@@ -33,6 +37,7 @@ from app.infrastructure.database.models.guest import Guest
 from app.infrastructure.database.models.reservation import Reservation
 from app.infrastructure.database.models.room import Room
 from app.application.services.shop_payments import apply_payment, remaining_of
+from app.application.services.shop_profit_service import ShopProfitService
 from app.application.services.finance_service import method_codes
 from app.infrastructure.database.models.shop import (
     ShopSalePayment,
@@ -71,12 +76,33 @@ def _get_hotel_id(current_user: dict, hotel_id: UUID | None = None) -> UUID:
     return h_id
 
 
-def _ensure_manage(current_user: dict) -> None:
+def _can_manage(current_user: dict) -> bool:
     if current_user["user_type"] in ("ADMIN", "SUPER_ADMIN"):
+        return True
+    codes = current_user.get("permissions", [])
+    return any(c in codes for c in MANAGE_CODES)
+
+
+def _ensure_manage(current_user: dict) -> None:
+    if not _can_manage(current_user):
+        raise ForbiddenException("Shop management permission required")
+
+
+#: Foyda va zarar statistikasini ko'ra oladiganlar: administrator, moliya
+#: sahifasi ruxsati borlar va do'kon boshqaruvchilari (tannarx — ichki
+#: ma'lumot, oddiy sotuvchiga ko'rsatilmaydi)
+PROFIT_VIEW_CODES = ("finance.view",)
+
+
+def _ensure_profit_view(current_user: dict) -> None:
+    if _can_manage(current_user):
         return
     codes = current_user.get("permissions", [])
-    if not any(c in codes for c in MANAGE_CODES):
-        raise ForbiddenException("Shop management permission required")
+    if not any(c in codes for c in PROFIT_VIEW_CODES):
+        raise ForbiddenException(
+            "Do'kon foydasini faqat administrator, moliya yoki do'kon boshqaruvchisi ko'radi",
+            "SHOP_PROFIT_FORBIDDEN",
+        )
 
 
 # ---------------------------------------------------------------- DTO --
@@ -99,6 +125,12 @@ class BatchCreateRequest(BaseModel):
     quantity: int = Field(..., gt=0, le=100000)
     sale_price: float = Field(..., gt=0)
     cost_price: float | None = Field(default=None, ge=0)
+
+
+class BatchCostRequest(BaseModel):
+    """Partiya tannarxini kiritish/tuzatish (null — tannarxni olib tashlash)."""
+
+    cost_price: float | None = Field(default=None, ge=0, le=1_000_000_000)
 
 
 class SaleItemRequest(BaseModel):
@@ -494,6 +526,54 @@ async def add_batch(
     return _product_dict(product, product.batches)
 
 
+@router.put("/batches/{batch_id}")
+async def update_batch_cost(
+    batch_id: UUID = Path(),
+    data: BatchCostRequest = ...,
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Partiya TANNARXINI kiritish yoki tuzatish (faqat boshqaruv huquqi).
+
+    Kirimda tannarx ixtiyoriy — ko'p partiyalar usiz kiritilgan. Foyda
+    hisoboti sotuvni o'z partiyasi tannarxi bilan hisoblaydi, shuning uchun
+    tannarx keyin kiritilsa o'tgan sotuvlar foydasi ham aniqlashadi. Sotuv
+    narxi, miqdor va qoldiq o'zgarmaydi."""
+    _ensure_manage(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    batch = await session.get(ShopBatch, batch_id)
+    if not batch or batch.hotel_id != h_id:
+        raise NotFoundException("Batch not found", "SHOP_BATCH_NOT_FOUND")
+    batch.cost_price = data.cost_price
+    await session.flush()
+    return _batch_dict(batch)
+
+
+# ------------------------------------------------------------ foyda --
+
+
+@router.get("/profit")
+async def shop_profit(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Do'kon foydasi va zarari davr bo'yicha (sotuv sanasi): sotuv,
+    tannarx, yalpi foyda va marja, spisaniye/kamomad, sof foyda, mahsulotlar
+    kesimi, tannarxi kiritilmagan partiyalar va ombordagi qoldiq qiymati.
+    Hisob qoidalari `shop_profit_service` da."""
+    _ensure_profit_view(current_user)
+    h_id = _get_hotel_id(current_user, hotel_id)
+    if date_from and date_to and date_from > date_to:
+        raise ValidationException("Boshlanish sanasi tugash sanasidan keyin", "DATE_RANGE_INVALID")
+    return await ShopProfitService(session).build(
+        h_id, date_from, date_to, can_edit_cost=_can_manage(current_user)
+    )
+
+
 # -------------------------------------------------------------- sales --
 
 
@@ -883,10 +963,21 @@ class InventoryRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+def _batch_part(batch: ShopBatch, qty: int) -> dict:
+    """Ombor harakatining bir partiyaga tegishli qismi (`ShopWriteoff.batches`)."""
+    return {
+        "batch_id": str(batch.id),
+        "quantity": int(qty),
+        "cost_price": float(batch.cost_price) if batch.cost_price is not None else None,
+        "sale_price": float(batch.sale_price),
+    }
+
+
 async def _fifo_deduct(
     session: AsyncSession, product_id: UUID, qty: int, product_name: str
-) -> None:
-    """Sotuvdagi kabi FIFO tartibida (qulflab) partiyalardan yechish."""
+) -> list[dict]:
+    """Sotuvdagi kabi FIFO tartibida (qulflab) partiyalardan yechish.
+    Qaysi partiyadan qancha yechilganini qaytaradi (zarar tannarxi uchun)."""
     batches = (
         (
             await session.execute(
@@ -906,12 +997,15 @@ async def _fifo_deduct(
             "SHOP_INSUFFICIENT_STOCK",
         )
     left = qty
+    parts: list[dict] = []
     for batch in batches:
         if left <= 0:
             break
         take = min(batch.remaining, left)
         batch.remaining -= take
         left -= take
+        parts.append(_batch_part(batch, take))
+    return parts
 
 
 @router.post("/products/{product_id}/writeoff")
@@ -931,7 +1025,7 @@ async def writeoff_product(
     if not product or product.hotel_id != h_id:
         raise NotFoundException("Product not found", "SHOP_PRODUCT_NOT_FOUND")
 
-    await _fifo_deduct(session, product_id, data.quantity, product.name)
+    parts = await _fifo_deduct(session, product_id, data.quantity, product.name)
     session.add(
         ShopWriteoff(
             hotel_id=h_id,
@@ -940,6 +1034,7 @@ async def writeoff_product(
             quantity=data.quantity,
             reason=data.reason,
             created_by=current_user["id"],
+            batches=parts,
         )
     )
     await session.flush()
@@ -976,7 +1071,7 @@ async def inventory_product(
     )
     if diff < 0:
         # Kamomad — yetishmayotgan miqdor ombordan chiqariladi
-        await _fifo_deduct(session, product_id, -diff, product.name)
+        parts = await _fifo_deduct(session, product_id, -diff, product.name)
     else:
         # Ortiqcha — oxirgi partiya narxlari bilan qoldiqqa qo'shiladi
         ordered = sorted(
@@ -988,17 +1083,18 @@ async def inventory_product(
                 "Mahsulotda partiya yo'q — qoldiqni 'Kirim' orqali qo'shing",
                 "SHOP_NO_BATCH",
             )
-        session.add(
-            ShopBatch(
-                hotel_id=h_id,
-                product_id=product_id,
-                quantity=diff,
-                remaining=diff,
-                cost_price=last.cost_price,
-                sale_price=last.sale_price,
-                created_by=current_user["id"],
-            )
+        extra = ShopBatch(
+            hotel_id=h_id,
+            product_id=product_id,
+            quantity=diff,
+            remaining=diff,
+            cost_price=last.cost_price,
+            sale_price=last.sale_price,
+            created_by=current_user["id"],
         )
+        session.add(extra)
+        await session.flush()
+        parts = [_batch_part(extra, diff)]
 
     # quantity ishorali: musbat — chiqarildi (kamomad), manfiy — qo'shildi
     session.add(
@@ -1009,6 +1105,7 @@ async def inventory_product(
             quantity=-diff,
             reason=reason,
             created_by=current_user["id"],
+            batches=parts,
         )
     )
     await session.flush()

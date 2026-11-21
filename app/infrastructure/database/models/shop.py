@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -198,6 +199,13 @@ class ShopWriteoff(BranchScoped, FullMixin, Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Qaysi partiyadan qancha chiqqani (yoki inventarizatsiyada qaysi
+    #: partiya qo'shilgani): [{"batch_id", "quantity", "cost_price",
+    #: "sale_price"}] — zararni ANIQ tannarxda hisoblash uchun
+    #: (shop_profit_service). Eski yozuvlarda bo'sh — o'rtacha tannarx olinadi.
+    batches: Mapped[Optional[list]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
     )
 
     product: Mapped["ShopProduct"] = relationship("ShopProduct")
