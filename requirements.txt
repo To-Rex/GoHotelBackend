@@ -19,3 +19,8 @@ opencv-python-headless>=4.9
 numpy>=1.26
 # Hujjat skaneri (PP-OCR ONNX modellari app/assets/ocr ichida)
 onnxruntime>=1.17
+# AI yordamchi ("Yordamchi" sahifasi): ChatGPT/DeepSeek/Deploy.com (OpenAI mos) va Claude
+openai>=3.57.0
+anthropic>=2.12.0
+# Yordamchi Excel hisobotlari
+openpyxl>=3.1.5

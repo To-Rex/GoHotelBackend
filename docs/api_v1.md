@@ -2605,6 +2605,39 @@ A cashier may hand over the drawer **up to a daily cut** instead of "everything 
 
 ---
 
+### AI Assistant
+
+All endpoints are under `/api/v1/ai`. Access rules: chat, plans, files — only
+employees enabled by the configurator (configurator and super admin always);
+settings — configurator / super admin; usage and per-employee limits —
+admin, super admin, configurator; incidents — super admin and configurator.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/ai/me` | Access flags (`allowed`, `reason`, `can_configure`, `can_manage_usage`, `can_view_incidents`), provider/model, month limits |
+| GET / PUT | `/ai/settings` | Provider, model, `base_url`, `api_key` (write-only; response has `has_key`, `key_hint`), limits, prices, `mask_sensitive`, `enabled` |
+| GET / PUT | `/ai/settings/members` | Who may use the assistant (`allowed`) and personal `monthly_limit` |
+| POST | `/ai/settings/test` | Test connection with saved or overridden provider/model/key |
+| POST | `/ai/settings/models` | List models from the provider API |
+| GET | `/ai/usage?month=YYYY-MM` | Token usage per employee, daily totals, cost |
+| PUT | `/ai/usage/limits` | Set personal monthly limits `{items:[{user_id, monthly_limit}]}` |
+| GET | `/ai/incidents?reviewed=&category=` | Dangerous requests: question, answer, category, source |
+| POST | `/ai/incidents/{id}/review` | Mark reviewed `{reviewed: bool}` |
+| GET / POST | `/ai/conversations` | Own conversations (search `q`) / create |
+| GET / PATCH / DELETE | `/ai/conversations/{id}` | History with current action-card states / rename / hide |
+| POST | `/ai/conversations/{id}/messages` | **SSE stream.** Body `{text, pages?, continue_action?}`. Events: `user`, `start`, `delta`, `block`, `step`, `done`, `error`. 429 `AI_LIMIT_REACHED`, 409 `AI_BUSY` |
+| POST | `/ai/conversations/{id}/stop` | Stop the running answer |
+| GET | `/ai/actions/{id}` | Action card |
+| POST | `/ai/actions/{id}/confirm` | Execute with the user's own token; body `{values?}` (form edits). 409 if already processing |
+| POST | `/ai/actions/{id}/reject` | Reject a proposed card |
+| POST | `/ai/actions/{id}/undo` | Undo an executed card (plan saved at execution) |
+| GET | `/ai/files/{id}` | Download a generated Excel file |
+| GET / POST | `/ai/plans` | Own plans (`status=recent|open|done|cancelled`) / create `{title, kind, due_at?, note?}` (`due_at` — hotel local `YYYY-MM-DDTHH:MM`) |
+| PATCH | `/ai/plans/{id}` | Update/complete/cancel/reschedule |
+| GET | `/ai/plans/due` | Due open reminders (in-app notifications) |
+
+---
+
 ### Notifications
 
 **GET /notifications**

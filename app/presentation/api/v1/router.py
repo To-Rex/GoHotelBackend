@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.presentation.api.v1 import (
+    ai,
     apps,
     auth,
     hotels,
@@ -68,6 +69,7 @@ api_router.include_router(messages.router, prefix="/messages", tags=["Staff Mess
 api_router.include_router(vision.router, prefix="/vision", tags=["Vision / Guest Face"])
 api_router.include_router(devices.router, prefix="/devices", tags=["Trusted Devices"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["Guest Feedback"])
+api_router.include_router(ai.router, prefix="/ai", tags=["AI Assistant"])
 
 # Boshqaruv paneli — alohida modul (app/superadmin), o'z kirishi bilan
 from app.superadmin.router import router as superadmin_router  # noqa: E402

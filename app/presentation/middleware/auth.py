@@ -21,6 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 security = HTTPBearer(auto_error=False)
 
+#: Filial yozuv qulfi olinmaydigan yo'llar (pastdagi izohga qarang)
+LOCK_EXEMPT_PREFIXES = ("/api/v1/ai/",)
+
 
 async def get_current_user(
     request: Request,
@@ -108,7 +111,18 @@ async def get_current_user(
     # bo'lmaydi. O'QISH so'rovlari qulflanmaydi — faqat yozuvlar
     # seriallashadi, navbat esa qisqa tranzaksiyalar uchun sezilmaydi.
     # Batafsil: app/infrastructure/tenant/branch_scope.py
-    if hotel_id and branch_id and request.method in MUTATING_METHODS:
+    #
+    # AI yordamchi yo'llari qulf olmaydi: ular faqat o'z jadvallariga yozadi,
+    # biznes amalini esa ICHKI so'rov bilan bajaradi — o'sha so'rov qulfni
+    # o'zi oladi. Tashqi so'rov qulfni ushlab tursa, ichkisi uni abadiy
+    # kutib qolardi (app/application/services/ai/executor.py).
+    path = request.scope.get("path") or request.url.path
+    if (
+        hotel_id
+        and branch_id
+        and request.method in MUTATING_METHODS
+        and not path.startswith(LOCK_EXEMPT_PREFIXES)
+    ):
         await acquire_branch_write_lock(session, hotel_id, branch_id)
 
     current_user = {

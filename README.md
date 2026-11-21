@@ -659,6 +659,46 @@ ham o'zgartiradi. Miqdor va qoldiq o'zgarmaydi. Har o'zgarish audit
 jurnalida (`shop_batch_prices`, nimadan nimaga). Test:
 `pytest tests/test_shop_prices.py`.
 
+### AI yordamchi ("Yordamchi" sahifasi)
+
+Xodim chatda savol beradi, hisobot/grafik/Excel oladi va ish buyuradi
+(bron, xarajat, to'lov, vazifa...). Provayderlar: ChatGPT (OpenAI),
+Claude (Anthropic), DeepSeek, Deploy.com va OpenAI bilan mos "Boshqa"
+API — `app/application/services/ai/providers.py`. Kod va qoidalar:
+`app/application/services/ai/` (har modul boshida izoh).
+
+- **Sozlash** (`/ai/settings*`) — faqat sozlovchi va tizim ma'muri:
+  provider, model, API kalit (Fernet bilan shifrlanadi, javobda faqat
+  oxirgi 4 belgi), limitlar, narx, shaxsiy ma'lumotni yashirish, kim
+  foydalanadi. Ro'yxatda yo'q xodim — hatto administrator — yordamchini
+  ko'rmaydi; sozlovchi va tizim ma'muri doim foydalana oladi.
+- **Xavfsizlik:** AI bazaga to'g'ridan-to'g'ri tegmaydi. O'qish — ruxsat
+  etilgan GET yo'llari, xodimning O'Z tokeni bilan jarayon ichidagi API
+  so'rovi (`executor.py`) + frontend sahifa ruxsatlariga mos qo'shimcha
+  siyosat (`catalog.READ_POLICY`). Yozish — faqat `catalog.ACTIONS`
+  registridagi amallar, karta orqali, xodim tasdiqlaganda; DELETE va
+  sozlama/ruxsat o'zgartirish registrda yo'q. Parol/kalit har doim,
+  pasport kabi shaxsiy maydonlar sozlama bo'yicha yashiriladi.
+- **Orqaga qaytarish:** bajarilgan karta uchun reja saqlanadi (bekor
+  qilish, yaratilganini o'chirish, oldingi qiymatga qaytarish). AI
+  yaratgan bronni o'sha xodim 30 daqiqa ichida, mehmon kirmagan va to'lov
+  bo'lmagan holda "bekor qilish" ruxsatisiz ham qaytaradi (audit:
+  `AI_UNDO`).
+- **Xavfli so'rovlar jurnali** (`/ai/incidents`) — tizim ma'muri va
+  sozlovchiga: savol, berilgan javob, toifa (evristika, model yoki server
+  aniqlagan).
+- **Token sarfi va limit** (`/ai/usage`) — administrator ham ko'radi va
+  xodimga limit qo'yadi; xodim o'z sarfini `/ai/me` da ko'radi. Oylik
+  (mahalliy oy) xodim va mehmonxona limiti; tugasa — 429.
+- **Rejalar** (`/ai/plans`) — eslatma/ish/qayd; vaqti kelganda push
+  (`scheduler._ai_plans_loop`) va sayt ichida (`/ai/plans/due`).
+- Javob oqim bilan (SSE): `POST /ai/conversations/{id}/messages`. AI
+  yo'llari filial yozuv qulfini olmaydi (`LOCK_EXEMPT_PREFIXES`) — ichki
+  so'rov qulfni o'zi oladi.
+
+Test: `pytest tests/test_ai_assistant.py` (provayder SDK'lari soxta HTTP
+oqim bilan sinovdan o'tadi).
+
 ### To'lovlar ro'yxati — har to'lov NIMA UCHUN (xona, jarima, qarz, do'kon)
 
 `GET /finance/payments` (sahifalangan, `invoice_id` siz) har qatorni to'lov

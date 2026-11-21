@@ -149,10 +149,23 @@ async def _capture_request_body(request: Request) -> str | None:
     except Exception:
         return "<tana o'qilmadi>"
 
-    async def _replay() -> dict:
-        return {"type": "http.request", "body": raw, "more_body": False}
+    # `app.middleware("http")` (BaseHTTPMiddleware) o'qilgan tanani o'zi
+    # keshlaydi va endpointga qayta beradi (`wrapped_receive`). U holda
+    # kanalni almashtirmaymiz: almashtirilsa, oqimli javob (SSE) mijoz
+    # uzilishini kuzatganda yana "http.request" olib, xato bilan yiqilardi.
+    if not hasattr(request, "wrapped_receive"):
+        original_receive = request._receive  # noqa: SLF001
+        replayed = False
 
-    request._receive = _replay  # noqa: SLF001 — oqimni tiklashning yagona yo'li
+        async def _replay() -> dict:
+            # Tana BIR MARTA; keyin — asl kanal ("http.disconnect")
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": raw, "more_body": False}
+            return await original_receive()
+
+        request._receive = _replay  # noqa: SLF001 — oqimni tiklashning yagona yo'li
 
     if not raw:
         return None

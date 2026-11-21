@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 _task: asyncio.Task | None = None
 _purge_task: asyncio.Task | None = None
+_ai_plans_task: asyncio.Task | None = None
+
+#: Yordamchi rejalari (eslatmalar) tekshiruvi oralig'i
+AI_PLANS_INTERVAL_SECONDS = 60
 
 #: Muddati o'tgan yuz ko'rinishlarini tozalash oralig'i. Soatiga bir marta
 #: yetarli: yozuvlar 12 soat yashaydi va bir necha soat ortiqcha turishi
@@ -99,12 +103,36 @@ async def _purge_sightings_loop() -> None:
                 logger.exception("Yuz ko'rinishlarini tozalash tiki muvaffaqiyatsiz")
 
 
+async def _ai_plans_loop() -> None:
+    """Yordamchi rejalari: vaqti kelgan eslatmalarga bildirishnoma (push).
+
+    Avtomatlashtirish sozlamasidan mustaqil — eslatma xodimning o'z rejasi.
+    """
+    from app.application.services.ai.plans_service import run_due_tick
+
+    logger.info("AI rejalari eslatmasi ishga tushdi (interval=%ss)", AI_PLANS_INTERVAL_SECONDS)
+    while True:
+        try:
+            await asyncio.sleep(AI_PLANS_INTERVAL_SECONDS)
+            await run_due_tick()
+        except asyncio.CancelledError:
+            logger.info("AI rejalari eslatmasi to'xtatilmoqda")
+            break
+        except Exception as exc:
+            if is_connection_lost(exc):
+                logger.warning("AI rejalari tiki o'tkazib yuborildi — baza mavjud emas: %s", short_error(exc))
+            else:
+                logger.exception("AI rejalari tiki muvaffaqiyatsiz")
+
+
 def start_scheduler() -> None:
-    global _task, _purge_task
+    global _task, _purge_task, _ai_plans_task
     # Tozalash avtomatlashtirishdan MUSTAQIL: u ma'lumot saqlash muddatini
     # ta'minlaydi, bron chiqishini emas.
     if _purge_task is None:
         _purge_task = asyncio.create_task(_purge_sightings_loop())
+    if _ai_plans_task is None:
+        _ai_plans_task = asyncio.create_task(_ai_plans_loop())
     if not settings.AUTO_CHECKOUT_ENABLED:
         logger.info("Auto-checkout scheduler disabled (AUTO_CHECKOUT_ENABLED=false)")
         return
@@ -114,8 +142,8 @@ def start_scheduler() -> None:
 
 
 async def stop_scheduler() -> None:
-    global _task, _purge_task
-    for task in (_task, _purge_task):
+    global _task, _purge_task, _ai_plans_task
+    for task in (_task, _purge_task, _ai_plans_task):
         if task is None:
             continue
         task.cancel()
@@ -125,3 +153,4 @@ async def stop_scheduler() -> None:
             pass
     _task = None
     _purge_task = None
+    _ai_plans_task = None
