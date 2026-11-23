@@ -101,6 +101,47 @@ statuses = [
 ]
 check("holat bo'yicha desc", statuses == sorted(statuses, reverse=True), True)
 
+print("Holat ifodasi (bir nechta kod, oraliq, chiqarib tashlash):")
+P = api_log.parse_status
+check("bo'sh — filtr yo'q", (P(None), P(""), P(" , ")), (None, None, None))
+check("tushunilmagan — filtr yo'q", P("abc,99,6xx"), None)
+check("aniq kodlar", P("400, 401,422").include, ((400, 401), (401, 402), (422, 423)))
+check("sinf", P("4xx").include, ((400, 500),))
+check("oraliq (teskari ham)", (P("500-504").include, P("504-500").include), (((500, 505),), ((500, 505),)))
+check("chiqarib tashlash", P("!200,-304").exclude, ((200, 201), (304, 305)))
+f = P("4xx,!401")
+check("4xx, 401 siz", [f.matches(c) for c in (400, 401, 422, 500, 200)], [True, False, True, False, False])
+f = P("!200,!304")
+check("200 va 304 dan boshqasi", [f.matches(c) for c in (200, 304, 201, 404, 500)], [False, False, True, True, True])
+check("metodlar ro'yxati", api_log.parse_methods(" get,POST ,"), frozenset({"GET", "POST"}))
+
+api_log.clear()
+for st, m in [(200, "GET"), (200, "GET"), (201, "POST"), (304, "GET"), (400, "POST"),
+              (401, "GET"), (401, "GET"), (422, "POST"), (500, "PUT")]:
+    api_log._record(method=m, path=f"/api/v1/x/{st}", status=st, duration_ms=1.0, ip=None,
+                    request_body=None, response_body=None, hotel_id="h1")
+
+
+def codes(**kw):
+    return sorted(r["status"] for r in api_log.snapshot(**kw)["items"])
+
+
+check("bir nechta kod: 400,401,422", codes(status="400,401,422"), [400, 401, 401, 422])
+check("eski shakl ham ishlaydi: 4xx", codes(status="4xx"), [400, 401, 401, 422])
+check("chiqarib tashlash: !200,!304", codes(status="!200,!304"), [201, 400, 401, 401, 422, 500])
+check("oraliq: 400-422", codes(status="400-422"), [400, 401, 401, 422])
+check("bir nechta metod: POST,PUT", codes(method="POST,PUT"), [201, 400, 422, 500])
+snap = api_log.snapshot(status="422")
+check("holat soni — holat filtrisiz", snap["status_counts"],
+      {"200": 2, "201": 1, "304": 1, "400": 1, "401": 2, "422": 1, "500": 1})
+check("mos yozuvlar soni (limitdan oldin)", (snap["matched_total"], api_log.snapshot(limit=2)["matched_total"]), (1, 9))
+check("holat soni boshqa filtrga bo'ysunadi", api_log.snapshot(method="GET")["status_counts"],
+      {"200": 2, "304": 1, "401": 2})
+check("oxirgi N daqiqa — hammasi yangi", len(api_log.snapshot(since_minutes=5)["items"]), 9)
+api_log._entries[0]["ts"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+check("oxirgi N daqiqa — eskisi tushib qoladi", len(api_log.snapshot(since_minutes=60)["items"]), 8)
+check("xotiradagi xato id lari", len(api_log.live_error_ids()), 5)
+
 print("Yozib olinmaydiganlar:")
 check("OPTIONS", api_log._should_capture("OPTIONS", "/api/v1/rooms"), False)
 check(
@@ -269,6 +310,13 @@ async def _db_checks():
         check("filtr: url", len(await api_log.stored_errors(s, q="RESERV")), 1)
         check("filtr: kompaniya", len(await api_log.stored_errors(s, hotel_id="h2")), 0)
         check("filtr: metod", len(await api_log.stored_errors(s, method="get")), 0)
+        check("filtr: bir nechta metod", len(await api_log.stored_errors(s, method="get,post")), 1)
+        check("filtr: kodlar ro'yxati", len(await api_log.stored_errors(s, status="404,500")), 1)
+        check("filtr: chiqarib tashlash", len(await api_log.stored_errors(s, status="!500")), 0)
+        check("filtr: oraliq", len(await api_log.stored_errors(s, status="500-504")), 1)
+        check("filtr: oxirgi 60 daqiqa", len(await api_log.stored_errors(s, since_minutes=60)), 1)
+        check("bazada soni kod bo'yicha", await api_log.stored_status_counts(s), {500: 1})
+        check("soni: xotiradagisi sanalmaydi", await api_log.stored_status_counts(s, exclude_ids=[fresh["id"]]), {})
 
     async with factory() as s:
         await api_log.purge(s)
@@ -289,6 +337,10 @@ async def _db_checks():
     snap = api_log.snapshot(extra=rows)
     check("tartib — eng yangisi birinchi", snap["items"][0]["id"], newer["id"])
     check("filtr saqlanganga ham: 5xx", [r["id"] for r in api_log.snapshot(status="5xx", extra=rows)["items"]], [fresh["id"]])
+    api_log.clear()
+    snap = api_log.snapshot(status="!500", extra=rows, extra_counts={500: 1})
+    check("saqlangan: chiqarib tashlash ishlaydi", snap["items"], [])
+    check("saqlangan: soni baribir ko'rinadi", snap["status_counts"], {"500": 1})
     api_log.persist_enabled = False
     await engine.dispose()
 

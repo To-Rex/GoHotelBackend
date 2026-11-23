@@ -821,10 +821,19 @@ async def list_api_logs(
         default=api_log.MAX_ENTRIES, ge=1,
         le=api_log.MAX_ENTRIES + api_log.STORED_MAX_ROWS,
     ),
-    method: str | None = Query(default=None),
-    status: str | None = Query(default=None, description="2xx..5xx yoki aniq kod"),
+    method: str | None = Query(default=None, description="GET yoki bir nechtasi: GET,POST"),
+    status: str | None = Query(
+        default=None,
+        description=(
+            "Holat ifodasi, vergul bilan: aniq kod (404), sinf (4xx), oraliq "
+            "(500-504); oldida ! — chiqarib tashlash. Masalan: 400,401,422 yoki !200,!304"
+        ),
+    ),
     q: str | None = Query(default=None, description="URL bo'yicha qidiruv"),
     hotel_id: str | None = Query(default=None, description="Mehmonxona (kompaniya) ID"),
+    since_minutes: int | None = Query(
+        default=None, ge=1, le=60 * 24 * 31, description="Faqat oxirgi N daqiqa"
+    ),
     sort: str = Query(default="ts", description="ts | duration_ms | status | method | path"),
     order: str = Query(default="desc", description="asc | desc"),
     _: PanelUser = Depends(current_panel_user),
@@ -837,13 +846,18 @@ async def list_api_logs(
     `API_ERROR_LOG_RETENTION_DAYS` kun saqlanadi va shu yerda jonli
     yozuvlar bilan birga (`stored: true`) qaytadi — baza yotgan bo'lsa
     faqat jonli jurnal. Sir maydonlar niqoblangan.
+
+    `status_counts` — holatdan boshqa filtrlarga mos yozuvlar soni kod
+    bo'yicha (panelda kodlarni sonlari bilan tanlash uchun).
     """
-    stored = await api_log.load_stored_errors(
-        method=method, status=status, q=q, hotel_id=hotel_id,
+    base = {"method": method, "q": q, "hotel_id": hotel_id, "since_minutes": since_minutes}
+    stored = await api_log.load_stored_errors(status=status, **base)
+    stored_counts = await api_log.load_stored_status_counts(
+        exclude_ids=api_log.live_error_ids(), **base
     )
     return api_log.snapshot(
-        limit=limit, method=method, status=status, q=q,
-        hotel_id=hotel_id, sort=sort, order=order, extra=stored,
+        limit=limit, status=status, sort=sort, order=order,
+        extra=stored, extra_counts=stored_counts, **base,
     )
 
 

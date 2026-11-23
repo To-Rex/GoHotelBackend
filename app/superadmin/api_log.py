@@ -33,11 +33,12 @@ import re
 import time
 import traceback
 import uuid
-from collections import deque
+from collections import Counter, deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 from starlette.responses import Response
@@ -416,18 +417,113 @@ async def persist(entry: dict, session_factory: Any) -> None:
         await session.commit()
 
 
-def _status_bounds(status: str | None) -> tuple[int, int] | None:
-    """"2xx".."5xx" (sinf) yoki aniq kod ("404") → [low, high) oralig'i."""
-    if not status:
-        return None
-    s = status.strip().lower()
-    if len(s) == 3 and s.endswith("xx") and s[0].isdigit():
+# ---------------------------------------------------------------- filtrlar
+
+#: Bitta holat ifodasidagi bo'laklar chegarasi (URL cheksiz o'smasin).
+STATUS_TOKENS_MAX = 40
+
+_STATUS_RANGE = re.compile(r"(\d{3})\s*-\s*(\d{3})")
+
+
+def _status_token(token: str) -> tuple[int, int] | None:
+    """Bitta bo'lak → [low, high) oralig'i: "404", "4xx" (sinf), "500-504"."""
+    s = token.strip().lower()
+    if len(s) == 3 and s.endswith("xx") and s[0] in "12345":
         low = int(s[0]) * 100
         return low, low + 100
-    if s.isdigit():
+    if len(s) == 3 and s.isdigit():
         code = int(s)
         return code, code + 1
+    m = _STATUS_RANGE.fullmatch(s)
+    if m:
+        a, b = sorted((int(m.group(1)), int(m.group(2))))
+        return a, b + 1
     return None
+
+
+@dataclass(frozen=True)
+class StatusFilter:
+    """Holat filtri: `include` dan biriga tushadi (bo'sh — hammasi) VA
+    `exclude` ning hech biriga tushmaydi."""
+
+    include: tuple[tuple[int, int], ...] = ()
+    exclude: tuple[tuple[int, int], ...] = ()
+
+    def matches(self, code: int) -> bool:
+        if self.include and not any(lo <= code < hi for lo, hi in self.include):
+            return False
+        return not any(lo <= code < hi for lo, hi in self.exclude)
+
+    def clause(self, column: Any) -> Any:
+        conds = []
+        if self.include:
+            conds.append(or_(*(and_(column >= lo, column < hi) for lo, hi in self.include)))
+        conds.extend(not_(and_(column >= lo, column < hi)) for lo, hi in self.exclude)
+        return and_(*conds)
+
+
+def parse_status(expr: str | None) -> StatusFilter | None:
+    """Holat ifodasi — vergul bilan ajratilgan bo'laklar:
+
+    "404" (aniq kod), "4xx" (sinf), "500-504" (oraliq); oldida "!" bo'lsa —
+    chiqarib tashlanadi. Masalan "400,401,422" — shu uchtasi; "4xx,!401" —
+    401 siz mijoz xatolari; "!200,!304" — 200 va 304 dan boshqa hammasi.
+    Tushunilmagan bo'lak e'tiborsiz qoladi; hech narsa tushunilmasa — filtr yo'q.
+    """
+    if not expr:
+        return None
+    include: list[tuple[int, int]] = []
+    exclude: list[tuple[int, int]] = []
+    for raw in expr.split(",")[:STATUS_TOKENS_MAX]:
+        token = raw.strip()
+        negate = token.startswith(("!", "-")) and not _STATUS_RANGE.fullmatch(token)
+        bounds = _status_token(token[1:] if negate else token)
+        if bounds:
+            (exclude if negate else include).append(bounds)
+    if not include and not exclude:
+        return None
+    return StatusFilter(tuple(include), tuple(exclude))
+
+
+def parse_methods(expr: str | None) -> frozenset[str]:
+    """"GET" yoki "GET,POST" → {"GET", "POST"}; bo'sh — hammasi."""
+    if not expr:
+        return frozenset()
+    return frozenset(m.strip().upper() for m in expr.split(",") if m.strip())
+
+
+def since_cutoff(minutes: int | None) -> datetime | None:
+    """"Oxirgi N daqiqa" filtri uchun chegara (UTC)."""
+    if not minutes or minutes <= 0:
+        return None
+    return datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+
+def _ts(entry: dict) -> datetime:
+    ts = datetime.fromisoformat(entry["ts"])
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
+def _matches_base(
+    row: dict,
+    methods: frozenset[str],
+    q: str | None,
+    hotel_id: str | None,
+    since: datetime | None,
+) -> bool:
+    """Holatdan boshqa filtrlar (holat soni shu to'plam bo'yicha sanaladi)."""
+    if methods and row["method"] not in methods:
+        return False
+    if q and q.lower() not in row["path"].lower():
+        return False
+    if hotel_id and row.get("hotel_id") != hotel_id:
+        return False
+    return not (since and _ts(row) < since)
+
+
+def live_error_ids() -> list[str]:
+    """Xotiradagi xato yozuvlari — bazadagi nusxasi sanoqda takrorlanmasin."""
+    return [r["id"] for r in list(_entries) if r["status"] >= ERROR_STATUS_FROM]
 
 
 def _row_to_entry(row: Any) -> dict:
@@ -454,6 +550,29 @@ def _row_to_entry(row: Any) -> dict:
     }
 
 
+def _stored_base(
+    stmt: Any,
+    model: Any,
+    *,
+    method: str | None,
+    q: str | None,
+    hotel_id: str | None,
+    since_minutes: int | None,
+) -> Any:
+    stmt = stmt.where(model.ts >= _cutoff())
+    methods = parse_methods(method)
+    if methods:
+        stmt = stmt.where(model.method.in_(sorted(methods)))
+    if q:
+        stmt = stmt.where(model.path.ilike(f"%{q}%"))
+    if hotel_id:
+        stmt = stmt.where(model.hotel_id == hotel_id)
+    since = since_cutoff(since_minutes)
+    if since:
+        stmt = stmt.where(model.ts >= since)
+    return stmt
+
+
 async def stored_errors(
     session: AsyncSession,
     *,
@@ -461,25 +580,49 @@ async def stored_errors(
     status: str | None = None,
     q: str | None = None,
     hotel_id: str | None = None,
+    since_minutes: int | None = None,
     limit: int = STORED_MAX_ROWS,
 ) -> list[dict]:
     """Bazadagi xatolar (saqlash muddati ichida) — jonli jurnal bilan bir xil
-    filtrlar; eng yangisi birinchi."""
+    filtrlar; eng yangisi birinchi. Holat filtri SQL'da — 2000 talik chegara
+    tanlangan holatlar ichida qo'llanadi (ko'p 401 lar kerakli 422 ni siqib
+    chiqarmaydi)."""
     from app.infrastructure.database.models.api_error_log import ApiErrorLog
 
-    stmt = select(ApiErrorLog).where(ApiErrorLog.ts >= _cutoff())
-    if method:
-        stmt = stmt.where(ApiErrorLog.method == method.upper())
-    bounds = _status_bounds(status)
-    if bounds:
-        stmt = stmt.where(ApiErrorLog.status >= bounds[0], ApiErrorLog.status < bounds[1])
-    if q:
-        stmt = stmt.where(ApiErrorLog.path.ilike(f"%{q}%"))
-    if hotel_id:
-        stmt = stmt.where(ApiErrorLog.hotel_id == hotel_id)
+    stmt = _stored_base(
+        select(ApiErrorLog), ApiErrorLog,
+        method=method, q=q, hotel_id=hotel_id, since_minutes=since_minutes,
+    )
+    sf = parse_status(status)
+    if sf:
+        stmt = stmt.where(sf.clause(ApiErrorLog.status))
     stmt = stmt.order_by(ApiErrorLog.ts.desc()).limit(limit)
     rows = (await session.execute(stmt)).scalars().all()
     return [_row_to_entry(r) for r in rows]
+
+
+async def stored_status_counts(
+    session: AsyncSession,
+    *,
+    method: str | None = None,
+    q: str | None = None,
+    hotel_id: str | None = None,
+    since_minutes: int | None = None,
+    exclude_ids: list[str] | None = None,
+) -> dict[int, int]:
+    """Bazadagi xatolar soni holat kodi bo'yicha (holat filtrisiz — panel
+    har bir kod yonida nechta yozuv borligini ko'rsatadi). Xotirada ham
+    turgan yozuvlar (`exclude_ids`) sanalmaydi — ular jonli qismda sanaladi."""
+    from app.infrastructure.database.models.api_error_log import ApiErrorLog
+
+    stmt = _stored_base(
+        select(ApiErrorLog.status, func.count()), ApiErrorLog,
+        method=method, q=q, hotel_id=hotel_id, since_minutes=since_minutes,
+    )
+    if exclude_ids:
+        stmt = stmt.where(ApiErrorLog.id.notin_(exclude_ids))
+    stmt = stmt.group_by(ApiErrorLog.status)
+    return {int(code): int(n) for code, n in (await session.execute(stmt)).all()}
 
 
 async def load_stored_errors(**filters: Any) -> list[dict]:
@@ -497,6 +640,20 @@ async def load_stored_errors(**filters: Any) -> list[dict]:
         return []
 
 
+async def load_stored_status_counts(**filters: Any) -> dict[int, int]:
+    """`stored_status_counts` — o'z sessiyasi bilan; baza yotgan bo'lsa bo'sh."""
+    if retention_days() <= 0:
+        return {}
+    try:
+        from app.core.database import _get_session_factory
+
+        async with _get_session_factory()() as session:
+            return await stored_status_counts(session, **filters)
+    except Exception as exc:
+        logger.debug("Saqlangan xatolar soni o'qilmadi: %s", short_error(exc))
+        return {}
+
+
 # ------------------------------------------------------------------ nusxa
 
 
@@ -509,34 +666,55 @@ def snapshot(
     sort: str = "ts",
     order: str = "desc",
     extra: list[dict] | None = None,
+    since_minutes: int | None = None,
+    extra_counts: dict[int, int] | None = None,
 ) -> dict:
     """Jurnal nusxasi — filtrlar, saralash va eng yangi birinchi.
 
-    `status`: "2xx".."5xx" (sinf) yoki aniq kod ("404").
+    `method`: "GET" yoki bir nechtasi ("GET,POST").
+    `status`: holat ifodasi — `parse_status` (aniq kod, sinf, oraliq, "!").
+    `since_minutes`: faqat oxirgi N daqiqa.
     `sort`: ts | duration_ms | status | method | path; `order`: asc | desc.
     `extra`: bazadan o'qilgan saqlangan xatolar (`stored_errors`) — jonli
     jurnalga qo'shiladi; xotirada hali turgan nusxasi takrorlanmaydi.
+    `extra_counts`: bazadagi xatolar soni kod bo'yicha (`stored_status_counts`).
+
+    `status_counts` — holatdan BOSHQA filtrlarga mos yozuvlar soni kod
+    bo'yicha: panel kodlarni sonlari bilan ko'rsatadi, tanlov o'zgarsa ham
+    qolgan kodlar yo'qolib qolmaydi. `matched_total` — chegara (`limit`)
+    qo'llanishidan oldingi mos yozuvlar soni.
     Avval nusxa olinadi: middleware yozayotgan paytda iteratsiya
     yiqilmasligi uchun.
     """
-    rows = list(_entries)
-    rows.reverse()
+    live = list(_entries)
+    live.reverse()
+    live_ids = {r["id"] for r in live}
 
-    if method:
-        m = method.upper()
-        rows = [r for r in rows if r["method"] == m]
-    bounds = _status_bounds(status)
-    if bounds:
-        rows = [r for r in rows if bounds[0] <= r["status"] < bounds[1]]
-    if q:
-        needle = q.lower()
-        rows = [r for r in rows if needle in r["path"].lower()]
-    if hotel_id:
-        rows = [r for r in rows if r.get("hotel_id") == hotel_id]
+    methods = parse_methods(method)
+    since = since_cutoff(since_minutes)
+    sf = parse_status(status)
 
+    rows = [r for r in live if _matches_base(r, methods, q, hotel_id, since)]
+    counts: Counter[int] = Counter(r["status"] for r in rows)
+    if extra_counts is not None:
+        for code, n in extra_counts.items():
+            counts[int(code)] += int(n)
+    elif extra:
+        # Soni berilmagan — qo'lda berilgan saqlangan yozuvlardan sanaladi
+        counts.update(
+            r["status"] for r in extra
+            if r["id"] not in live_ids and _matches_base(r, methods, q, hotel_id, since)
+        )
+
+    if sf:
+        rows = [r for r in rows if sf.matches(r["status"])]
     if extra:
-        live_ids = {r["id"] for r in _entries}
-        rows.extend(r for r in extra if r["id"] not in live_ids)
+        rows.extend(
+            r for r in extra
+            if r["id"] not in live_ids
+            and _matches_base(r, methods, q, hotel_id, since)
+            and (sf is None or sf.matches(r["status"]))
+        )
 
     sort_key = {
         "ts": "ts",
@@ -553,6 +731,8 @@ def snapshot(
 
     return {
         "items": rows[:limit],
+        "matched_total": len(rows),
+        "status_counts": {str(code): n for code, n in sorted(counts.items())},
         "captured_total": _captured_total,
         "max_entries": MAX_ENTRIES,
         "stored_errors": len(extra or []),
