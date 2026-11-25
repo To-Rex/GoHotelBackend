@@ -677,6 +677,12 @@ sozlovchi / tizim ma'muri). Yoqilmagan filialda hech narsa o'zgarmaydi.
   (fiskal modul ulangan kompyuter «Fiskal» tugmasida belgilanadi) yoki «server
   orqali» (`POST /fiscal/relay`, faqat internetdagi manzil — sinov muhiti).
 - Bosma chekda (TPrints) soliq havolasi QR kod bo'lib chiqadi.
+- E-POS TOKEN har kompaniya/filialniki (standart token yo'q, tokensiz yoqib
+  bo'lmaydi). Bazada faqat SHIFRLANGAN holda turadi (`fiscal_crypto`, Fernet),
+  javoblarda qaytmaydi (faqat oxirgi 4 belgisi). "Server orqali" rejimida token
+  serverdan chiqmaydi; "brauzerdan" rejimida faqat to'lov qabul qiladigan xodimga
+  beriladi (`POST /fiscal/token`, chek so'rovi bilan birga) va brauzerda faqat
+  xotirada turadi.
 - Kod: `app/application/services/fiscal_payload.py` (so'rov tuzish),
   `fiscal_service.py` (navbat), `app/presentation/api/v1/fiscal.py`;
   test: `tests/test_fiscal.py`. Hujjat: E-POS "Universal Communicator" kolleksiyasi.

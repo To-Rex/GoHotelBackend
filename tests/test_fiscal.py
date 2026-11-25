@@ -14,6 +14,8 @@ Nozik joylar:
    asl chekning fiskal ma'lumoti bilan ketadi.
 5. Chekni bir vaqtda ikki qurilma yubora olmaydi; avval yuborilgan bo'lishi
    mumkin bo'lsa — tekshirish talab qilinadi.
+6. Token har filialniki: bazada faqat shifrlangan, javoblarda chiqmaydi,
+   tokensiz yoqib bo'lmaydi; brauzerga faqat "brauzerdan" rejimida beriladi.
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
+from app.application.services import fiscal_crypto  # noqa: E402
 from app.application.services import fiscal_payload as fp  # noqa: E402
 from app.application.services import fiscal_service as fs  # noqa: E402
 from app.application.services.fiscal_service import FiscalService, serialize  # noqa: E402
@@ -53,7 +56,10 @@ from app.infrastructure.database.models.shop import (  # noqa: E402
 from app.infrastructure.database.models.user import User  # noqa: E402
 from tests.test_finance_filters import BRANCH, HOTEL, at, seed  # noqa: E402
 
+TOKEN = "BRANCH-TOKEN-7788"
 BASE = {
+    "token_enc": fiscal_crypto.encrypt(TOKEN),
+    "token_hint": "7788",
     "company_name": "Registon Grand MCHJ",
     "company_address": "Samarqand sh., Registon ko'chasi 1",
     "company_inn": "308 839 903",
@@ -71,13 +77,23 @@ def cfg(**over) -> dict:
 
 def test_resolve_defaults_and_validation():
     empty = fp.resolve(None)
-    assert empty["enabled"] is False and empty["url"] == fp.DEFAULT_URL and empty["token"] == fp.EPOS_TOKEN
+    assert empty["enabled"] is False and empty["url"] == fp.DEFAULT_URL
+    # Standart token YO'Q: har filial o'z tokenini kiritadi
+    assert empty["token_set"] is False and empty["token_enc"] == "" and "token" not in empty
     assert empty["transport"] == "browser" and empty["vat_percent"] == 0 and empty["printer_size"] == 80
     assert empty["methods"] == {"CASH": "cash", "CARD": "card", "ONLINE": "card", "BANK_TRANSFER": "skip"}
     assert empty["auto_open_shift"] is True and empty["epos_prints"] is False
     # Bo'sh sozlamani yoqib bo'lmaydi
     problems = fp.validate(empty)
     assert any("STIR" in p for p in problems) and any("IKPU" in p for p in problems)
+    assert any("token" in p for p in problems)
+    # Javobda token (ochiq ham, shifrlangan ham) chiqmaydi
+    shown = fp.public(cfg())
+    assert "token_enc" not in shown and "token_plain" not in shown
+    assert shown["token_set"] is True and shown["token_hint"] == "7788"
+    # Eski (shifrlanmagan) yozuv ham o'qiladi — keyingi saqlashda shifrlanadi
+    legacy = fp.resolve({"token": "OLD-PLAIN-1234"})
+    assert legacy["token_set"] and legacy["token_plain"] == "OLD-PLAIN-1234" and legacy["token_hint"] == "1234"
 
     ok = cfg(vat_percent=12, printer_size=58, transport="server", methods={"ONLINE": "skip", "BITCOIN": "cash"})
     assert fp.validate(ok) == []
@@ -231,15 +247,39 @@ def test_settings_enable_requires_fields_and_stamps_time():
         svc = FiscalService(session)
         with pytest.raises(ValidationException):
             await svc.save_settings(HOTEL, {"enabled": True})
-        saved = await svc.save_settings(HOTEL, {**BASE, "enabled": True})
+        company = {k: v for k, v in BASE.items() if not k.startswith("token")}
+        # Tokensiz yoqib bo'lmaydi
+        with pytest.raises(ValidationException) as err:
+            await svc.save_settings(HOTEL, {**company, "enabled": True})
+        assert "token" in err.value.detail
+        # Rad etilgan saqlash hech narsa yozmaydi — kompaniya ham qayta beriladi
+        saved = await svc.save_settings(HOTEL, {**company, "enabled": True, "token": "  SECRET-TOKEN-9876  "})
         assert saved["enabled"] and saved["enabled_at"]
+        # Bazada token faqat shifrlangan: ochiq matn hech qayerda yo'q
+        stored = (await session.get(Branch, BRANCH)).settings[fp.SETTINGS_KEY]
+        assert "token" not in stored and "token_plain" not in stored and "SECRET-TOKEN-9876" not in str(stored)
+        assert stored["token_hint"] == "9876" and fiscal_crypto.decrypt(stored["token_enc"]) == "SECRET-TOKEN-9876"
+        assert fs.token_of(saved) == "SECRET-TOKEN-9876" and saved["token_set"]
         stamp = saved["enabled_at"]
         # Qayta saqlash yoqilgan vaqtni o'zgartirmaydi
         again = await svc.save_settings(HOTEL, {"vat_percent": 12})
         assert again["enabled_at"] == stamp and again["vat_percent"] == 12 and again["company_inn"] == "308839903"
+        assert fs.token_of(again) == "SECRET-TOKEN-9876"          # token saqlanib qoladi
+        # Yoqilgan holatda tokenni o'chirib bo'lmaydi; o'chirilgach — mumkin
+        with pytest.raises(ValidationException):
+            await svc.save_settings(HOTEL, {"clear_token": True})
         # O'chirib-yoqilsa — vaqt yangilanadi (oradagi to'lovlar fiskallashmaydi)
         off = await svc.save_settings(HOTEL, {"enabled": False})
         assert off["enabled"] is False and off["enabled_at"] is None
+        cleared = await svc.save_settings(HOTEL, {"clear_token": True})
+        assert cleared["token_set"] is False and fs.token_of(cleared) is None
+        # Eski ochiq yozuv saqlashda shifrlanadi
+        branch = await session.get(Branch, BRANCH)
+        branch.settings = {fp.SETTINGS_KEY: {**company, "token": "OLD-PLAIN-1234"}}
+        await session.commit()
+        moved = await svc.save_settings(HOTEL, {"vat_percent": 0})
+        stored = (await session.get(Branch, BRANCH)).settings[fp.SETTINGS_KEY]
+        assert "token" not in stored and fs.token_of(moved) == "OLD-PLAIN-1234" and stored["token_hint"] == "1234"
         assert (await svc.pending(HOTEL))["enabled"] is False
 
     run(body, settings=None)
@@ -300,7 +340,8 @@ def test_claim_complete_and_refund_links_original():
         (sale,) = await svc.prepare_reservation(HOTEL, ids["aziz"], invoice_id=invoice.id)
         claimed = await svc.claim(HOTEL, sale.id)
         assert claimed["status"] == "sent" and claimed["attempts"] == 1 and claimed["verify"] is False
-        assert claimed["request"]["token"] == fp.EPOS_TOKEN and claimed["request"]["method"] == "fastSale"
+        assert claimed["request"]["token"] == TOKEN and claimed["request"]["method"] == "fastSale"
+        assert await svc.cashier_token(HOTEL) == TOKEN
         # Shu paytda boshqa qurilma ola olmaydi
         with pytest.raises(ConflictException):
             await svc.claim(HOTEL, sale.id)
@@ -433,6 +474,35 @@ def test_shop_sale_receipt_and_cancel_refund():
         assert serialize(row)["status"] == "done"
 
     run(body)
+
+
+def test_token_stays_on_server_in_server_mode_and_is_required():
+    async def server(session, ids):
+        svc = FiscalService(session)
+        invoice = await invoice_of(session)
+        (sale,) = await svc.prepare_reservation(HOTEL, ids["aziz"], invoice_id=invoice.id)
+        claimed = await svc.claim(HOTEL, sale.id)
+        # "Server orqali": token brauzerga bormaydi — uni server o'zi qo'shadi
+        assert "token" not in claimed["request"] and claimed["request"]["method"] == "fastSale"
+        with pytest.raises(ValidationException):
+            await svc.cashier_token(HOTEL)
+
+    run(server, settings={**ENABLED, "transport": "server", "url": "http://integration.epos.uz:8347/uzpos"})
+
+    async def missing(session, ids):
+        svc = FiscalService(session)
+        invoice = await invoice_of(session)
+        (sale,) = await svc.prepare_reservation(HOTEL, ids["aziz"], invoice_id=invoice.id)
+        # Token yo'q (yoki ochilmaydi): chek "yuborilmoqda"ga o'tmaydi, navbatda qoladi
+        with pytest.raises(ValidationException) as err:
+            await svc.claim(HOTEL, sale.id)
+        assert err.value.error_code == "FISCAL_TOKEN_MISSING"
+        row = await session.get(FiscalReceipt, sale.id)
+        assert row.status == "pending" and row.attempts == 0
+        with pytest.raises(ValidationException):
+            await svc.cashier_token(HOTEL)
+
+    run(missing, settings={**{k: v for k, v in ENABLED.items() if not k.startswith("token")}, "token_enc": "buzilgan"})
 
 
 def test_relay_guards():

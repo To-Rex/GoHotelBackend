@@ -23,7 +23,9 @@ from decimal import ROUND_HALF_UP, Decimal
 
 SETTINGS_KEY = "fiscal"
 
-#: E-POS hujjati: "Поле token всегда имеет фиксированное значение"
+#: E-POS SINOV muhiti tokeni (hujjatdagi namuna). Standart sifatida
+#: ISHLATILMAYDI: har kompaniya/filialning o'z tokeni bor, u sozlamada
+#: kiritiladi va bazada shifrlangan holda saqlanadi (fiscal_crypto).
 EPOS_TOKEN = "DXJFX32CN1296678504F2"
 DEFAULT_URL = "http://localhost:8347/uzpos"
 
@@ -91,11 +93,18 @@ def resolve(raw: dict | None) -> dict:
     except (TypeError, ValueError):
         size = 80
     transport = src.get("transport") if src.get("transport") in TRANSPORTS else "browser"
+    token_enc = _text(src.get("token_enc"), 4000)
+    # Eski yozuv (shifrlanmagan) — keyingi saqlashda shifrlanadi
+    token_plain = "" if token_enc else _text(src.get("token"), 300)
     return {
         "enabled": bool(src.get("enabled")),
         "transport": transport,
         "url": _text(src.get("url"), 300) or DEFAULT_URL,
-        "token": _text(src.get("token"), 80) or EPOS_TOKEN,
+        #: Shifrlangan token (ochilishi — fiscal_service.token_of)
+        "token_enc": token_enc,
+        "token_plain": token_plain,
+        "token_hint": _text(src.get("token_hint"), 8) or token_plain[-4:],
+        "token_set": bool(token_enc or token_plain),
         "company_name": _text(src.get("company_name"), 200),
         "company_address": _text(src.get("company_address"), 300),
         "company_inn": _digits(src.get("company_inn"), 14),
@@ -114,6 +123,8 @@ def resolve(raw: dict | None) -> dict:
 def validate(cfg: dict) -> list[str]:
     """Yoqish uchun yetishmayotgan narsalar (bo'sh ro'yxat — hammasi joyida)."""
     errors: list[str] = []
+    if not cfg["token_set"]:
+        errors.append("E-POS tokenini kiriting")
     if not cfg["company_name"]:
         errors.append("Kompaniya nomini kiriting")
     if not cfg["company_address"]:
@@ -350,6 +361,17 @@ def parse_result(body: dict | None) -> dict:
     if not out["fiscal_sign"]:
         return {"ok": False, "error": "E-POS javobida fiskal belgi yo'q"}
     return out
+
+
+#: Javoblarda HECH QACHON chiqmaydigan maydonlar (token — ochiq ham, shifrlangan ham)
+SECRET_FIELDS = ("token_enc", "token_plain")
+#: Bazaga yozilmaydigan (hisoblab chiqariladigan) maydonlar
+DERIVED_FIELDS = ("token_plain", "token_set")
+
+
+def public(cfg: dict) -> dict:
+    """Sozlamaning javobda ko'rsatiladigan qismi — tokensiz."""
+    return {k: v for k, v in cfg.items() if k not in SECRET_FIELDS}
 
 
 def enabled_since(cfg: dict) -> datetime | None:

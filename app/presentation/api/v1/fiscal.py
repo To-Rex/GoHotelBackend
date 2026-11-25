@@ -75,7 +75,9 @@ class SettingsRequest(BaseModel):
     enabled: Optional[bool] = None
     transport: Optional[str] = Field(default=None, pattern="^(browser|server)$")
     url: Optional[str] = Field(default=None, max_length=300)
-    token: Optional[str] = Field(default=None, max_length=80)
+    #: E-POS bergan token — faqat YOZILADI (javoblarda qaytmaydi, bazada shifrlangan)
+    token: Optional[str] = Field(default=None, max_length=300)
+    clear_token: Optional[bool] = None
     company_name: Optional[str] = Field(default=None, max_length=200)
     company_address: Optional[str] = Field(default=None, max_length=300)
     company_inn: Optional[str] = Field(default=None, max_length=20)
@@ -102,7 +104,7 @@ async def fiscal_config(
         "enabled": cfg["enabled"],
         "transport": cfg["transport"],
         "url": cfg["url"],
-        "token": cfg["token"],
+        "token_set": cfg["token_set"],
         "auto_open_shift": cfg["auto_open_shift"],
         "epos_prints": cfg["epos_prints"],
         "company_name": cfg["company_name"],
@@ -121,7 +123,7 @@ async def get_fiscal_settings(
 ):
     assert_can_manage_settings(current_user)
     cfg = await FiscalService(session).config(_hotel_id(current_user, hotel_id))
-    return {**cfg, "problems": fp.validate(cfg), "default_url": fp.DEFAULT_URL}
+    return {**fp.public(cfg), "problems": fp.validate(cfg), "default_url": fp.DEFAULT_URL}
 
 
 @router.put("/settings")
@@ -136,7 +138,25 @@ async def save_fiscal_settings(
     assert_can_manage_settings(current_user)
     payload = data.model_dump(exclude_unset=True)
     cfg = await FiscalService(session).save_settings(_hotel_id(current_user, hotel_id), payload)
-    return {**cfg, "problems": fp.validate(cfg), "default_url": fp.DEFAULT_URL}
+    return {**fp.public(cfg), "problems": fp.validate(cfg), "default_url": fp.DEFAULT_URL}
+
+
+@router.post("/token")
+async def fiscal_token(
+    hotel_id: UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """E-POS token — kassa brauzeri E-POS'ga so'rov yuborishi uchun.
+
+    Faqat to'lov qabul qiladigan xodim va sozlovchiga, faqat "brauzerdan"
+    rejimida. Brauzer uni saqlamaydi (faqat xotirada). POST — bu o'qish
+    so'rovi sifatida keshlanmasin va avtomatik vositalar chaqira olmasin.
+    """
+    if not can_manage_settings(current_user):
+        _ensure_cashier(current_user)
+    token = await FiscalService(session).cashier_token(_hotel_id(current_user, hotel_id))
+    return {"token": token}
 
 
 # -------------------------------------------------------------- navbat --

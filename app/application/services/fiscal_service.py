@@ -31,6 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.application.services import fiscal_crypto
 from app.application.services import fiscal_payload as fp
 from app.application.services import payment_purpose as purpose
 from app.application.services.branch_settings import branch_settings, settings_owner
@@ -83,6 +84,20 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def token_of(cfg: dict) -> str | None:
+    """Filialning E-POS tokeni (ochilgan). Yo'q yoki ochilmasa — `None`."""
+    return fiscal_crypto.decrypt(cfg.get("token_enc")) or cfg.get("token_plain") or None
+
+
+def require_token(cfg: dict) -> str:
+    token = token_of(cfg)
+    if not token:
+        raise ValidationException(
+            "E-POS token kiritilmagan — Sozlamalar → «Fiskal modul (E-POS)»", "FISCAL_TOKEN_MISSING"
+        )
+    return token
+
+
 def serialize(r: FiscalReceipt) -> dict:
     return {
         "id": str(r.id),
@@ -126,7 +141,21 @@ class FiscalService:
             raise NotFoundException("Hotel not found")
         stored = dict((owner.settings or {}).get(fp.SETTINGS_KEY) or {})
         was = fp.resolve(stored)
+        data = dict(data)
+        new_token = str(data.pop("token", None) or "").strip()
+        clear_token = bool(data.pop("clear_token", False))
         merged = fp.resolve({**stored, **data})
+        # Token bazada faqat SHIFRLANGAN holda turadi. Yangi qiymat kelsa —
+        # almashtiriladi; kelmasa — saqlangani qoladi (eski ochiq yozuv bo'lsa
+        # shu yerda shifrlanadi).
+        plain = new_token or (None if clear_token else merged["token_plain"])
+        if clear_token and not new_token:
+            merged["token_enc"], merged["token_hint"] = "", ""
+        elif plain:
+            merged["token_enc"] = fiscal_crypto.encrypt(plain)
+            merged["token_hint"] = fiscal_crypto.hint(plain)
+        merged["token_plain"] = ""
+        merged["token_set"] = bool(merged["token_enc"])
         if merged["enabled"]:
             errors = fp.validate(merged)
             if errors:
@@ -139,10 +168,22 @@ class FiscalService:
             merged["enabled_at"] = None
         # JSONB YANGI dict bilan almashtiriladi — SQLAlchemy o'zgarishni sezishi uchun
         new_settings = dict(owner.settings or {})
-        new_settings[fp.SETTINGS_KEY] = merged
+        new_settings[fp.SETTINGS_KEY] = {
+            k: v for k, v in merged.items() if k not in fp.DERIVED_FIELDS
+        }
         owner.settings = new_settings
         await self.session.flush()
         return merged
+
+    async def cashier_token(self, hotel_id: UUID) -> str:
+        """Token — kassa brauzeri E-POS'ga murojaat qilishi uchun. Faqat
+        "brauzerdan" rejimida: "server orqali" rejimida token serverdan chiqmaydi."""
+        cfg = await self.config(hotel_id)
+        if cfg["transport"] != "browser":
+            raise ValidationException(
+                "Server orqali rejimda token brauzerga berilmaydi", "FISCAL_TOKEN_SERVER_ONLY"
+            )
+        return require_token(cfg)
 
     # ----------------------------------------------------------- navbat --
 
@@ -542,6 +583,8 @@ class FiscalService:
         receipt = await self._get(hotel_id, receipt_id)
         if receipt.status in ("done", "skipped"):
             return {**serialize(receipt), "request": None, "verify": False}
+        # Token yo'q bo'lsa chek "yuborilmoqda" holatiga o'tmasdan to'xtaydi
+        require_token(await self.config(hotel_id))
         now = _now()
         sent_at = receipt.sent_at
         if sent_at is not None and sent_at.tzinfo is None:
@@ -568,11 +611,13 @@ class FiscalService:
             )
         await self.session.refresh(receipt)
         cfg = await self.config(hotel_id)
-        return {
-            **serialize(receipt),
-            "request": {"token": cfg["token"], **(receipt.payload or {})},
-            "verify": verify,
-        }
+        request = dict(receipt.payload or {})
+        # Token faqat "brauzerdan" rejimida beriladi (so'rovni kassa brauzeri
+        # yuboradi); "server orqali" rejimida uni server o'zi qo'shadi (`relay`)
+        # va token brauzerga umuman bormaydi
+        if cfg["transport"] == "browser":
+            request = {"token": require_token(cfg), **request}
+        return {**serialize(receipt), "request": request, "verify": verify}
 
     async def complete(self, hotel_id: UUID, receipt_id: UUID, data: dict) -> FiscalReceipt:
         receipt = await self._get(hotel_id, receipt_id)
@@ -673,7 +718,7 @@ class FiscalService:
         if method not in RELAY_METHODS:
             raise ValidationException("Bu usul ruxsat etilmagan", "FISCAL_METHOD_FORBIDDEN")
         assert_public_url(cfg["url"])
-        payload = {**body, "token": cfg["token"]}
+        payload = {**body, "token": require_token(cfg)}
         try:
             async with httpx.AsyncClient(timeout=40.0, follow_redirects=False) as client:
                 response = await client.post(cfg["url"], json=payload)

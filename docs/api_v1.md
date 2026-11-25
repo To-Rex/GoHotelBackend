@@ -2612,7 +2612,8 @@ Per-branch, optional. Settings: configurator / super admin only. Queue: staff wh
 | Method | Path | Description |
 |---|---|---|
 | GET | `/fiscal/config` | Short config for the cashier (enabled, transport, url) |
-| GET/PUT | `/fiscal/settings` | Branch fiscal settings (company, IKPU codes, VAT, methods) |
+| GET/PUT | `/fiscal/settings` | Branch fiscal settings (company, IKPU codes, VAT, methods). `token` is write-only: stored encrypted, never returned (`token_set`, `token_hint` only) |
+| POST | `/fiscal/token` | E-POS token for the cashier browser — "browser" transport only, staff who take payments |
 | GET | `/fiscal/pending` | Payments not yet in a fiscal receipt + unfinished receipts |
 | POST | `/fiscal/prepare` | Build fiscal receipt(s) for a reservation or shop sale |
 | POST | `/fiscal/receipts/{id}/claim` | Take a receipt for sending (returns the E-POS request) |
