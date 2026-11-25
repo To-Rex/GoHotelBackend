@@ -122,6 +122,9 @@ class ProductCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     category: str | None = Field(default=None, max_length=50)
     emoji: str | None = Field(default=None, max_length=8)
+    #: Fiskal chek uchun (ixtiyoriy): IKPU va o'ram kodi
+    ikpu_code: str | None = Field(default=None, max_length=20)
+    package_code: str | None = Field(default=None, max_length=20)
 
 
 class ProductUpdateRequest(BaseModel):
@@ -129,6 +132,8 @@ class ProductUpdateRequest(BaseModel):
     category: str | None = Field(default=None, max_length=50)
     emoji: str | None = Field(default=None, max_length=8)
     is_active: bool | None = None
+    ikpu_code: str | None = Field(default=None, max_length=20)
+    package_code: str | None = Field(default=None, max_length=20)
 
 
 class BatchCreateRequest(BaseModel):
@@ -323,6 +328,12 @@ def _batch_dict(b: ShopBatch) -> dict:
     }
 
 
+def _code(value: str | None) -> str | None:
+    """IKPU / o'ram kodi — faqat raqamlar (bo'sh bo'lsa `None`)."""
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[:20] or None
+
+
 def _product_dict(p: ShopProduct, batches: list[ShopBatch]) -> dict:
     ordered = sorted(batches, key=lambda b: b.created_at or datetime.min)
     stock = sum(b.remaining for b in ordered)
@@ -334,6 +345,8 @@ def _product_dict(p: ShopProduct, batches: list[ShopBatch]) -> dict:
         "name": p.name,
         "category": p.category,
         "emoji": p.emoji,
+        "ikpu_code": p.ikpu_code,
+        "package_code": p.package_code,
         "is_active": p.is_active,
         "stock": stock,
         "current_price": float(current.sale_price) if current else (
@@ -496,6 +509,8 @@ async def create_product(
         name=data.name.strip(),
         category=(data.category or "").strip() or None,
         emoji=(data.emoji or "").strip() or None,
+        ikpu_code=_code(data.ikpu_code),
+        package_code=_code(data.package_code),
         created_by=current_user["id"],
     )
     session.add(product)
@@ -538,6 +553,10 @@ async def update_product(
         product.emoji = data.emoji.strip() or None
     if data.is_active is not None:
         product.is_active = data.is_active
+    if data.ikpu_code is not None:
+        product.ikpu_code = _code(data.ikpu_code)
+    if data.package_code is not None:
+        product.package_code = _code(data.package_code)
     await session.flush()
     return _product_dict(product, product.batches)
 
@@ -1063,6 +1082,12 @@ async def cancel_sale(
             batch = await session.get(ShopBatch, item.batch_id)
             if batch:
                 batch.remaining += item.quantity
+
+    # Fiskallashgan sotuv bekor qilinsa — qaytarim cheki navbatga qo'yiladi
+    # (fiskal modul o'chiq filialda hech narsa yozilmaydi)
+    from app.application.services.fiscal_service import FiscalService
+
+    await FiscalService(session).queue_sale_cancel(h_id, current_user["id"], sale.id)
 
     await session.delete(sale)
     await session.flush()

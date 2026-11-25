@@ -659,6 +659,28 @@ ham o'zgartiradi. Miqdor va qoldiq o'zgarmaydi. Har o'zgarish audit
 jurnalida (`shop_batch_prices`, nimadan nimaga). Test:
 `pytest tests/test_shop_prices.py`.
 
+### Fiskal modul (E-POS)
+
+Ixtiyoriy va har FILIAL uchun alohida: Sozlamalar → «Fiskal modul (E-POS)» (faqat
+sozlovchi / tizim ma'muri). Yoqilmagan filialda hech narsa o'zgarmaydi.
+
+- Sozlama `branches.settings["fiscal"]` da: kompaniya (nom, manzil, STIR), IKPU va
+  o'ram kodlari (yashash / xizmat / jarima / do'kon), QQS, to'lov usullari qayerga
+  tushishi (naqd / karta / fiskallashtirilmaydi), ulanish usuli.
+- Yoqilgandan KEYINGI har bir to'lov (bron to'lovi, do'kon to'lovi, qaytarim) fiskal
+  chekka kiradi: server chekni tayyorlaydi (`fiscal_receipts`, summalar va IKPU
+  bazadan), kassa uni E-POS Communicator'ga yuboradi va fiskal belgi + soliq
+  havolasini qaytaradi. Bitta to'lov faqat bitta chekka kiradi
+  (`fiscal_receipt_links`, unique); chek raqami E-POS'da `externalId` — qayta
+  yuborishdan oldin shu raqam bo'yicha tekshiriladi.
+- Ulanish: «brauzerdan» — kassa kompyuteridagi `http://localhost:8347/uzpos`
+  (fiskal modul ulangan kompyuter «Fiskal» tugmasida belgilanadi) yoki «server
+  orqali» (`POST /fiscal/relay`, faqat internetdagi manzil — sinov muhiti).
+- Bosma chekda (TPrints) soliq havolasi QR kod bo'lib chiqadi.
+- Kod: `app/application/services/fiscal_payload.py` (so'rov tuzish),
+  `fiscal_service.py` (navbat), `app/presentation/api/v1/fiscal.py`;
+  test: `tests/test_fiscal.py`. Hujjat: E-POS "Universal Communicator" kolleksiyasi.
+
 ### AI yordamchi ("Yordamchi" sahifasi)
 
 Xodim chatda savol beradi, hisobot/grafik/Excel oladi va ish buyuradi

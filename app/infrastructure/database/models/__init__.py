@@ -54,6 +54,7 @@ from app.infrastructure.database.models.ai import (
     AiMessage,
     AiPlan,
 )
+from app.infrastructure.database.models.fiscal import FiscalReceipt, FiscalReceiptLink
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -72,6 +73,7 @@ __all__ = [
     "GuestFaceProfile", "FaceSighting", "VisionDevice", "VisionCamera",
     "GuestFeedback",
     "AiConfig", "AiMember", "AiConversation", "AiMessage", "AiAction", "AiIncident", "AiPlan", "AiFile",
+    "FiscalReceipt", "FiscalReceiptLink",
 ]
 
 from app.infrastructure.database.models.api_error_log import ApiErrorLog

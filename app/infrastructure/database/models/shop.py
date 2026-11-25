@@ -46,6 +46,10 @@ class ShopProduct(BranchScoped, FullMixin, Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     category: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     emoji: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    #: Fiskal chek uchun: IKPU kodi (tasnif.soliq.uz) va o'ram kodi. Bo'sh
+    #: bo'lsa filialning "Do'kon" uchun standart kodi ishlatiladi.
+    ikpu_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    package_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

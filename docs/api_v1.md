@@ -2605,6 +2605,23 @@ A cashier may hand over the drawer **up to a daily cut** instead of "everything 
 
 ---
 
+### Fiscal (E-POS)
+
+Per-branch, optional. Settings: configurator / super admin only. Queue: staff who take payments.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/fiscal/config` | Short config for the cashier (enabled, transport, url) |
+| GET/PUT | `/fiscal/settings` | Branch fiscal settings (company, IKPU codes, VAT, methods) |
+| GET | `/fiscal/pending` | Payments not yet in a fiscal receipt + unfinished receipts |
+| POST | `/fiscal/prepare` | Build fiscal receipt(s) for a reservation or shop sale |
+| POST | `/fiscal/receipts/{id}/claim` | Take a receipt for sending (returns the E-POS request) |
+| POST | `/fiscal/receipts/{id}/complete` | Save fiscal sign and tax link |
+| POST | `/fiscal/receipts/{id}/fail` | Save the error (stays in the queue) |
+| POST | `/fiscal/receipts/{id}/dismiss` | Remove from the queue (admin, with a reason) |
+| GET | `/fiscal/receipts` | List; with `reservation_id` / `sale_id` — fiscalized receipts of that target |
+| POST | `/fiscal/relay` | "Through the server" transport: forward a whitelisted method to E-POS |
+
 ### AI Assistant
 
 All endpoints are under `/api/v1/ai`. Access rules: chat, plans, files — only
