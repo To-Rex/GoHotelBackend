@@ -26,6 +26,7 @@ from app.presentation.api.v1 import (
     reception,
     maintenance,
     expenses,
+    emehmon,
     fiscal,
     shop,
     face,
@@ -72,6 +73,7 @@ api_router.include_router(devices.router, prefix="/devices", tags=["Trusted Devi
 api_router.include_router(feedback.router, prefix="/feedback", tags=["Guest Feedback"])
 api_router.include_router(ai.router, prefix="/ai", tags=["AI Assistant"])
 api_router.include_router(fiscal.router, prefix="/fiscal", tags=["Fiscal (E-POS)"])
+api_router.include_router(emehmon.router, prefix="/emehmon", tags=["E-mehmon"])
 
 # Boshqaruv paneli — alohida modul (app/superadmin), o'z kirishi bilan
 from app.superadmin.router import router as superadmin_router  # noqa: E402

@@ -687,6 +687,40 @@ sozlovchi / tizim ma'muri). Yoqilmagan filialda hech narsa o'zgarmaydi.
   `fiscal_service.py` (navbat), `app/presentation/api/v1/fiscal.py`;
   test: `tests/test_fiscal.py`. Hujjat: E-POS "Universal Communicator" kolleksiyasi.
 
+### E-mehmon (davlat ro'yxati)
+
+Ixtiyoriy va har FILIAL uchun alohida: Sozlamalar → «E-mehmon (davlat ro'yxati)»
+(faqat sozlovchi / tizim ma'muri). Yoqilmagan filialda hech narsa o'zgarmaydi va
+hech qayerga so'rov ketmaydi.
+
+- Sozlama `branches.settings["emehmon"]` da: muhit (sinov `sandbox-api.emehmon.uz`
+  / ishchi `api.emehmon.uz` — erkin manzil kiritilmaydi), login (`X-User-Name`),
+  maxfiy kalit, standart tashrif maqsadi / mehmon turi, karta to'lovi turi
+  (Uzcard / Humo), «kirishdan keyin eslatish» va «avtomatik chiqarish».
+- MAXFIY KALIT bazada faqat SHIFRLANGAN holda turadi (`emehmon_crypto`, Fernet),
+  javoblarda qaytmaydi (faqat oxirgi 4 belgisi). So'rovlar FAQAT serverdan ketadi
+  va har biri imzolanadi: `X-User-Hash = HMAC_SHA256(login + vaqt + so'rov id)`.
+- Mehmon kirgach (bron `CHECKED_IN`) xodim har bir mehmon (asosiy mehmon va
+  hamrohlar) uchun shaklni tekshirib yuboradi — `POST /listok`. Shakl mehmon
+  kartasidan / avvalgi ro'yxatidan to'ldiriladi; «Bazadan tekshirish»
+  (`person-lookup`) rasmiy ma'lumotni olib keladi: mahalliy fuqaro — IIV (PINFL),
+  chet ellik — Chegara xizmati (`id_person`, viza). Kirish vaqti Toshkent vaqtida
+  va faqat oxirgi 12 soat. Ro'yxatga olish DOIM xodim tasdig'i bilan.
+- Har urinish `emehmon_registrations` ga yoziladi (rad etilgani ham — xato kodi
+  bilan). So'rovdan OLDIN `Idempotency-Key` saqlanadi: javob yo'qolsa, o'sha shakl
+  o'sha kalit bilan qayta ketadi — mehmon ikki marta yozilmaydi.
+- Mehmon bizda chiqarilganda (bron yopildi yoki hamroh «ketdi») ro'yxat fon
+  vazifasi bilan avtomatik yopiladi (`run_checkout_sweep`, har daqiqa; xatoda
+  1–16 daqiqa oraliq bilan 6 urinish, keyin xodimga qoladi). Summa — bron
+  summasidan teng ulush, to'lov turi — eng ko'p pul tushgan usul.
+- Tarmoqqa chiqadigan yozuvchi yo'llar `/emehmon/gate/...` ostida va filial yozuv
+  qulfini olmaydi (`auth.LOCK_EXEMPT_PREFIXES`) — E-mehmon sekin javob bersa ham
+  filialdagi bron/to'lov yozuvlari kutib qolmaydi.
+- Kod: `app/application/services/emehmon_payload.py` (qoidalar, imzo, so'rov
+  tanasi), `emehmon_client.py` (imzoli HTTP), `emehmon_service.py`,
+  `app/presentation/api/v1/emehmon.py`; test: `tests/test_emehmon.py` (soxta
+  E-mehmon serveri bilan). Hujjat: sandbox-api.emehmon.uz/docs.
+
 ### AI yordamchi ("Yordamchi" sahifasi)
 
 Xodim chatda savol beradi, hisobot/grafik/Excel oladi va ish buyuradi

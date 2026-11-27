@@ -89,7 +89,7 @@ _SKIP_PREFIXES = (
 #: Sir saqlanadigan JSON maydonlari — qiymati niqoblanadi.
 _SENSITIVE = re.compile(
     r'("(?:password|current_password|new_password|old_password|token|'
-    r'access_token|refresh_token|api_key|secret|authorization|fcm_token)"'
+    r'access_token|refresh_token|api_key|secret|authorization|fcm_token|pinfl)"'
     r'\s*:\s*")[^"]*(")',
     re.IGNORECASE,
 )

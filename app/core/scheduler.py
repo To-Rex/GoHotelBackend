@@ -20,9 +20,13 @@ logger = logging.getLogger(__name__)
 _task: asyncio.Task | None = None
 _purge_task: asyncio.Task | None = None
 _ai_plans_task: asyncio.Task | None = None
+_emehmon_task: asyncio.Task | None = None
 
 #: Yordamchi rejalari (eslatmalar) tekshiruvi oralig'i
 AI_PLANS_INTERVAL_SECONDS = 60
+
+#: E-mehmon: bizda chiqarilgan mehmonlarni E-mehmon'dan chiqarish oralig'i
+EMEHMON_INTERVAL_SECONDS = 60
 
 #: Muddati o'tgan yuz ko'rinishlarini tozalash oralig'i. Soatiga bir marta
 #: yetarli: yozuvlar 12 soat yashaydi va bir necha soat ortiqcha turishi
@@ -125,14 +129,39 @@ async def _ai_plans_loop() -> None:
                 logger.exception("AI rejalari tiki muvaffaqiyatsiz")
 
 
+async def _emehmon_loop() -> None:
+    """E-mehmon: mehmon bizda chiqarilgach uning davlat ro'yxati ham yopiladi.
+
+    Avtomatlashtirish sozlamasidan mustaqil va faqat E-mehmon yoqilgan
+    filiallarga tegadi — integratsiya ishlatilmasa bu bitta bo'sh so'rov.
+    """
+    from app.application.services.emehmon_service import run_checkout_sweep
+
+    logger.info("E-mehmon chiqarish vazifasi ishga tushdi (interval=%ss)", EMEHMON_INTERVAL_SECONDS)
+    while True:
+        try:
+            await asyncio.sleep(EMEHMON_INTERVAL_SECONDS)
+            await run_checkout_sweep()
+        except asyncio.CancelledError:
+            logger.info("E-mehmon chiqarish vazifasi to'xtatilmoqda")
+            break
+        except Exception as exc:
+            if is_connection_lost(exc):
+                logger.warning("E-mehmon tiki o'tkazib yuborildi — baza mavjud emas: %s", short_error(exc))
+            else:
+                logger.exception("E-mehmon chiqarish tiki muvaffaqiyatsiz")
+
+
 def start_scheduler() -> None:
-    global _task, _purge_task, _ai_plans_task
+    global _task, _purge_task, _ai_plans_task, _emehmon_task
     # Tozalash avtomatlashtirishdan MUSTAQIL: u ma'lumot saqlash muddatini
     # ta'minlaydi, bron chiqishini emas.
     if _purge_task is None:
         _purge_task = asyncio.create_task(_purge_sightings_loop())
     if _ai_plans_task is None:
         _ai_plans_task = asyncio.create_task(_ai_plans_loop())
+    if _emehmon_task is None:
+        _emehmon_task = asyncio.create_task(_emehmon_loop())
     if not settings.AUTO_CHECKOUT_ENABLED:
         logger.info("Auto-checkout scheduler disabled (AUTO_CHECKOUT_ENABLED=false)")
         return
@@ -142,8 +171,8 @@ def start_scheduler() -> None:
 
 
 async def stop_scheduler() -> None:
-    global _task, _purge_task, _ai_plans_task
-    for task in (_task, _purge_task, _ai_plans_task):
+    global _task, _purge_task, _ai_plans_task, _emehmon_task
+    for task in (_task, _purge_task, _ai_plans_task, _emehmon_task):
         if task is None:
             continue
         task.cancel()
@@ -154,3 +183,4 @@ async def stop_scheduler() -> None:
     _task = None
     _purge_task = None
     _ai_plans_task = None
+    _emehmon_task = None

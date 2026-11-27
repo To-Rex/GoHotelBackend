@@ -2623,6 +2623,30 @@ Per-branch, optional. Settings: configurator / super admin only. Queue: staff wh
 | GET | `/fiscal/receipts` | List; with `reservation_id` / `sale_id` — fiscalized receipts of that target |
 | POST | `/fiscal/relay` | "Through the server" transport: forward a whitelisted method to E-POS |
 
+### E-mehmon (state guest registration)
+
+Per-branch, optional. Settings: configurator / super admin only. Registration: staff with
+`reservation.create` / `reservation.update` (and admins). All calls to emehmon.uz are made by the
+server (HMAC-signed); the browser only talks to this API. `/gate/...` routes call E-mehmon and do
+not take the branch write lock.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/emehmon/config` | Short config for the UI (enabled, environment, who can configure / operate) |
+| GET/PUT | `/emehmon/settings` | Branch settings (environment, login, defaults, switches). `secret` is write-only: stored encrypted, never returned (`secret_set`, `secret_hint` only) |
+| POST | `/emehmon/gate/test` | Connection test with the saved credentials: hotel card, deposit, license, can register |
+| GET | `/emehmon/dictionaries/{name}` | E-mehmon dictionary (`countries`, `visit-types`, `guest-types`, `passport-types`, `visa-types`...), cached; `?lang=uz|ru|en` |
+| GET | `/emehmon/rooms` | Rooms registered in the E-mehmon cabinet |
+| GET | `/emehmon/pending` | Queue: in-house guests not registered yet + registrations still open after the guest left |
+| GET | `/emehmon/reservations/{id}` | Registration sheet of a reservation: every guest, state, prefilled form, check-out defaults |
+| POST | `/emehmon/gate/lookup` | Official data by passport + birth date + citizenship (locals — Interior Ministry, foreigners — Border Service) |
+| POST | `/emehmon/gate/reservations/{id}/register` | Register a guest (`POST /listok`). Always 200 once sent: result is in `status` (`registered` / `failed` + `error_code`, `error`) |
+| POST | `/emehmon/gate/reservations/{id}/link` | Attach a registration that already exists in E-mehmon (passport must match) |
+| POST/DELETE | `/emehmon/reservations/{id}/skip` | Mark / unmark a guest as "not needed" (nothing is sent) |
+| POST | `/emehmon/gate/registrations/{id}/checkout` | Check the guest out of E-mehmon (`sum`, `payment_type_id`; defaults are computed from the reservation) |
+| POST | `/emehmon/gate/registrations/{id}/refresh` | Sync with the cabinet (closed there → closed here) |
+| GET | `/emehmon/registrations` | Journal; `status`, `search`, `skip`, `limit` |
+
 ### AI Assistant
 
 All endpoints are under `/api/v1/ai`. Access rules: chat, plans, files — only

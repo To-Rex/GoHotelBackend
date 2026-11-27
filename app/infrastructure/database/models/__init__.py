@@ -55,6 +55,7 @@ from app.infrastructure.database.models.ai import (
     AiPlan,
 )
 from app.infrastructure.database.models.fiscal import FiscalReceipt, FiscalReceiptLink
+from app.infrastructure.database.models.emehmon import EmehmonRegistration
 
 __all__ = [
     "Base", "Hotel", "Branch", "Building", "Floor", "RoomType", "HotelRoomType", "Room", "RoomStatusHistory",
@@ -74,6 +75,7 @@ __all__ = [
     "GuestFeedback",
     "AiConfig", "AiMember", "AiConversation", "AiMessage", "AiAction", "AiIncident", "AiPlan", "AiFile",
     "FiscalReceipt", "FiscalReceiptLink",
+    "EmehmonRegistration",
 ]
 
 from app.infrastructure.database.models.api_error_log import ApiErrorLog

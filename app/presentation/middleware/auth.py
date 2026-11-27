@@ -22,7 +22,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 security = HTTPBearer(auto_error=False)
 
 #: Filial yozuv qulfi olinmaydigan yo'llar (pastdagi izohga qarang)
-LOCK_EXEMPT_PREFIXES = ("/api/v1/ai/",)
+LOCK_EXEMPT_PREFIXES = (
+    "/api/v1/ai/",
+    # Tashqi serverga (E-mehmon, E-POS) so'rov yuboradigan yo'llar: javob bir
+    # necha soniya kutilishi mumkin — shu vaqt ichida filialdagi boshqa
+    # yozuvlar (bron, to'lov) navbatda turib qolmasin. Ular faqat o'z
+    # jadvaliga yozadi (yoki umuman yozmaydi).
+    "/api/v1/emehmon/gate/",
+    "/api/v1/fiscal/relay",
+)
 
 
 async def get_current_user(
